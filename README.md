@@ -8,9 +8,13 @@ Debian/Ubuntu, Fedora/RHEL, Arch, openSUSE, Gentoo, Alpine.
 Inspired by Gentoo's `localmodconfig`, FreeBSD's `include GENERIC` + diff
 style, and Debian's `make bindeb-pkg`.
 
-> **Status: 0.6.** Verbs implemented: `preflight`, `scan`, `propose`,
-> `review`, `apply`, `fetch-source`, `build`. `install --probation` and
-> `rollback` are designed but not yet built — see [Roadmap](#roadmap).
+> **Status: 0.7.** Verbs implemented: `preflight`, `scan`, `propose`,
+> `review` (with interactive TUI), `apply`, `fetch-source`, `build`.
+> `install --probation` and `rollback` are designed but not yet built —
+> see [Roadmap](#roadmap).
+
+[![tests](https://github.com/mjbommar/autokernel/actions/workflows/test.yml/badge.svg)](https://github.com/mjbommar/autokernel/actions/workflows/test.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## Install
 
@@ -152,10 +156,15 @@ src/autokernel/
     distro.py                  ── parse /etc/os-release; per-family DistroSpec
     preflight.py               ── system checks: tools, libs, disk, RAM, snapshot health
     fetch.py                   ── kernel-source acquisition (per-family + kernel.org tarball)
+    tui/                       ── interactive review TUI (Textual)
+        state.py               ──   pure working-state + filter cyclers (no Textual deps)
+        widgets.py             ──   CountsBar, ProposalTable, EvidencePanel
+        app.py                 ──   ReviewApp orchestrator
+        review.tcss            ──   styles
     cli.py                     ── typer CLI: preflight, scan, propose, review, apply, fetch-source, build
 install.sh                     ── one-line bootstrap (curl | bash)
 .claude/skills/autokernel/     ── thin Claude skill driving the CLI
-tests/                         ── 317 tests, fixture-driven, no host coupling
+tests/                         ── 356 tests, fixture-driven, no host coupling
     fixtures/os_release/       ── synthetic distro samples (Ubuntu, Debian, Fedora, RHEL, Arch, …)
     fixtures/intel_laptop/     ── synthetic full-host snapshot
     fixtures/amd_desktop/      ── synthetic NVIDIA + DKMS host
@@ -199,6 +208,12 @@ Anything unmatched stays in `deferred`.
 | `--accept-deterministic` | Accept only `source=deterministic` proposals. |
 | `--reject-subsystem X` (repeatable) | Veto a whole subsystem (`crypto`, `security`, `kasan`, `debug`, …). |
 | `--reject-pattern GLOB` (repeatable) | Veto by glob (`'CONFIG_DEBUG_*'`). |
+| `--interactive` | After bulk rules, open a Textual TUI to step through remaining deferred items. |
+
+The interactive TUI bindings: `a`/`r`/`d` to accept/reject/defer, `j`/`k`
+or arrow keys to navigate, `s` to cycle the subsystem filter, `f` to
+cycle the view (deferred / all / accepted / rejected), `w` to save and
+exit, `q` to quit without saving.
 
 `autokernel apply` enforces an additional **load-bearing safety check**:
 if the merge would disable a working symbol that's load-bearing, it
@@ -256,10 +271,14 @@ symbol. `RemovalProposal` carries `config`, `current_value` /
 ## Roadmap
 
 - [x] `scan`, `propose`, `review`, `apply`, `build`, `preflight`, `fetch-source` *(0.1–0.6)*
+- [x] Interactive review TUI (Textual) *(0.7)*
 - [ ] `autokernel install --probation` — `dpkg -i` (or distro equivalent) + `grub-reboot` one-shot + systemd-on-success default-flip; auto-rollback on failed boot.
 - [ ] `autokernel rollback` — restore previous default kernel.
-- [ ] Interactive review TUI — step through `deferred` items with full evidence.
 - [ ] PEP 723 single-file scripts for kernel-dev workflows: bisect, patch series, Kconfig fragment composer.
+
+## License
+
+[MIT](LICENSE) © 2026 Michael Bommarito
 
 ## Known limits
 

@@ -325,11 +325,19 @@ def review(
     accept_deterministic: Annotated[bool, typer.Option(help="Bulk-accept only deterministic-source proposals")] = False,
     reject_subsystem: Annotated[list[str] | None, typer.Option("--reject-subsystem", help="Veto a whole subsystem (repeatable). Examples: crypto security kasan debug")] = None,
     reject_pattern: Annotated[list[str] | None, typer.Option("--reject-pattern", help="Veto symbols matching glob (repeatable). Example: 'CONFIG_DEBUG_*'")] = None,
+    interactive: Annotated[bool, typer.Option("--interactive/--no-interactive", help="After bulk rules apply, open a TUI to step through remaining deferred items")] = False,
     out: Annotated[Path | None, typer.Option(help="Where to write review.json (default: SNAPSHOT_DIR/review.json)")] = None,
     kfrag: Annotated[Path | None, typer.Option(help="Where to write the kfrag (default: SNAPSHOT_DIR/auto.kfrag)")] = None,
     reviewer: Annotated[Reviewer, typer.Option(help="Identity to record on each decision")] = Reviewer.POLICY,
 ) -> None:
-    """Apply bulk decision rules to a proposal and emit a kfrag."""
+    """Apply bulk decision rules to a proposal and emit a kfrag.
+
+    With --interactive, after the bulk rules apply, opens a Textual TUI
+    to step through items still in `deferred`. The TUI uses single-key
+    bindings (a/r/d to decide, j/k to navigate, w to save+exit, q to
+    quit without saving). User decisions overwrite any existing rule
+    label and are recorded with reviewer=USER.
+    """
     _validate_snapshot_dir(snapshot_dir)
 
     proposal_path = proposal or snapshot_dir / "proposal.json"
@@ -376,8 +384,20 @@ def review(
         reviewer=reviewer,
     )
 
+    # ── interactive review (TUI) ────────────────────────────────────────
+    if interactive:
+        from autokernel.tui import run_review
+
+        edited = run_review(review_set, snapshot_dir=snapshot_dir)
+        if edited is None:
+            err_console.print(
+                "[yellow]TUI exited without saving — no artifacts written.[/yellow]"
+            )
+            raise typer.Exit(130)  # SIGINT-style "user cancelled"
+        review_set = edited
+
     # ── render summary ──────────────────────────────────────────────────
-    _render_review(review_set, rule_labels)
+    _render_review(review_set, rule_labels + (["interactive"] if interactive else []))
 
     # ── persist artifacts ───────────────────────────────────────────────
     out_path = out or snapshot_dir / "review.json"

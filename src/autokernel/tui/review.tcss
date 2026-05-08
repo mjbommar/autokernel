@@ -1,0 +1,29 @@
+/* autokernel review TUI styles. */
+
+Screen {
+    layout: vertical;
+}
+
+CountsBar {
+    height: 1;
+    background: $boost;
+    color: $text;
+    content-align: center middle;
+    padding: 0 2;
+}
+
+#main {
+    height: 1fr;
+}
+
+ProposalTable {
+    width: 60%;
+    height: 100%;
+}
+
+EvidencePanel {
+    width: 40%;
+    padding: 1 2;
+    background: $panel;
+    overflow-y: auto;
+}
