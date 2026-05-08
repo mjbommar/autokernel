@@ -8,10 +8,9 @@ Debian/Ubuntu, Fedora/RHEL, Arch, openSUSE, Gentoo, Alpine.
 Inspired by Gentoo's `localmodconfig`, FreeBSD's `include GENERIC` + diff
 style, and Debian's `make bindeb-pkg`.
 
-> **Status: 0.7.** Verbs implemented: `preflight`, `scan`, `propose`,
-> `review` (with interactive TUI), `apply`, `fetch-source`, `build`.
-> `install --probation` and `rollback` are designed but not yet built —
-> see [Roadmap](#roadmap).
+> **Status: 0.8.** Full pipeline shipped: `preflight`, `scan`, `propose`,
+> `review` (with interactive TUI), `apply`, `fetch-source`, `build`,
+> `install --probation`, `rollback`, plus `quickstart` for new users.
 
 [![tests](https://github.com/mjbommar/autokernel/actions/workflows/test.yml/badge.svg)](https://github.com/mjbommar/autokernel/actions/workflows/test.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -39,7 +38,19 @@ cp .env.example .env  # add ANTHROPIC_API_KEY or OPENAI_API_KEY
 uv run autokernel preflight
 ```
 
-## Quick start
+## Easiest path: `quickstart`
+
+```bash
+autokernel quickstart                # walks you through the whole pipeline
+autokernel quickstart -y --skip-llm  # non-interactive, no LLM cost
+```
+
+Prompts before each step (preflight → scan → propose → review → apply).
+Hit Enter to accept defaults; Ctrl-C to bail; the failure of any step
+prints exactly what to do next. Output lives under
+`~/.local/share/autokernel/quickstart/` by default.
+
+## Quick start (manual verbs)
 
 ```bash
 # 0. Confirm the host has what it needs (~0.5s; distro-aware fix hints):
@@ -156,15 +167,20 @@ src/autokernel/
     distro.py                  ── parse /etc/os-release; per-family DistroSpec
     preflight.py               ── system checks: tools, libs, disk, RAM, snapshot health
     fetch.py                   ── kernel-source acquisition (per-family + kernel.org tarball)
+    bootloader.py              ── detect GRUB2 / systemd-boot / rEFInd; per-kind argv recipes
+    install.py                 ── distro-aware install plan + one-shot probation
+    rollback.py                ── undo the most recent install (record-driven)
+    errors.py                  ── shared error/hint helpers (every error has a "→ fix" line)
+    quickstart.py              ── guided walk-through verb (preflight → ... → apply)
     tui/                       ── interactive review TUI (Textual)
         state.py               ──   pure working-state + filter cyclers (no Textual deps)
         widgets.py             ──   CountsBar, ProposalTable, EvidencePanel
         app.py                 ──   ReviewApp orchestrator
         review.tcss            ──   styles
-    cli.py                     ── typer CLI: preflight, scan, propose, review, apply, fetch-source, build
+    cli.py                     ── typer CLI: 10 verbs (quickstart + 9 pipeline verbs)
 install.sh                     ── one-line bootstrap (curl | bash)
 .claude/skills/autokernel/     ── thin Claude skill driving the CLI
-tests/                         ── 356 tests, fixture-driven, no host coupling
+tests/                         ── 426 tests, fixture-driven, no host coupling
     fixtures/os_release/       ── synthetic distro samples (Ubuntu, Debian, Fedora, RHEL, Arch, …)
     fixtures/intel_laptop/     ── synthetic full-host snapshot
     fixtures/amd_desktop/      ── synthetic NVIDIA + DKMS host
@@ -272,8 +288,10 @@ symbol. `RemovalProposal` carries `config`, `current_value` /
 
 - [x] `scan`, `propose`, `review`, `apply`, `build`, `preflight`, `fetch-source` *(0.1–0.6)*
 - [x] Interactive review TUI (Textual) *(0.7)*
-- [ ] `autokernel install --probation` — `dpkg -i` (or distro equivalent) + `grub-reboot` one-shot + systemd-on-success default-flip; auto-rollback on failed boot.
-- [ ] `autokernel rollback` — restore previous default kernel.
+- [x] `install --probation` + `rollback` (manual --commit; one-shot grub-reboot) *(0.8)*
+- [x] `quickstart` walk-through + centralized error hints *(0.8)*
+- [ ] systemd watchdog for auto-promotion (currently `--commit` is manual)
+- [ ] systemd-boot / rEFInd support for `install`
 - [ ] PEP 723 single-file scripts for kernel-dev workflows: bisect, patch series, Kconfig fragment composer.
 
 ## License

@@ -449,6 +449,143 @@ def check_root_or_sudo(ctx: CheckContext) -> CheckResult:
     )
 
 
+# ── install-specific checks ─────────────────────────────────────────────────
+
+
+def check_bootloader_supported(ctx: CheckContext) -> CheckResult:
+    """`autokernel install` v1 supports GRUB2 only. Detect what's actually
+    on this host and pass/warn/fail accordingly."""
+    from autokernel.bootloader import BootloaderKind, detect
+
+    bl = detect()
+    if bl.kind == BootloaderKind.GRUB2:
+        return CheckResult(
+            name="bootloader_supported",
+            severity=Severity.PASS,
+            message=f"GRUB2 detected ({bl.detected_via})",
+        )
+    if bl.kind == BootloaderKind.UNKNOWN:
+        return CheckResult(
+            name="bootloader_supported",
+            severity=Severity.FAIL,
+            message="no known bootloader detected",
+            fix_hint=(
+                "ensure /boot is mounted and GRUB is installed; otherwise install "
+                "the kernel package manually and use the bootloader's own one-shot "
+                "mechanism"
+            ),
+        )
+    return CheckResult(
+        name="bootloader_supported",
+        severity=Severity.FAIL,
+        message=f"bootloader {bl.kind.value!r} not yet supported by `autokernel install`",
+        fix_hint=(
+            f"v1 supports GRUB2 only. For {bl.kind.value}, install the .deb/.rpm "
+            f"manually and set boot one-shot via the bootloader's own tool "
+            f"(e.g. `bootctl set-oneshot` for systemd-boot)"
+        ),
+    )
+
+
+def check_boot_writable(ctx: CheckContext) -> CheckResult:
+    """The install verb needs to write to /boot (kernel + initramfs land
+    there) and rebuild the bootloader config. As a non-root user this
+    will always show as not-writable; the FAIL severity is correct only
+    when running install."""
+    boot = Path("/boot")
+    if not boot.exists():
+        return CheckResult(
+            name="boot_writable",
+            severity=Severity.FAIL,
+            message="/boot does not exist",
+            fix_hint="mount the boot partition or check `/etc/fstab`",
+        )
+    if os.geteuid() == 0 and os.access(boot, os.W_OK):
+        return CheckResult(
+            name="boot_writable",
+            severity=Severity.PASS,
+            message="/boot writable as root",
+        )
+    if os.geteuid() == 0:
+        return CheckResult(
+            name="boot_writable",
+            severity=Severity.FAIL,
+            message="/boot is not writable even as root (read-only mount?)",
+            fix_hint="`mount -o remount,rw /boot`",
+        )
+    return CheckResult(
+        name="boot_writable",
+        severity=Severity.WARN,
+        message="not root; can't probe /boot writability",
+        fix_hint="install steps that touch /boot need sudo or root",
+    )
+
+
+def check_fallback_kernel_present(ctx: CheckContext) -> CheckResult:
+    """Probation needs a fallback kernel to boot if the new one fails.
+
+    We count vmlinuz files in /boot. The currently-running kernel (uname -r)
+    is one of them; we want at LEAST one *other*. With only one kernel, a
+    bad install would leave the user unable to boot.
+    """
+    boot = Path("/boot")
+    if not boot.exists():
+        return CheckResult(
+            name="fallback_kernel_present",
+            severity=Severity.SKIP,
+            message="/boot not present",
+        )
+    try:
+        running = os.uname().release
+    except OSError:
+        running = ""
+
+    vmlinuz = sorted(boot.glob("vmlinuz-*")) + sorted(boot.glob("vmlinuz"))
+    other = [p for p in vmlinuz if running not in p.name]
+
+    if not vmlinuz:
+        return CheckResult(
+            name="fallback_kernel_present",
+            severity=Severity.WARN,
+            message="no vmlinuz-* files in /boot",
+            fix_hint="install at least one distro-provided kernel as a fallback",
+        )
+    if not other:
+        return CheckResult(
+            name="fallback_kernel_present",
+            severity=Severity.WARN,
+            message=f"only one kernel installed ({vmlinuz[0].name}); no fallback",
+            fix_hint=(
+                "if the new kernel fails to boot you'll have no recovery path. "
+                "install a distro kernel as fallback before proceeding"
+            ),
+        )
+    return CheckResult(
+        name="fallback_kernel_present",
+        severity=Severity.PASS,
+        message=f"{len(vmlinuz)} kernel(s) in /boot ({len(other)} fallback(s))",
+    )
+
+
+def check_grub_tools(ctx: CheckContext) -> CheckResult:
+    """`grub-reboot` (Debian) or `grub2-reboot` (Fedora) must be on PATH."""
+    deb = _which("grub-reboot")
+    fed = _which("grub2-reboot")
+    if deb or fed:
+        which = "grub-reboot" if deb else "grub2-reboot"
+        return CheckResult(
+            name="grub_tools",
+            severity=Severity.PASS,
+            message=f"{which} available",
+        )
+    return CheckResult(
+        name="grub_tools",
+        severity=Severity.FAIL,
+        message="neither grub-reboot nor grub2-reboot on PATH",
+        fix_hint=_install_hint(ctx.spec, ["grub2-common"] if ctx.spec.family == Family.DEBIAN else ["grub2-tools"]),
+    )
+
+
 # ── snapshot-aware checks ───────────────────────────────────────────────────
 
 
@@ -530,6 +667,11 @@ _REGISTRY: list[tuple[str, _Registered]] = [
     ("snapshot_running_config", _Registered(check_snapshot_running_config, frozenset({"propose", "apply", "snapshot"}))),
     ("snapshot_modinfo", _Registered(check_snapshot_modinfo, frozenset({"propose", "snapshot"}))),
     ("snapshot_dkms_clean", _Registered(check_snapshot_dkms_clean, frozenset({"build", "install", "snapshot"}))),
+    # install-specific
+    ("bootloader_supported", _Registered(check_bootloader_supported, frozenset({"install"}))),
+    ("boot_writable", _Registered(check_boot_writable, frozenset({"install"}))),
+    ("fallback_kernel_present", _Registered(check_fallback_kernel_present, frozenset({"install"}))),
+    ("grub_tools", _Registered(check_grub_tools, frozenset({"install"}))),
 ]
 
 

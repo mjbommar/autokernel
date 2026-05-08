@@ -18,6 +18,12 @@
     autokernel build SNAPSHOT_DIR --kernel-source PATH
         Drop final.config into a kernel source tree; run olddefconfig;
         optionally build a package with `make <target>` (--execute).
+
+    autokernel install SNAPSHOT_DIR [--package PATH] [--execute] [--commit]
+        Distro-aware kernel package install with one-shot probation.
+
+    autokernel rollback SNAPSHOT_DIR [--execute]
+        Undo the most recent install: remove the package, regenerate config.
 """
 
 from __future__ import annotations
@@ -33,9 +39,13 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
 
+from autokernel import bootloader as bootloader_mod
 from autokernel import build as build_mod
+from autokernel import errors as err
 from autokernel import fetch as fetch_mod
+from autokernel import install as install_mod
 from autokernel import preflight as preflight_mod
+from autokernel import rollback as rollback_mod
 from autokernel import snapshot as snap_mod
 from autokernel.agent import deterministic_proposals, propose as llm_propose
 from autokernel.distro import detect as detect_distro, spec_for
@@ -134,16 +144,8 @@ def scan(
 
 
 def _validate_snapshot_dir(snapshot_dir: Path) -> None:
-    if not snapshot_dir.is_dir():
-        err_console.print(f"[red]not a directory:[/red] {snapshot_dir}")
-        raise typer.Exit(2)
-    manifest = snapshot_dir / "manifest"
-    if not manifest.exists():
-        err_console.print(
-            f"[red]not an autokernel snapshot:[/red] {snapshot_dir} has no manifest. "
-            f"Run `autokernel scan {snapshot_dir}` first."
-        )
-        raise typer.Exit(2)
+    if not snapshot_dir.is_dir() or not (snapshot_dir / "manifest").exists():
+        raise err.hint_not_a_snapshot(snapshot_dir)
 
 
 @app.command()
@@ -462,16 +464,11 @@ def apply(
     snap = snap_mod.load(snapshot_dir)
 
     if not snap.running_config_path:
-        err_console.print("[red]no running_config in snapshot[/red]")
-        raise typer.Exit(1)
+        raise err.hint_no_running_config(snapshot_dir)
 
     kfrag_path = kfrag or snapshot_dir / "auto.kfrag"
     if not kfrag_path.exists():
-        err_console.print(
-            f"[red]kfrag not found:[/red] {kfrag_path}\n"
-            f"  Run `autokernel review {snapshot_dir} --accept-recommended` first."
-        )
-        raise typer.Exit(2)
+        raise err.hint_missing_kfrag(snapshot_dir, kfrag_path)
 
     merged_text, report = merge_kfrag(snap.running_config_path, kfrag_path)
 
@@ -810,6 +807,259 @@ def _render_fetch_plan(plan, distro, dry_run: bool) -> None:
     for cmd in plan.commands:
         body_lines.append(f"  $ {' '.join(cmd)}")
     console.print(Panel.fit("\n".join(body_lines), title=title))
+
+
+# ── quickstart ─────────────────────────────────────────────────────────────
+
+
+@app.command()
+def quickstart(
+    snapshot_dir: Annotated[Path, typer.Argument(help="Where to put the snapshot + artifacts")] = Path.home() / ".local" / "share" / "autokernel" / "quickstart",
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Don't prompt; run all steps")] = False,
+    skip_llm: Annotated[bool, typer.Option(help="Skip the LLM step (free; deterministic-only proposal)")] = False,
+) -> None:
+    """Guided walk-through: preflight → scan → propose → review → apply."""
+    from autokernel import quickstart as quickstart_mod
+
+    quickstart_mod.run(
+        snapshot_dir,
+        console=console,
+        err_console=err_console,
+        yes=yes,
+        skip_llm=skip_llm,
+    )
+
+
+# ── install + rollback ─────────────────────────────────────────────────────
+
+
+@app.command()
+def install(
+    snapshot_dir: Annotated[Path, typer.Argument(help="Snapshot directory containing built package(s)")],
+    package: Annotated[list[Path] | None, typer.Option("--package", help="Path to a built package (.deb/.rpm/.pkg.tar.zst). Repeatable. If omitted, autokernel scans the snapshot dir for the most recent package.")] = None,
+    kernel_entry: Annotated[str | None, typer.Option(help="GRUB menu entry name to arm for one-shot boot. If omitted, the arm step is skipped (run --commit later instead).")] = None,
+    execute: Annotated[bool, typer.Option(help="Actually run the install. Default: dry-run.")] = False,
+    commit: Annotated[bool, typer.Option(help="Promote the running kernel to permanent default (after a successful probation boot).")] = False,
+    no_probation: Annotated[bool, typer.Option("--no-probation", help="Skip the one-shot grub-reboot step (NOT RECOMMENDED).")] = False,
+    skip_preflight: Annotated[bool, typer.Option(help="Skip pre-flight checks (use only if you've verified them yourself).")] = False,
+) -> None:
+    """Install a built kernel package with one-shot probation, or commit a successful boot."""
+    import os
+
+    _validate_snapshot_dir(snapshot_dir)
+    distro = detect_distro()
+    spec = spec_for(distro)
+    bootloader = bootloader_mod.detect()
+
+    # ── commit path ─────────────────────────────────────────────────────
+    if commit:
+        if kernel_entry is None:
+            kernel_entry = os.uname().release
+            console.print(f"[dim]commit: defaulting to running kernel '{kernel_entry}'[/dim]")
+        plan = install_mod.build_commit_plan(
+            distro=distro, bootloader=bootloader, kernel_entry=kernel_entry,
+        )
+        _render_install_plan(plan, distro=distro, bootloader=bootloader, mode="commit")
+        if not plan.is_valid:
+            raise err.hint_unsupported_bootloader(bootloader.kind.value)
+        if not execute:
+            console.print("\n[dim]dry-run; pass --execute to actually run the commands[/dim]")
+            return
+        if os.geteuid() != 0:
+            raise err.hint_not_root("`autokernel install --commit --execute`")
+        result = install_mod.execute(plan, snapshot_dir=snapshot_dir)
+        _render_install_result(result)
+        if not result.ok:
+            raise typer.Exit(result.step_runs[-1].exit_code)
+        return
+
+    # ── install path: locate package(s) ─────────────────────────────────
+    if not package:
+        package = _find_latest_built_packages(snapshot_dir)
+        if not package:
+            raise err.fail(
+                "no packages found and none provided",
+                why=f"no built kernel packages under {snapshot_dir}",
+                fix=(
+                    f"run `autokernel build {snapshot_dir} --kernel-source PATH --execute` "
+                    f"first, or pass --package PATH explicitly"
+                ),
+                exit_code=2,
+            )
+
+    # ── pre-flight (optional skip) ──────────────────────────────────────
+    if not skip_preflight:
+        snap = snap_mod.load(snapshot_dir)
+        run = preflight_mod.run_checks(
+            tags={"always", "install"}, snapshot=snap, distro=distro,
+        )
+        _render_preflight(run, distro=distro, for_="install")
+        if run.has_failures:
+            raise err.fail(
+                "preflight check failures — refusing to proceed",
+                fix="address the FAILed items above, or rerun with --skip-preflight",
+                exit_code=1,
+            )
+
+    # ── plan + render + (maybe) execute ─────────────────────────────────
+    plan = install_mod.build_plan(
+        distro=distro,
+        spec=spec,
+        bootloader=bootloader,
+        package_paths=package,
+        kernel_entry=kernel_entry,
+        enable_probation=not no_probation,
+    )
+    _render_install_plan(plan, distro=distro, bootloader=bootloader, mode="install")
+
+    if not plan.is_valid:
+        if bootloader.kind != bootloader_mod.BootloaderKind.GRUB2:
+            raise err.hint_unsupported_bootloader(bootloader.kind.value)
+        raise err.fail(
+            "refusing to install — plan is invalid",
+            why=plan.rejected_reason,
+            exit_code=4,
+        )
+
+    if not execute:
+        console.print(
+            "\n[dim]dry-run; pass --execute to actually run the commands above. "
+            "Re-read the plan first.[/dim]"
+        )
+        return
+
+    if os.geteuid() != 0:
+        raise err.hint_not_root("`autokernel install --execute`")
+
+    console.print("\n[cyan]running install plan…[/cyan]")
+    result = install_mod.execute(plan, snapshot_dir=snapshot_dir)
+    _render_install_result(result)
+    if not result.ok:
+        raise typer.Exit(result.step_runs[-1].exit_code)
+    console.print(Panel.fit(
+        f"[green]✓ kernel installed[/green]\n"
+        f"  log dir: {result.log_dir}\n"
+        f"  record:  {result.record_path}\n\n"
+        f"[bold]next:[/bold]\n"
+        f"  reboot — the new kernel will boot ONCE (one-shot probation).\n"
+        f"  if it boots successfully:\n"
+        f"    autokernel install {snapshot_dir} --commit --execute\n"
+        f"  if it fails to boot, GRUB falls back automatically; then:\n"
+        f"    autokernel rollback {snapshot_dir} --execute",
+        title="autokernel install",
+    ))
+
+
+@app.command()
+def rollback(
+    snapshot_dir: Annotated[Path, typer.Argument(help="Snapshot directory")],
+    execute: Annotated[bool, typer.Option(help="Actually run the rollback. Default: dry-run.")] = False,
+) -> None:
+    """Undo the most recent autokernel install for SNAPSHOT_DIR."""
+    import os
+
+    _validate_snapshot_dir(snapshot_dir)
+    distro = detect_distro()
+    bootloader = bootloader_mod.detect()
+
+    plan = rollback_mod.build_plan(
+        snapshot_dir=snapshot_dir, distro=distro, bootloader=bootloader,
+    )
+    _render_rollback_plan(plan, distro=distro, bootloader=bootloader)
+
+    if not plan.is_valid:
+        if bootloader.kind != bootloader_mod.BootloaderKind.GRUB2:
+            raise err.hint_unsupported_bootloader(bootloader.kind.value)
+        raise err.fail(
+            "nothing to rollback",
+            why=plan.rejected_reason,
+            fix="run `autokernel install --execute` first if you actually meant to install",
+            exit_code=2,
+        )
+
+    if not execute:
+        console.print(
+            "\n[dim]dry-run; pass --execute to actually run the commands above[/dim]"
+        )
+        return
+
+    if os.geteuid() != 0:
+        raise err.hint_not_root("`autokernel rollback --execute`")
+
+    console.print("\n[cyan]running rollback plan…[/cyan]")
+    result = rollback_mod.execute(plan, snapshot_dir=snapshot_dir)
+    _render_install_result(result)
+    if not result.ok:
+        raise typer.Exit(result.step_runs[-1].exit_code)
+    console.print(f"[green]✓ rolled back; record marked at {plan.record_path}[/green]")
+
+
+# ── install/rollback rendering ─────────────────────────────────────────────
+
+
+def _find_latest_built_packages(snapshot_dir: Path) -> list[Path]:
+    """Locate built kernel packages under the snapshot dir.
+
+    The build verb writes packages to the source tree's parent dir, so
+    they don't usually land here automatically; users either pass
+    --package explicitly or symlink the .deb into the snapshot dir.
+    """
+    candidates: list[Path] = []
+    for pat in ("linux-image-*.deb", "kernel-*.rpm", "linux-*.pkg.tar.zst"):
+        candidates.extend(snapshot_dir.glob(pat))
+    return sorted(candidates)
+
+
+def _render_install_plan(plan, *, distro, bootloader, mode: str) -> None:
+    console.rule(f"install: {mode}")
+    console.print(
+        f"[dim]distro: {distro.pretty_name or distro.id} (family={distro.family.value})[/dim]\n"
+        f"[dim]bootloader: {bootloader.kind.value} ({bootloader.detected_via})[/dim]"
+    )
+    if not plan.is_valid:
+        console.print(f"\n[red]✗ plan rejected:[/red] {plan.rejected_reason}")
+        return
+    if plan.package_paths:
+        console.print("\n[bold]packages:[/bold]")
+        for p in plan.package_paths:
+            console.print(f"  · {p}")
+    console.print(f"\n[bold]steps ({len(plan.steps)}):[/bold]")
+    for i, step in enumerate(plan.steps, 1):
+        crown = "[red]root[/red]" if step.needs_root else "[dim]user[/dim]"
+        console.print(f"  [bold]{i}. {step.name}[/bold] ({crown})")
+        console.print(f"     [dim]{step.description}[/dim]")
+        console.print(f"     $ {' '.join(step.argv)}")
+
+
+def _render_rollback_plan(plan, *, distro, bootloader) -> None:
+    console.rule("rollback")
+    console.print(
+        f"[dim]distro: {distro.pretty_name or distro.id} (family={distro.family.value})[/dim]\n"
+        f"[dim]bootloader: {bootloader.kind.value} ({bootloader.detected_via})[/dim]"
+    )
+    if not plan.is_valid:
+        console.print(f"\n[yellow]· nothing to do:[/yellow] {plan.rejected_reason}")
+        return
+    console.print(f"\n[dim]targeting record: {plan.record_path}[/dim]")
+    console.print(f"\n[bold]steps ({len(plan.steps)}):[/bold]")
+    for i, step in enumerate(plan.steps, 1):
+        console.print(f"  [bold]{i}. {step.name}[/bold]  $ {' '.join(step.argv)}")
+        console.print(f"     [dim]{step.description}[/dim]")
+
+
+def _render_install_result(result) -> None:
+    t = Table(title="results", header_style="cyan")
+    t.add_column("step")
+    t.add_column("rc", justify="right")
+    t.add_column("dur (s)", justify="right")
+    for run in result.step_runs:
+        rc_color = "green" if run.ok else "red"
+        t.add_row(
+            run.step.name,
+            f"[{rc_color}]{run.exit_code}[/{rc_color}]",
+            f"{run.duration_s:.1f}",
+        )
+    console.print(t)
 
 
 def _main() -> None:
