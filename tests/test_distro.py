@@ -176,3 +176,49 @@ def test_detect_uses_first_existing(tmp_path: Path):
 def test_detect_falls_back_to_unknown_when_nothing_found(tmp_path: Path):
     info = detect(search_paths=[tmp_path / "nope1", tmp_path / "nope2"])
     assert info.family == Family.UNKNOWN
+
+
+# ── clang as default compiler (v0.15) — every family ship clang ───────────
+
+
+@pytest.mark.parametrize("os_release_id,expected_clang_pkg", [
+    ("ubuntu",        "clang"),
+    ("debian",        "clang"),
+    ("fedora",        "clang"),
+    ("rhel",          "clang"),
+    ("arch",          "clang"),
+    ("opensuse-leap", "clang"),
+    ("alpine",        "clang"),
+])
+def test_clang_in_every_distro_build_deps(os_release_id, expected_clang_pkg):
+    """v0.15 made clang the default compiler. Every family's build_deps
+    must include the clang binary's package, otherwise `autokernel
+    install-deps` won't pick it up and `autokernel build` fails fast
+    with 'clang: command not found'."""
+    spec = spec_for(_load_synthetic(os_release_id))
+    assert expected_clang_pkg in spec.build_deps
+
+
+def test_gentoo_uses_atom_path_for_clang():
+    """Gentoo packages use category/atom paths."""
+    spec = spec_for(_load_synthetic("gentoo"))
+    assert "sys-devel/clang" in spec.build_deps
+
+
+def test_lld_in_debian_family_for_native_lto():
+    """Clang LTO needs lld for the link step."""
+    spec = spec_for(_load_synthetic("ubuntu"))
+    assert "lld" in spec.build_deps
+
+
+def _load_synthetic(os_id: str):
+    from autokernel.distro import parse_os_release
+    fam_map = {
+        "ubuntu": "debian", "debian": "debian",
+        "fedora": "rhel fedora", "rhel": "fedora",
+        "arch": "arch",
+        "opensuse-leap": "opensuse suse", "opensuse-tumbleweed": "opensuse suse",
+        "alpine": "alpine",
+        "gentoo": "gentoo",
+    }
+    return parse_os_release(f"ID={os_id}\nID_LIKE={fam_map.get(os_id, os_id)}\n")

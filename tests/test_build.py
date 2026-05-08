@@ -482,3 +482,66 @@ def test_build_kernel_only_target_runs_bzImage_modules(tmp_path, captured_runs):
     build(source_dir=src, snapshot_dir=snap, jobs=8, target="kernel-only")
     assert len(captured_runs) == 1
     assert captured_runs[0]["argv"] == ["make", "-j8", "bzImage", "modules"]
+
+
+# ── compiler binary pre-flight in build verb (v0.16.1) ───────────────────
+
+
+def test_build_cli_fails_fast_when_clang_missing(tmp_path, monkeypatch):
+    """`autokernel build --execute` (default --compiler=clang) should
+    refuse to start when clang isn't on PATH, with a clear hint to
+    `autokernel install-deps --execute`."""
+    from typer.testing import CliRunner
+    import shutil as stdshutil
+    from autokernel import cli as cli_mod
+
+    runner = CliRunner()
+    src = _make_fake_kernel_source(tmp_path)
+    (src / ".config").write_text("CONFIG_X=y\n")
+
+    # Use the existing intel_laptop fixture — it has the manifest.
+    fixture = Path(__file__).parent / "fixtures" / "intel_laptop"
+    snap = tmp_path / "snap"
+    stdshutil.copytree(fixture, snap)
+    (snap / "final.config").write_text("CONFIG_X=y\n")
+
+    monkeypatch.setattr("shutil.which",
+                        lambda c: None if c == "clang" else f"/usr/bin/{c}")
+
+    result = runner.invoke(
+        cli_mod.app,
+        ["build", str(snap), "--kernel-source", str(src), "--execute"],
+    )
+    assert result.exit_code == 2, result.output
+    assert "clang" in result.output
+    assert "install-deps" in result.output
+
+
+def test_build_cli_passes_preflight_when_compiler_on_path(tmp_path, monkeypatch):
+    """When the compiler IS on PATH, pre-flight passes."""
+    from typer.testing import CliRunner
+    import shutil as stdshutil
+    from autokernel import cli as cli_mod
+
+    runner = CliRunner()
+    src = _make_fake_kernel_source(tmp_path)
+    (src / ".config").write_text("CONFIG_X=y\n")
+    fixture = Path(__file__).parent / "fixtures" / "intel_laptop"
+    snap = tmp_path / "snap"
+    stdshutil.copytree(fixture, snap)
+    (snap / "final.config").write_text("CONFIG_X=y\n")
+
+    # clang on PATH; mock the actual subprocess so we don't run make.
+    monkeypatch.setattr("shutil.which", lambda c: f"/usr/bin/{c}")
+    def _ok(argv, **kwargs):
+        for f in (kwargs.get("stdout"), kwargs.get("stderr")):
+            if hasattr(f, "write"):
+                f.write(b"")
+        return _FakeProcess(returncode=0)
+    monkeypatch.setattr(build_mod.subprocess, "run", _ok)
+
+    result = runner.invoke(
+        cli_mod.app,
+        ["build", str(snap), "--kernel-source", str(src), "--execute"],
+    )
+    assert "install-deps" not in result.output

@@ -224,7 +224,12 @@ def check_cpu_cores(ctx: CheckContext) -> CheckResult:
 
 
 # Required tools — missing any is a FAIL for the build verb.
-_REQUIRED_BUILD_TOOLS = ["gcc", "make", "ld", "flex", "bison", "bc", "perl", "awk", "tar"]
+# v0.15: clang/lld/llvm-* added because the build verb defaults to
+# --compiler=clang. gcc stays in the list for fallback support.
+_REQUIRED_BUILD_TOOLS = [
+    "gcc", "make", "ld", "flex", "bison", "bc", "perl", "awk", "tar",
+    "clang", "ld.lld",
+]
 _RECOMMENDED_TOOLS = ["ccache", "pahole"]
 
 
@@ -243,16 +248,19 @@ def check_build_tools(ctx: CheckContext) -> CheckResult:
         "gcc": "build-essential", "make": "build-essential", "ld": "binutils",
         "flex": "flex", "bison": "bison", "bc": "bc", "perl": "perl",
         "awk": "gawk", "tar": "tar",
+        "clang": "clang", "ld.lld": "lld",
     }
     pkg_map_fedora = {
         "gcc": "gcc", "make": "make", "ld": "binutils",
         "flex": "flex", "bison": "bison", "bc": "bc", "perl": "perl",
         "awk": "gawk", "tar": "tar",
+        "clang": "clang", "ld.lld": "lld",
     }
     pkg_map_arch = {
         "gcc": "base-devel", "make": "base-devel", "ld": "base-devel",
         "flex": "flex", "bison": "bison", "bc": "bc", "perl": "perl",
         "awk": "gawk", "tar": "tar",
+        "clang": "clang", "ld.lld": "lld",
     }
     fam_map = {
         Family.DEBIAN: pkg_map_debian,

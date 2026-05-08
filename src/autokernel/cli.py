@@ -886,6 +886,23 @@ def build(
         )
         raise typer.Exit(3)
 
+    # Compiler pre-flight: fail fast when --compiler=X but X isn't on
+    # PATH. Without this, the build would die mid-make with a confusing
+    # "command not found" deep in the kernel's recipe chain.
+    import shutil as _shutil
+    compiler_bin = {"clang": "clang", "llvm": "clang", "gcc": "gcc"}.get(compiler)
+    if compiler_bin and _shutil.which(compiler_bin) is None:
+        raise err.fail(
+            f"--compiler={compiler!r} but {compiler_bin!r} is not on PATH",
+            why=(
+                f"the build verb defaults to clang as of v0.15. Either install "
+                f"the toolchain (recommended) or pass --compiler=gcc to use "
+                f"the gcc fallback."
+            ),
+            fix=f"autokernel install-deps --for build --execute",
+            exit_code=2,
+        )
+
     # ── prepare ──────────────────────────────────────────────────────────
     if localmodconfig:
         lsmod_path = snapshot_dir / "lsmod"

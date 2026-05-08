@@ -280,6 +280,8 @@ _SPECS: dict[Family, DistroSpec] = {
             "gcc", "make", "flex", "bison", "bc", "libopenssl-devel",
             # libdw-devel adds <dwarf.h> for gendwarfksyms (6.19+).
             "libelf-devel", "libdw-devel", "ncurses-devel", "dwarves", "zstd",
+            # v0.15: clang as default compiler.
+            "clang", "lld", "llvm",
         ),
         build_target_default="rpm-pkg",
         kernel_config_path_pattern="/boot/config-{release}",
@@ -297,6 +299,8 @@ _SPECS: dict[Family, DistroSpec] = {
             # dev-libs/elfutils provides <dwarf.h> for gendwarfksyms (6.19+).
             "virtual/libelf", "dev-libs/elfutils", "sys-libs/ncurses",
             "dev-util/dwarves",
+            # v0.15: clang as default compiler.
+            "sys-devel/clang", "sys-devel/lld", "sys-devel/llvm",
         ),
         build_target_default="targz-pkg",
         kernel_config_path_pattern="/usr/src/linux/.config",
@@ -313,6 +317,8 @@ _SPECS: dict[Family, DistroSpec] = {
             # elfutils-dev on Alpine bundles libdw + libelf headers — covers
             # <dwarf.h> for gendwarfksyms (6.19+) without a separate package.
             "elfutils-dev", "ncurses-dev", "zstd",
+            # v0.15: clang as default compiler.
+            "clang", "lld", "llvm",
         ),
         build_target_default="targz-pkg",
         kernel_config_path_pattern="/boot/config-{release}",
