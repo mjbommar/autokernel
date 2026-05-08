@@ -467,3 +467,18 @@ def test_prepare_passes_compiler_to_env(tmp_path, monkeypatch):
     assert captured_envs
     assert captured_envs[0].get("CC") == "gcc"
     assert captured_envs[0].get("HOSTCC") == "gcc"
+
+
+# ── kernel-only target (v0.15.1) ──────────────────────────────────────────
+
+
+def test_build_kernel_only_target_runs_bzImage_modules(tmp_path, captured_runs):
+    """`--target=kernel-only` should expand to `make -jN bzImage modules`."""
+    src = _make_fake_kernel_source(tmp_path)
+    (src / ".config").write_text("CONFIG_X=y\n")
+    snap = tmp_path / "snap"
+    snap.mkdir()
+
+    build(source_dir=src, snapshot_dir=snap, jobs=8, target="kernel-only")
+    assert len(captured_runs) == 1
+    assert captured_runs[0]["argv"] == ["make", "-j8", "bzImage", "modules"]

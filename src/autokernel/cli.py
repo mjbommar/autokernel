@@ -1805,6 +1805,8 @@ def iterate(
     llm_mode: Annotated[str, typer.Option("--llm-mode")] = "auto",
     model: Annotated[str | None, typer.Option("--model")] = None,
     service_tier: Annotated[str | None, typer.Option()] = None,
+    compiler: Annotated[str, typer.Option("--compiler", help="Compiler: clang (default) / llvm / gcc. Forwarded to each iteration's build.")] = "clang",
+    lto: Annotated[str, typer.Option("--lto", help="LTO: none (default) / thin / full. Forwarded to each iteration's build.")] = "none",
 ) -> None:
     """Run the closed-loop optimizer: propose → check → apply → build →
     boot-test → measure, for up to ``--max-iterations`` rounds.
@@ -1875,6 +1877,8 @@ def iterate(
             execute=execute,
             auto_revert=auto_revert,
             history=history,
+            compiler=compiler,
+            lto=lto,
         )
         save_record(snapshot_dir, record)
         history.append(record)
@@ -1915,6 +1919,8 @@ def _run_one_iteration(
     llm_mode: str,
     model: str | None,
     service_tier: str | None,
+    compiler: str = "clang",
+    lto: str = "none",
     execute: bool,
     auto_revert: bool,
     history: list,
@@ -2006,6 +2012,15 @@ def _run_one_iteration(
     propose_env = {**os.environ, "PYTHONUNBUFFERED": "1"}
     rc = subprocess.run(proposal_argv, cwd=Path.cwd(), env=propose_env).returncode
     _step(f"propose done", done=True, extra=f"({time.time() - t0:.1f}s, rc={rc})")
+
+    # propose --out wrote to iter_dir/proposal.json. The subsequent
+    # review verb reads from <snap>/proposal.json — copy it across so
+    # the chain works. (Each iteration's authoritative artifact lives
+    # in iter_dir/; the snap_dir/ copy is just plumbing for review.)
+    iter_proposal = iter_dir / "proposal.json"
+    if iter_proposal.exists():
+        (snapshot_dir / "proposal.json").write_text(iter_proposal.read_text())
+
     if rc != 0:
         return IterationRecord(
             iteration=iter_n,
@@ -2097,6 +2112,13 @@ def _run_one_iteration(
         f"--kernel-source={kernel_source}",
         "--localmodconfig",
         "--execute",
+        # Iterate doesn't install — just needs `bzImage modules` to
+        # validate the build + boot-test. Skips packaging deps
+        # (debhelper-compat, rpmbuild, etc.) that bindeb-pkg/rpm-pkg
+        # would require.
+        "--target=kernel-only",
+        f"--compiler={compiler}",
+        f"--lto={lto}",
     ]
     with build_log_path.open("w") as f:
         rc = subprocess.run(build_argv, cwd=Path.cwd(), stdout=f, stderr=subprocess.STDOUT).returncode
@@ -2119,11 +2141,17 @@ def _run_one_iteration(
         _step("boot-test done", done=True, extra=f"({time.time() - t0:.1f}s)")
 
     # 5. measure.
+    # When build failed, the bzImage/vmlinux/modules in the source tree
+    # are STALE artifacts from a prior successful build — measuring them
+    # would lie about this iteration's output. Pass source_dir=None so
+    # measure() returns Nones for those fields. The proposed-vs-actual
+    # diff still works against final.config + the (possibly stale)
+    # source/.config; that's still informative.
     final_cfg = (snapshot_dir / "final.config").read_text() if (snapshot_dir / "final.config").exists() else None
     actual_cfg = (kernel_source / ".config").read_text() if (kernel_source / ".config").exists() else None
     measurements = measure(
         snapshot_dir=snapshot_dir,
-        source_dir=kernel_source,
+        source_dir=None if build_failed else kernel_source,
         proposed_config_text=final_cfg,
         actual_config_text=actual_cfg,
         build_log=build_log_path.read_text() if build_log_path.exists() else None,

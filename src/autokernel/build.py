@@ -435,9 +435,21 @@ def build(
         compiler=compiler, lto=lto,
     )
 
+    # Special-case "kernel-only" — runs `make bzImage modules` (no
+    # packaging). Used by `iterate --execute` where we just need to
+    # know the kernel built and boots; we don't need a .deb. Saves
+    # the install-time deps (debhelper-compat etc.) and is the
+    # closest analog to what users do during interactive kernel work.
+    if target == "kernel-only":
+        argv = ["make", f"-j{jobs}", "bzImage", "modules"]
+        step_name = "make-bzImage-modules"
+    else:
+        argv = ["make", f"-j{jobs}", target]
+        step_name = f"make-{target}"
+
     step = _run_step(
-        f"make-{target}",
-        ["make", f"-j{jobs}", target],
+        step_name,
+        argv,
         cwd=source_dir,
         env=env,
         log_dir=log_dir,
