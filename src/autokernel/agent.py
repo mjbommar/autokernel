@@ -388,4 +388,80 @@ def deterministic_proposals(snap: Snapshot, candidates: Iterable[tuple[str, str]
         if proposal:
             out.append(proposal)
 
+    # ── CPU microarch tuning ─────────────────────────────────────────────
+    # Independent of the candidate scan above: a deterministic recommendation
+    # to swap CONFIG_GENERIC_CPU=y for the host's actual microarchitecture
+    # (CONFIG_MZEN3 / CONFIG_MMETEORLAKE / …). Emits two proposals — one
+    # "disable GENERIC_CPU" and one "enable M<arch>" — so the apply step
+    # produces a coherent .config.
+    out.extend(_microarch_proposals(snap, candidates))
+
     return out
+
+
+def _microarch_proposals(
+    snap: Snapshot, candidates: list[tuple[str, str]]
+) -> list[RemovalProposal]:
+    """Build the CPU-microarch swap pair, or return empty when:
+
+    * the host's CPU isn't recognized (Microarch.GENERIC),
+    * the running kernel is too old for the recommended symbol,
+    * the running config already has the right symbol set,
+    * the CPU's microarch isn't in the candidate-trim pool's running-config
+      (i.e. we don't know what value to swap from).
+    """
+    from autokernel.cpu import recommend
+
+    rec = recommend(snap.cpu, snap.kernel.release)
+    if rec is None:
+        return []
+    arch, target_symbol = rec
+
+    # Look up current values from the candidate list (it's the running
+    # config's =y/=m pile). If the target is already set, no-op.
+    by_sym = dict(candidates)
+    target_current = by_sym.get(target_symbol)
+    generic_current = by_sym.get("CONFIG_GENERIC_CPU")
+
+    proposals: list[RemovalProposal] = []
+    if generic_current == "y":
+        proposals.append(RemovalProposal(
+            config="CONFIG_GENERIC_CPU",
+            current_value="y",
+            proposed_value="n",
+            reason=(
+                f"Host CPU is {arch.value} ({snap.cpu.model_name or 'unknown model'}); "
+                f"swap to a tuned microarch symbol for better codegen."
+            ),
+            risk=RiskLevel.LOW,
+            confidence=0.95,
+            source=ProposalSource.MICROARCH,
+            evidence=[
+                f"cpu.vendor_id={snap.cpu.vendor_id}",
+                f"cpu.cpu_family={snap.cpu.cpu_family}",
+                f"cpu.model={snap.cpu.model}",
+            ],
+        ))
+
+    # Only emit the enable when the running config doesn't already have it.
+    if target_current != "y":
+        proposals.append(RemovalProposal(
+            config=target_symbol,
+            current_value=target_current or "n",
+            proposed_value="y",
+            reason=(
+                f"Set CPU microarch tuning for {arch.value} "
+                f"({snap.cpu.model_name or 'unknown model'})."
+            ),
+            risk=RiskLevel.LOW,
+            confidence=0.95,
+            source=ProposalSource.MICROARCH,
+            evidence=[
+                f"cpu.vendor_id={snap.cpu.vendor_id}",
+                f"cpu.cpu_family={snap.cpu.cpu_family}",
+                f"cpu.model={snap.cpu.model}",
+                f"kernel.release={snap.kernel.release}",
+            ],
+        ))
+
+    return proposals

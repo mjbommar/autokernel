@@ -182,6 +182,9 @@ class RiskLevel(str, Enum):
 
 class ProposalSource(str, Enum):
     DETERMINISTIC = "deterministic"  # hardcoded rule
+    MICROARCH = "microarch"  # CPU microarchitecture tuning (a deterministic
+                              # rule, but distinguished so renderers can
+                              # surface it under a "tuning" heading)
     LLM = "llm"  # pydantic-ai agent
     USER = "user"  # explicit user override
 

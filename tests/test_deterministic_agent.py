@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from autokernel.agent import deterministic_proposals
-from autokernel.models import ProposalSource, Snapshot
+from autokernel.models import ProposalSource, RiskLevel, Snapshot
 from autokernel.resolve import _running_config_symbols
 
 
@@ -73,3 +73,70 @@ def test_proposals_never_propose_keeping_current_value(intel_laptop: Snapshot):
     props = deterministic_proposals(intel_laptop, _candidates(intel_laptop))
     for p in props:
         assert p.proposed_value != p.current_value
+
+
+# ── microarch tuning ─────────────────────────────────────────────────────
+
+
+def test_intel_meteor_lake_microarch_proposal(intel_laptop: Snapshot):
+    """Intel laptop fixture is Core Ultra 7 165U (family 6 model 170 →
+    Meteor Lake). The kernel release is 6.13 which supports MMETEORLAKE
+    (added in 6.7). Expect: disable GENERIC_CPU + enable MMETEORLAKE."""
+    cands = _candidates(intel_laptop)
+    # The fixture's running_config doesn't currently have CONFIG_GENERIC_CPU=y
+    # (we'd have to add it). Inject one to exercise the disable path.
+    cands_with_generic = [*cands, ("CONFIG_GENERIC_CPU", "y")]
+    props = deterministic_proposals(intel_laptop, cands_with_generic)
+    micro = [p for p in props if p.source == ProposalSource.MICROARCH]
+    by_cfg = {p.config: p for p in micro}
+    assert "CONFIG_GENERIC_CPU" in by_cfg
+    assert by_cfg["CONFIG_GENERIC_CPU"].proposed_value == "n"
+    assert "CONFIG_MMETEORLAKE" in by_cfg
+    assert by_cfg["CONFIG_MMETEORLAKE"].proposed_value == "y"
+    # Both should be load-bearing-style high confidence
+    for p in micro:
+        assert p.confidence >= 0.9
+        assert p.risk == RiskLevel.LOW
+
+
+def test_amd_zen3_microarch_proposal(amd_desktop: Snapshot):
+    """AMD desktop fixture is Ryzen 5800X3D (family 25 model 33 → Zen 3)."""
+    cands = [*_candidates(amd_desktop), ("CONFIG_GENERIC_CPU", "y")]
+    props = deterministic_proposals(amd_desktop, cands)
+    by_cfg = {p.config: p for p in props if p.source == ProposalSource.MICROARCH}
+    assert "CONFIG_MZEN3" in by_cfg
+    assert by_cfg["CONFIG_MZEN3"].proposed_value == "y"
+
+
+def test_microarch_proposal_skipped_when_target_already_set(intel_laptop: Snapshot):
+    """If the running config already has CONFIG_MMETEORLAKE=y, no enable
+    proposal should be emitted (and the GENERIC_CPU disable also skipped
+    because GENERIC_CPU isn't currently set)."""
+    cands = [*_candidates(intel_laptop), ("CONFIG_MMETEORLAKE", "y")]
+    props = deterministic_proposals(intel_laptop, cands)
+    micro_targets = {
+        p.config for p in props
+        if p.source == ProposalSource.MICROARCH and p.proposed_value == "y"
+    }
+    assert "CONFIG_MMETEORLAKE" not in micro_targets
+
+
+def test_microarch_proposal_skipped_for_unrecognized_cpu():
+    """Snapshot with an unknown CPU should produce no microarch proposals."""
+    from autokernel.models import (
+        BootContext, CpuInfo, KernelInfo, Snapshot,
+    )
+    from datetime import UTC, datetime
+    from pathlib import Path
+
+    snap = Snapshot(
+        collected_at=datetime.now(UTC),
+        host="x",
+        snapshot_dir=Path("/tmp/x"),
+        kernel=KernelInfo(release="6.13.0", version="x", arch="x86_64"),
+        cpu=CpuInfo(vendor_id="UnknownCorp", cpu_family=99, model=99),
+        boot=BootContext(cmdline=""),
+    )
+    props = deterministic_proposals(snap, [("CONFIG_GENERIC_CPU", "y")])
+    micro = [p for p in props if p.source == ProposalSource.MICROARCH]
+    assert micro == []

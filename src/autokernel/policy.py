@@ -246,9 +246,11 @@ def apply_policy(
             continue
 
         if autonomy == AutonomyLevel.ADVISE:
-            # Deterministic certainty isn't a guess — apply it.
+            # Deterministic certainty isn't a guess — apply it. CPU
+            # microarch tuning (source=MICROARCH) is the same shape:
+            # a hardware-provable fact rather than a judgment call.
             if (
-                p.source == ProposalSource.DETERMINISTIC
+                p.source in (ProposalSource.DETERMINISTIC, ProposalSource.MICROARCH)
                 and p.confidence >= DETERMINISTIC_AUTO_CONFIDENCE
             ):
                 out.auto_applied.append(p)

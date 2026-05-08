@@ -158,6 +158,7 @@ def propose(
     service_tier: Annotated[str | None, typer.Option(help="OpenAI service_tier: 'flex' | 'priority' | 'auto' (overrides AUTOKERNEL_SERVICE_TIER)")] = None,
     out: Annotated[Path | None, typer.Option(help="Write proposal JSON to this path")] = None,
     force_dkms: Annotated[bool, typer.Option(help="Allow auto-* autonomy even when DKMS modules are present (use only if you understand the rebuild risk)")] = False,
+    no_cpu_tune: Annotated[bool, typer.Option("--no-cpu-tune", help="Don't propose CPU microarch tuning (CONFIG_M<arch>=y).")] = False,
 ) -> None:
     """Generate a proposed kernel config trim from a snapshot."""
     _validate_snapshot_dir(snapshot_dir)
@@ -201,6 +202,20 @@ def propose(
 
     # ── deterministic proposals ─────────────────────────────────────────
     det = deterministic_proposals(snap, candidates)
+    if no_cpu_tune:
+        from autokernel.models import ProposalSource as _PS
+        det = [p for p in det if p.source != _PS.MICROARCH]
+
+    # Surface CPU tune separately so the user sees what we recommended for
+    # their host (and can opt out with --no-cpu-tune if they don't want it).
+    from autokernel.cpu import recommend as _cpu_recommend
+    cpu_rec = _cpu_recommend(snap.cpu, snap.kernel.release)
+    if cpu_rec is not None and not no_cpu_tune:
+        arch, sym = cpu_rec
+        console.print(
+            f"[cyan]CPU tune:[/cyan] {snap.cpu.model_name or snap.cpu.vendor_id} → "
+            f"[bold]{sym}=y[/bold] [dim](microarch: {arch.value})[/dim]"
+        )
     console.print(f"[dim]deterministic proposals: {len(det)}[/dim]")
 
     # Remove deterministic-handled symbols from the LLM pile.

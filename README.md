@@ -8,9 +8,9 @@ Debian/Ubuntu, Fedora/RHEL, Arch, openSUSE, Gentoo, Alpine.
 Inspired by Gentoo's `localmodconfig`, FreeBSD's `include GENERIC` + diff
 style, and Debian's `make bindeb-pkg`.
 
-> **Status: 0.8.** Full pipeline shipped: `preflight`, `scan`, `propose`,
-> `review` (with interactive TUI), `apply`, `fetch-source`, `build`,
-> `install --probation`, `rollback`, plus `quickstart` for new users.
+> **Status: 0.9.** Full pipeline + CPU microarch tuning. `propose` now
+> auto-recommends the right `CONFIG_M<microarch>=y` for your host's CPU
+> (Zen 1–5, Sandy Bridge through Lunar Lake). Auto-applied at ADVISE.
 
 [![tests](https://github.com/mjbommar/autokernel/actions/workflows/test.yml/badge.svg)](https://github.com/mjbommar/autokernel/actions/workflows/test.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -292,7 +292,31 @@ symbol. `RemovalProposal` carries `config`, `current_value` /
 - [x] `quickstart` walk-through + centralized error hints *(0.8)*
 - [ ] systemd watchdog for auto-promotion (currently `--commit` is manual)
 - [ ] systemd-boot / rEFInd support for `install`
+- [x] CPU microarch tuning: auto-detect Zen 1–5 / Sandy Bridge → Lunar Lake; auto-apply `CONFIG_M<arch>=y` *(0.9)*
+- [ ] systemd watchdog for auto-promoting after N successful boots (currently `--commit` is manual)
+- [ ] systemd-boot / rEFInd support for `install`
 - [ ] PEP 723 single-file scripts for kernel-dev workflows: bisect, patch series, Kconfig fragment composer.
+
+## CPU microarch tuning
+
+When the host CPU is recognized AND the running kernel ships the
+matching `CONFIG_M*` symbol (the symbol's "added-in" version is checked
+against `uname -r`), `propose` emits a high-confidence MICROARCH
+proposal that gets auto-applied at ADVISE. Examples on a few hosts:
+
+| Host CPU | Detected | Proposed |
+|---|---|---|
+| Intel Core Ultra 7 165H (family 6 / model 170) | Meteor Lake | `CONFIG_MMETEORLAKE=y` |
+| AMD Ryzen 9 7950X (family 25 / model 97) | Zen 4 | `CONFIG_MZEN4=y` |
+| AMD Ryzen 7 5800X3D (family 25 / model 33) | Zen 3 | `CONFIG_MZEN3=y` |
+| Intel i7-1165G7 (family 6 / model 140) | Tiger Lake | `CONFIG_MTIGERLAKE=y` |
+| Intel i7-2600K (family 6 / model 42) | Sandy Bridge | `CONFIG_MSANDYBRIDGE=y` |
+
+Unknown CPUs fall back to leaving `CONFIG_GENERIC_CPU` alone — better
+to be generic than wrong. Opt out per-run with `--no-cpu-tune`.
+
+The mapping table lives in `src/autokernel/cpu.py`. PRs welcome for
+new microarchitectures.
 
 ## License
 

@@ -51,6 +51,10 @@ class KfragHeader:
     timestamp: str
     n_disable: int
     n_demote: int
+    n_enable: int = 0
+    """Count of ENABLE proposals (proposed_value == 'y'). These come from
+    deterministic tuning rules — most commonly CPU microarch — and emit
+    ``CONFIG_FOO=y`` lines into the fragment."""
 
 
 def write_kfrag(
@@ -73,6 +77,7 @@ def write_kfrag(
     accepted = [r for r in review_set.accepted if r.decision == ReviewDecision.ACCEPT]
     disables = [r for r in accepted if r.proposal.proposed_value == "n"]
     demotions = [r for r in accepted if r.proposal.proposed_value == "m"]
+    enables = [r for r in accepted if r.proposal.proposed_value == "y"]
 
     header = KfragHeader(
         schema_version=1,
@@ -83,6 +88,7 @@ def write_kfrag(
         timestamp=datetime.now(UTC).isoformat(timespec="seconds"),
         n_disable=len(disables),
         n_demote=len(demotions),
+        n_enable=len(enables),
     )
 
     lines: list[str] = []
@@ -94,6 +100,7 @@ def write_kfrag(
         lines.append(f"# model:     {model}")
     if service_tier:
         lines.append(f"# tier:      {service_tier}")
+    lines.append(f"# enables:   {header.n_enable}")
     lines.append(f"# disables:  {header.n_disable}")
     lines.append(f"# demotions: {header.n_demote}")
     lines.append(f"# rejected:  {len(review_set.rejected)} (kept at current value)")
@@ -102,6 +109,14 @@ def write_kfrag(
     lines.append("# Apply with:  scripts/kconfig/merge_config.sh -m .config <this-file>")
     lines.append("#              make olddefconfig")
     lines.append("")
+
+    if enables:
+        lines.append("# ── enables (tuning) ─────────────────────────────────")
+        for r in enables:
+            note = _comment_for(r)
+            lines.append(f"# {r.proposal.config}: {note}")
+            lines.append(f"{r.proposal.config}=y")
+            lines.append("")
 
     if disables:
         lines.append("# ── disables ─────────────────────────────────────────")
