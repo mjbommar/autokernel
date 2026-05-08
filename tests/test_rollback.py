@@ -9,7 +9,6 @@ from typing import Any
 import pytest
 
 from autokernel import install as install_mod
-from autokernel import rollback as rollback_mod
 from autokernel.bootloader import Bootloader, BootloaderKind
 from autokernel.distro import Family, parse_os_release
 from autokernel.rollback import (
@@ -21,11 +20,13 @@ from autokernel.rollback import (
 
 
 def _info(family: Family):
-    return parse_os_release({
-        Family.DEBIAN: "ID=ubuntu\nID_LIKE=debian\n",
-        Family.FEDORA: "ID=fedora\n",
-        Family.UNKNOWN: "ID=mystery\n",
-    }[family])
+    return parse_os_release(
+        {
+            Family.DEBIAN: "ID=ubuntu\nID_LIKE=debian\n",
+            Family.FEDORA: "ID=fedora\n",
+            Family.UNKNOWN: "ID=mystery\n",
+        }[family]
+    )
 
 
 _DEB_GRUB = Bootloader(
@@ -93,7 +94,9 @@ def test_find_latest_returns_only_record(tmp_path: Path):
 
 def test_find_latest_picks_newest_by_dirname(tmp_path: Path):
     _seed_install_record(tmp_path, ["/old.deb"], timestamp="20260101T000000Z")
-    new_path = _seed_install_record(tmp_path, ["/new.deb"], timestamp="20260601T000000Z")
+    new_path = _seed_install_record(
+        tmp_path, ["/new.deb"], timestamp="20260601T000000Z"
+    )
     found = find_latest_install_record(tmp_path)
     assert found == new_path
 
@@ -136,6 +139,7 @@ def test_build_plan_returns_rejected_when_no_install(tmp_path: Path):
         bootloader=_DEB_GRUB,
     )
     assert not plan.is_valid
+    assert plan.rejected_reason is not None
     assert "no install record" in plan.rejected_reason
 
 
@@ -147,6 +151,7 @@ def test_build_plan_returns_rejected_for_unsupported_bootloader(tmp_path: Path):
         bootloader=Bootloader(kind=BootloaderKind.SYSTEMD_BOOT, detected_via="x"),
     )
     assert not plan.is_valid
+    assert plan.rejected_reason is not None
     assert "GRUB2" in plan.rejected_reason
 
 
@@ -214,7 +219,9 @@ def captured_runs(monkeypatch):
     return calls
 
 
-def test_execute_walks_steps_and_marks_record_rolled_back(tmp_path: Path, captured_runs):
+def test_execute_walks_steps_and_marks_record_rolled_back(
+    tmp_path: Path, captured_runs
+):
     record_path = _seed_install_record(tmp_path, ["/path/linux-image-6.13.5_amd64.deb"])
     plan = build_plan(
         snapshot_dir=tmp_path,
@@ -285,4 +292,5 @@ def test_idempotent_after_successful_rollback(tmp_path: Path, captured_runs):
         bootloader=_DEB_GRUB,
     )
     assert not plan2.is_valid
+    assert plan2.rejected_reason is not None
     assert "no install record" in plan2.rejected_reason

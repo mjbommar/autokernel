@@ -115,7 +115,8 @@ def test_microarch_proposal_skipped_when_target_already_set(intel_laptop: Snapsh
     cands = [*_candidates(intel_laptop), ("CONFIG_MMETEORLAKE", "y")]
     props = deterministic_proposals(intel_laptop, cands)
     micro_targets = {
-        p.config for p in props
+        p.config
+        for p in props
         if p.source == ProposalSource.MICROARCH and p.proposed_value == "y"
     }
     assert "CONFIG_MMETEORLAKE" not in micro_targets
@@ -124,7 +125,10 @@ def test_microarch_proposal_skipped_when_target_already_set(intel_laptop: Snapsh
 def test_microarch_proposal_skipped_for_unrecognized_cpu():
     """Snapshot with an unknown CPU should produce no microarch proposals."""
     from autokernel.models import (
-        BootContext, CpuInfo, KernelInfo, Snapshot,
+        BootContext,
+        CpuInfo,
+        KernelInfo,
+        Snapshot,
     )
     from datetime import UTC, datetime
     from pathlib import Path

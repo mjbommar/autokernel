@@ -9,21 +9,19 @@ where they should go (subprocess invocations are mocked).
 from __future__ import annotations
 
 import json
-import shutil as stdshutil
-import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-import pytest
 
 from autokernel.minitram import (
     MinitramModule,
     MinitramPlan,
-    MinitramTool,
     _compose_init_script,
     _find_module_path,
     plan,
-    _luks_in_chain, _lvm_in_chain, _md_raid_in_chain,
+    _luks_in_chain,
+    _lvm_in_chain,
+    _md_raid_in_chain,
 )
 from autokernel.models import (
     BlockDevice,
@@ -48,7 +46,9 @@ def _bare_snap(
         snapshot_dir=Path("/tmp/snap"),
         kernel=KernelInfo(release="6.19.0-test", version="#1 SMP", arch="x86_64"),
         cpu=CpuInfo(vendor_id="GenuineIntel"),
-        boot=BootContext(cmdline="ro quiet", luks_in_chain=luks, root_fstype=root_fstype),
+        boot=BootContext(
+            cmdline="ro quiet", luks_in_chain=luks, root_fstype=root_fstype
+        ),
         block_devices=block_devices or [],
         dkms=dkms or [],
     )
@@ -63,12 +63,16 @@ def test_luks_predicate_reflects_boot_field():
 
 
 def test_lvm_predicate_checks_block_devices():
-    snap_with_lvm = _bare_snap(block_devices=[
-        BlockDevice(name="vg-root", type="lvm"),
-    ])
-    snap_no_lvm = _bare_snap(block_devices=[
-        BlockDevice(name="sda1", type="disk"),
-    ])
+    snap_with_lvm = _bare_snap(
+        block_devices=[
+            BlockDevice(name="vg-root", type="lvm"),
+        ]
+    )
+    snap_no_lvm = _bare_snap(
+        block_devices=[
+            BlockDevice(name="sda1", type="disk"),
+        ]
+    )
     assert _lvm_in_chain(snap_with_lvm)
     assert not _lvm_in_chain(snap_no_lvm)
 
@@ -76,7 +80,9 @@ def test_lvm_predicate_checks_block_devices():
 def test_md_raid_predicate():
     snap = _bare_snap(block_devices=[BlockDevice(name="md0", type="raid")])
     assert _md_raid_in_chain(snap)
-    snap2 = _bare_snap(block_devices=[BlockDevice(name="md1")])  # type missing but name 'md*'
+    snap2 = _bare_snap(
+        block_devices=[BlockDevice(name="md1")]
+    )  # type missing but name 'md*'
     assert _md_raid_in_chain(snap2)
 
 
@@ -100,8 +106,10 @@ def test_plan_includes_cryptsetup_when_luks_in_chain(monkeypatch, tmp_path):
     fake_cs = tmp_path / "cryptsetup-fake"
     fake_cs.write_text("#!/bin/sh\n")
     fake_cs.chmod(0o755)
-    monkeypatch.setattr("autokernel.minitram._which_or_none",
-                        lambda n: fake_cs if n == "cryptsetup" else None)
+    monkeypatch.setattr(
+        "autokernel.minitram._which_or_none",
+        lambda n: fake_cs if n == "cryptsetup" else None,
+    )
     monkeypatch.setattr("autokernel.minitram._resolve_libs", lambda p: [])
 
     snap = _bare_snap(luks=True, root_fstype="ext4")
@@ -115,13 +123,16 @@ def test_plan_includes_cryptsetup_when_luks_in_chain(monkeypatch, tmp_path):
 
 def test_plan_includes_lvm_when_lvm_in_chain(monkeypatch, tmp_path):
     fake_lvm = tmp_path / "lvm-fake"
-    fake_lvm.write_text("#!/bin/sh\n"); fake_lvm.chmod(0o755)
-    monkeypatch.setattr("autokernel.minitram._which_or_none",
-                        lambda n: fake_lvm if n == "lvm" else None)
+    fake_lvm.write_text("#!/bin/sh\n")
+    fake_lvm.chmod(0o755)
+    monkeypatch.setattr(
+        "autokernel.minitram._which_or_none", lambda n: fake_lvm if n == "lvm" else None
+    )
     monkeypatch.setattr("autokernel.minitram._resolve_libs", lambda p: [])
 
-    snap = _bare_snap(block_devices=[BlockDevice(name="vg-root", type="lvm")],
-                      root_fstype="ext4")
+    snap = _bare_snap(
+        block_devices=[BlockDevice(name="vg-root", type="lvm")], root_fstype="ext4"
+    )
     p = plan(snap, modules_root=tmp_path)
     assert any(t.name == "lvm" for t in p.tools)
     assert "vgchange" in p.init_script
@@ -129,9 +140,12 @@ def test_plan_includes_lvm_when_lvm_in_chain(monkeypatch, tmp_path):
 
 def test_plan_includes_dropbear_only_when_requested(monkeypatch, tmp_path):
     fake = tmp_path / "dropbear-fake"
-    fake.write_text("#!/bin/sh\n"); fake.chmod(0o755)
-    monkeypatch.setattr("autokernel.minitram._which_or_none",
-                        lambda n: fake if n == "dropbear" else None)
+    fake.write_text("#!/bin/sh\n")
+    fake.chmod(0o755)
+    monkeypatch.setattr(
+        "autokernel.minitram._which_or_none",
+        lambda n: fake if n == "dropbear" else None,
+    )
     monkeypatch.setattr("autokernel.minitram._resolve_libs", lambda p: [])
 
     snap = _bare_snap(root_fstype="ext4")
@@ -191,7 +205,11 @@ def test_plan_picks_dkms_modules(monkeypatch, tmp_path):
 
     snap = _bare_snap(
         root_fstype="ext4",
-        dkms=[DkmsModule(name="nvidia", version="535.0", kernel="6.19.0-test", status="installed")],
+        dkms=[
+            DkmsModule(
+                name="nvidia", version="535.0", kernel="6.19.0-test", status="installed"
+            )
+        ],
     )
     p = plan(snap, modules_root=tmp_path)
     assert any(m.name == "nvidia" for m in p.modules)
@@ -263,9 +281,14 @@ def test_find_module_path_returns_none_when_release_dir_missing(tmp_path):
 def test_init_script_has_pivot_root():
     snap = _bare_snap(root_fstype="ext4")
     p = MinitramPlan(kernel_release="x", snapshot_dir=Path("/tmp"))
-    p.modules.append(MinitramModule(
-        name="ext4", host_path=Path("/x"), target_path="/", rationale="root",
-    ))
+    p.modules.append(
+        MinitramModule(
+            name="ext4",
+            host_path=Path("/x"),
+            target_path="/",
+            rationale="root",
+        )
+    )
     script = _compose_init_script(snap, p)
     assert "switch_root" in script
     assert "/newroot" in script
@@ -274,8 +297,14 @@ def test_init_script_has_pivot_root():
 def test_init_script_loads_modules_in_plan_order():
     snap = _bare_snap(luks=True, root_fstype="ext4")
     p = MinitramPlan(kernel_release="x", snapshot_dir=Path("/tmp"))
-    p.modules.append(MinitramModule(name="dm_crypt", host_path=Path("/x"), target_path="/", rationale=""))
-    p.modules.append(MinitramModule(name="ext4",     host_path=Path("/y"), target_path="/", rationale=""))
+    p.modules.append(
+        MinitramModule(
+            name="dm_crypt", host_path=Path("/x"), target_path="/", rationale=""
+        )
+    )
+    p.modules.append(
+        MinitramModule(name="ext4", host_path=Path("/y"), target_path="/", rationale="")
+    )
     script = _compose_init_script(snap, p)
     # dm_crypt before ext4 — order matters for boot.
     pos_dmcrypt = script.find("modprobe dm_crypt")

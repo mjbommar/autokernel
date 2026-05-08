@@ -217,6 +217,7 @@ def test_recommend_returns_x86_native_cpu_on_kernel_6_16_plus():
     kernels at the cutoff or beyond, every recognized microarch should
     map to that symbol regardless of vendor/family."""
     from autokernel.cpu import recommend
+
     cpu = _ci("GenuineIntel", 6, 170)  # Meteor Lake
     assert recommend(cpu, "6.16.0") == (Microarch.METEORLAKE, "CONFIG_X86_NATIVE_CPU")
     assert recommend(cpu, "6.19.0") == (Microarch.METEORLAKE, "CONFIG_X86_NATIVE_CPU")
@@ -232,7 +233,13 @@ def test_recommend_keeps_legacy_symbol_below_cutoff():
 
 def test_kconfig_symbol_for_target_picks_native_on_modern():
     from autokernel.cpu import kconfig_symbol_for_target
-    assert kconfig_symbol_for_target(Microarch.METEORLAKE, "6.16.0") == "CONFIG_X86_NATIVE_CPU"
-    assert kconfig_symbol_for_target(Microarch.ZEN3, "6.20.0") == "CONFIG_X86_NATIVE_CPU"
+
+    assert (
+        kconfig_symbol_for_target(Microarch.METEORLAKE, "6.16.0")
+        == "CONFIG_X86_NATIVE_CPU"
+    )
+    assert (
+        kconfig_symbol_for_target(Microarch.ZEN3, "6.20.0") == "CONFIG_X86_NATIVE_CPU"
+    )
     assert kconfig_symbol_for_target(Microarch.SKYLAKE, "6.15.0") == "CONFIG_MSKYLAKE"
     assert kconfig_symbol_for_target(Microarch.METEORLAKE, None) == "CONFIG_MMETEORLAKE"

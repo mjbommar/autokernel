@@ -18,13 +18,9 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 
-import pytest
 
 from autokernel.agent_dims import (
-    TOGGLE_ALLOWLIST,
-    TUNABLE_ALLOWLIST,
     _eligible_toggles,
     _eligible_tunables,
     _ChoiceBatch,
@@ -50,18 +46,18 @@ from autokernel.models import (
     CpuInfo,
     KernelInfo,
     ProposalSource,
+    RiskLevel,
     Snapshot,
 )
 from autokernel.optimize_context import (
-    Aggression,
-    ModuleStrategy,
     OptimizationContext,
-    ThreatModel,
 )
 from autokernel.workload import WorkloadProfile
 
 
-def _ctx(workload: WorkloadProfile = WorkloadProfile.DESKTOP, **kwargs) -> OptimizationContext:
+def _ctx(
+    workload: WorkloadProfile = WorkloadProfile.DESKTOP, **kwargs
+) -> OptimizationContext:
     return OptimizationContext(workload=workload, **kwargs)
 
 
@@ -82,7 +78,9 @@ def _surface_with_choices_and_toggles() -> KconfigSurface:
         prompt="Preemption Model",
         help=None,
         options=[
-            ChoiceOption("PREEMPT_NONE", "No Forced Preemption", None, is_current=False),
+            ChoiceOption(
+                "PREEMPT_NONE", "No Forced Preemption", None, is_current=False
+            ),
             ChoiceOption("PREEMPT_VOLUNTARY", "Voluntary", None, is_current=True),
             ChoiceOption("PREEMPT", "Preemptible", None, is_current=False),
         ],
@@ -145,11 +143,25 @@ def test_propose_choices_emits_proposal_when_selection_changes(monkeypatch):
         class _Agent:
             def run_sync(self, prompt: str):
                 class _R:
-                    output = _ChoiceBatch(decisions=[
-                        _ChoiceDecision(choice="Preemption Model", selected_option="PREEMPT", reason="desktop wants low-latency", confidence=0.9),
-                        _ChoiceDecision(choice="Timer frequency", selected_option="HZ_1000", reason="desktop default", confidence=0.85),
-                    ])
+                    output = _ChoiceBatch(
+                        decisions=[
+                            _ChoiceDecision(
+                                choice="Preemption Model",
+                                selected_option="PREEMPT",
+                                reason="desktop wants low-latency",
+                                confidence=0.9,
+                            ),
+                            _ChoiceDecision(
+                                choice="Timer frequency",
+                                selected_option="HZ_1000",
+                                reason="desktop default",
+                                confidence=0.85,
+                            ),
+                        ]
+                    )
+
                 return _R()
+
         return _Agent()
 
     monkeypatch.setattr("autokernel.agent_dims._build_choice_agent", _fake_agent)
@@ -172,11 +184,25 @@ def test_propose_choices_skips_unchanged_selections(monkeypatch):
         class _Agent:
             def run_sync(self, prompt: str):
                 class _R:
-                    output = _ChoiceBatch(decisions=[
-                        _ChoiceDecision(choice="Preemption Model", selected_option="PREEMPT_VOLUNTARY", reason="ok as-is", confidence=0.8),
-                        _ChoiceDecision(choice="Timer frequency", selected_option="HZ_250", reason="ok", confidence=0.75),
-                    ])
+                    output = _ChoiceBatch(
+                        decisions=[
+                            _ChoiceDecision(
+                                choice="Preemption Model",
+                                selected_option="PREEMPT_VOLUNTARY",
+                                reason="ok as-is",
+                                confidence=0.8,
+                            ),
+                            _ChoiceDecision(
+                                choice="Timer frequency",
+                                selected_option="HZ_250",
+                                reason="ok",
+                                confidence=0.75,
+                            ),
+                        ]
+                    )
+
                 return _R()
+
         return _Agent()
 
     monkeypatch.setattr("autokernel.agent_dims._build_choice_agent", _fake_agent)
@@ -192,10 +218,19 @@ def test_propose_choices_skips_hallucinated_options(monkeypatch):
         class _Agent:
             def run_sync(self, prompt: str):
                 class _R:
-                    output = _ChoiceBatch(decisions=[
-                        _ChoiceDecision(choice="Preemption Model", selected_option="PREEMPT_HALLUCINATED", reason="bogus", confidence=0.5),
-                    ])
+                    output = _ChoiceBatch(
+                        decisions=[
+                            _ChoiceDecision(
+                                choice="Preemption Model",
+                                selected_option="PREEMPT_HALLUCINATED",
+                                reason="bogus",
+                                confidence=0.5,
+                            ),
+                        ]
+                    )
+
                 return _R()
+
         return _Agent()
 
     monkeypatch.setattr("autokernel.agent_dims._build_choice_agent", _fake_agent)
@@ -221,13 +256,29 @@ def test_propose_toggles_emits_only_when_value_flips(monkeypatch):
         class _Agent:
             def run_sync(self, prompt: str):
                 class _R:
-                    output = _ToggleBatch(decisions=[
-                        # THP keep at y — no change
-                        _ToggleDecision(symbol="TRANSPARENT_HUGEPAGE", value="y", reason="madvise default", risk="low", confidence=0.8),
-                        # BPF_JIT_ALWAYS_ON: flip n → y
-                        _ToggleDecision(symbol="BPF_JIT_ALWAYS_ON", value="y", reason="hardening", risk="low", confidence=0.95),
-                    ])
+                    output = _ToggleBatch(
+                        decisions=[
+                            # THP keep at y — no change
+                            _ToggleDecision(
+                                symbol="TRANSPARENT_HUGEPAGE",
+                                value="y",
+                                reason="madvise default",
+                                risk=RiskLevel.LOW,
+                                confidence=0.8,
+                            ),
+                            # BPF_JIT_ALWAYS_ON: flip n → y
+                            _ToggleDecision(
+                                symbol="BPF_JIT_ALWAYS_ON",
+                                value="y",
+                                reason="hardening",
+                                risk=RiskLevel.LOW,
+                                confidence=0.95,
+                            ),
+                        ]
+                    )
+
                 return _R()
+
         return _Agent()
 
     monkeypatch.setattr("autokernel.agent_dims._build_toggle_agent", _fake_agent)
@@ -278,11 +329,20 @@ def test_propose_tunables_emits_when_value_changes(monkeypatch):
         class _Agent:
             def run_sync(self, prompt: str):
                 class _R:
-                    output = _TunableBatch(decisions=[
-                        # NR_CPUS 8192 → 32 (8-core desktop, plenty of headroom)
-                        _TunableDecision(symbol="NR_CPUS", value="32", reason="8 cores; 32 = 4× headroom", confidence=0.9),
-                    ])
+                    output = _TunableBatch(
+                        decisions=[
+                            # NR_CPUS 8192 → 32 (8-core desktop, plenty of headroom)
+                            _TunableDecision(
+                                symbol="NR_CPUS",
+                                value="32",
+                                reason="8 cores; 32 = 4× headroom",
+                                confidence=0.9,
+                            ),
+                        ]
+                    )
+
                 return _R()
+
         return _Agent()
 
     monkeypatch.setattr("autokernel.agent_dims._build_tunable_agent", _fake_agent)
@@ -301,10 +361,19 @@ def test_propose_tunables_skips_unchanged(monkeypatch):
         class _Agent:
             def run_sync(self, prompt: str):
                 class _R:
-                    output = _TunableBatch(decisions=[
-                        _TunableDecision(symbol="NR_CPUS", value="8192", reason="leave default", confidence=0.6),
-                    ])
+                    output = _TunableBatch(
+                        decisions=[
+                            _TunableDecision(
+                                symbol="NR_CPUS",
+                                value="8192",
+                                reason="leave default",
+                                confidence=0.6,
+                            ),
+                        ]
+                    )
+
                 return _R()
+
         return _Agent()
 
     monkeypatch.setattr("autokernel.agent_dims._build_tunable_agent", _fake_agent)
@@ -317,8 +386,18 @@ def test_propose_tunables_eligibility_filter():
         arch="x86_64",
         source_dir=Path("/tmp"),
         tunables=[
-            NumericTunable("NR_CPUS", SymbolType.INT, "Max CPUs", None, "8192", [("2", "8192")], "x"),
-            NumericTunable("OBSCURE_INT", SymbolType.INT, "Obscure", None, "0", [], "x"),
+            NumericTunable(
+                "NR_CPUS",
+                SymbolType.INT,
+                "Max CPUs",
+                None,
+                "8192",
+                [("2", "8192")],
+                "x",
+            ),
+            NumericTunable(
+                "OBSCURE_INT", SymbolType.INT, "Obscure", None, "0", [], "x"
+            ),
         ],
     )
     eligible = _eligible_tunables(surface)
@@ -340,11 +419,21 @@ def test_propose_choices_uses_cache_dir(tmp_path, monkeypatch):
         class _Agent:
             def run_sync(self, prompt):
                 call_count["n"] += 1
+
                 class _R:
-                    output = _ChoiceBatch(decisions=[
-                        _ChoiceDecision(choice="Preemption Model", selected_option="PREEMPT", reason="x", confidence=0.9),
-                    ])
+                    output = _ChoiceBatch(
+                        decisions=[
+                            _ChoiceDecision(
+                                choice="Preemption Model",
+                                selected_option="PREEMPT",
+                                reason="x",
+                                confidence=0.9,
+                            ),
+                        ]
+                    )
+
                 return _R()
+
         return _Agent()
 
     monkeypatch.setattr("autokernel.agent_dims._build_choice_agent", _fake_agent)
@@ -364,6 +453,7 @@ def test_propose_choices_uses_cache_dir(tmp_path, monkeypatch):
 def test_evidence_block_includes_history_text(monkeypatch):
     """When history_text is provided, it must appear in the prompt."""
     from autokernel.agent_dims import _evidence_block
+
     snap = _bare_snap()
     text = _evidence_block(snap, _ctx(), history_text="# i=1: bzImage=18MB, boot PASS")
     assert "i=1: bzImage" in text
@@ -374,13 +464,18 @@ def test_cache_key_changes_with_history():
     """Different history → different cache key, so the LLM is re-queried
     each iteration even though the static evidence is the same."""
     from autokernel.agent_dims import _batch_cache_key
+
     base = _batch_cache_key("anthropic:claude-sonnet-4-6", None, "sym1|sym2")
     with_h1 = _batch_cache_key(
-        "anthropic:claude-sonnet-4-6", None, "sym1|sym2",
+        "anthropic:claude-sonnet-4-6",
+        None,
+        "sym1|sym2",
         history_text="i=1 baseline",
     )
     with_h2 = _batch_cache_key(
-        "anthropic:claude-sonnet-4-6", None, "sym1|sym2",
+        "anthropic:claude-sonnet-4-6",
+        None,
+        "sym1|sym2",
         history_text="i=2 second pass",
     )
     assert base != with_h1
@@ -391,6 +486,7 @@ def test_cache_key_stable_when_history_omitted():
     """Without history (the v0.13 trim path), cache keys are stable so
     existing batches remain valid."""
     from autokernel.agent_dims import _batch_cache_key
+
     a = _batch_cache_key("m", None, "sig")
     b = _batch_cache_key("m", None, "sig", history_text=None)
     assert a == b
@@ -406,14 +502,19 @@ def test_propose_choices_history_flows_into_prompt(monkeypatch):
         class _Agent:
             def run_sync(self, prompt: str):
                 captured_prompts.append(prompt)
+
                 class _R:
                     output = _ChoiceBatch(decisions=[])
+
                 return _R()
+
         return _Agent()
 
     monkeypatch.setattr("autokernel.agent_dims._build_choice_agent", _fake_agent)
     propose_choices(
-        snap, surface, _ctx(),
+        snap,
+        surface,
+        _ctx(),
         history_text="# i=1: 12 proposals, 8 landed; bzImage=18.2MB; PASS",
     )
     assert len(captured_prompts) > 0

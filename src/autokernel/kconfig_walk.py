@@ -24,7 +24,7 @@ import shutil
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator, cast
 
 import kconfiglib
 
@@ -138,7 +138,7 @@ class KconfigSurface:
 # affect ``make *config`` UX, not the CONFIG values we read).
 _UNSUPPORTED_KCONFIG_KEYWORDS: tuple[str, ...] = (
     "transitional",  # 6.19+: deprecated CONFIG name marker
-    "modules",       # 6.19+: marks the MODULES master symbol
+    "modules",  # 6.19+: marks the MODULES master symbol
 )
 _UNSUPPORTED_KCONFIG_LINE = re.compile(
     r"^\s*(?:" + "|".join(_UNSUPPORTED_KCONFIG_KEYWORDS) + r")\s*$",
@@ -418,15 +418,17 @@ def _extract_choice(choice: kconfiglib.Choice) -> ChoiceGroup:
 
 
 def _extract_toggle(sym: kconfiglib.Symbol) -> BoolToggle:
+    ksym = cast(Any, sym)
     location = _location(sym.nodes[0]) if sym.nodes else "<unknown>"
     direct_dep_str = ""
-    if sym.direct_dep != kconfiglib.Symbol:
+    direct_dep = getattr(ksym, "direct_dep", None)
+    if direct_dep is not None and direct_dep != kconfiglib.Symbol:
         try:
-            direct_dep_str = kconfiglib.expr_str(sym.direct_dep)
+            direct_dep_str = kconfiglib.expr_str(direct_dep)
         except Exception:
             direct_dep_str = ""
     return BoolToggle(
-        name=sym.name,
+        name=ksym.name,
         prompt=_prompt_text(sym),
         help=_help_text(sym),
         current_value=sym.str_value or "n",
@@ -436,6 +438,7 @@ def _extract_toggle(sym: kconfiglib.Symbol) -> BoolToggle:
 
 
 def _extract_tunable(sym: kconfiglib.Symbol, sym_type: SymbolType) -> NumericTunable:
+    ksym = cast(Any, sym)
     location = _location(sym.nodes[0]) if sym.nodes else "<unknown>"
     ranges: list[tuple[str, str]] = []
     for lo, hi, _cond in sym.ranges or []:
@@ -444,7 +447,7 @@ def _extract_tunable(sym: kconfiglib.Symbol, sym_type: SymbolType) -> NumericTun
         except AttributeError:
             ranges.append((str(lo), str(hi)))
     return NumericTunable(
-        name=sym.name,
+        name=ksym.name,
         type=sym_type,
         prompt=_prompt_text(sym),
         help=_help_text(sym),

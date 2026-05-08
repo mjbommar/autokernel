@@ -4,14 +4,12 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
-from typing import Any
 
 import pytest
 
 from autokernel import fetch as fetch_mod
 from autokernel.distro import DistroInfo, Family, parse_os_release, spec_for
 from autokernel.fetch import (
-    FetchPlan,
     Method,
     fetch_source,
     normalize_kernel_version,
@@ -165,7 +163,9 @@ def test_fetch_source_dry_run_does_not_invoke_subprocess(monkeypatch, tmp_path: 
     monkeypatch.setattr(
         fetch_mod.subprocess,
         "run",
-        lambda *a, **k: called.append(a) or pytest.fail("subprocess.run called in dry_run"),
+        lambda *a, **k: (
+            called.append(a) or pytest.fail("subprocess.run called in dry_run")
+        ),
     )
     info = _info(Family.DEBIAN)
     result = fetch_source(
@@ -208,9 +208,11 @@ def test_fetch_source_executes_commands_when_not_cached(monkeypatch, tmp_path: P
 
     def _fake_run(argv, **kwargs):
         calls.append(list(argv))
+
         # Don't actually run; pretend success.
         class _R:
             returncode = 0
+
         return _R()
 
     monkeypatch.setattr(fetch_mod.subprocess, "run", _fake_run)

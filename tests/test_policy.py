@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from autokernel.agent import deterministic_proposals
 from autokernel.models import (
     ProposalSource,
     RemovalProposal,
@@ -18,7 +17,11 @@ from autokernel.resolve import _running_config_symbols, resolve
 
 
 def _candidates(snap: Snapshot) -> list[tuple[str, str]]:
-    return [(s, v) for s, v in _running_config_symbols(snap.running_config_path).items() if v in ("y", "m")]
+    return [
+        (s, v)
+        for s, v in _running_config_symbols(snap.running_config_path).items()
+        if v in ("y", "m")
+    ]
 
 
 # ── load-bearing detection ──────────────────────────────────────────────────
@@ -79,7 +82,14 @@ def test_hard_blocklist_always_present(intel_laptop: Snapshot):
 # ── apply_policy decision matrix ─────────────────────────────────────────────
 
 
-def _proposal(config: str, current: str, *, risk: RiskLevel, conf: float, source: ProposalSource = ProposalSource.LLM) -> RemovalProposal:
+def _proposal(
+    config: str,
+    current: str,
+    *,
+    risk: RiskLevel,
+    conf: float,
+    source: ProposalSource = ProposalSource.LLM,
+) -> RemovalProposal:
     return RemovalProposal(
         config=config,
         current_value=current,
@@ -96,11 +106,21 @@ def test_blocked_proposals_never_auto_apply_at_any_level(intel_laptop: Snapshot)
     """A proposal targeting a load-bearing symbol is blocked at every level."""
     res = resolve(intel_laptop)
     lb = compute_load_bearing(intel_laptop, res)
-    p = _proposal("CONFIG_BTRFS_FS", "y", risk=RiskLevel.LOW, conf=0.99, source=ProposalSource.DETERMINISTIC)
+    p = _proposal(
+        "CONFIG_BTRFS_FS",
+        "y",
+        risk=RiskLevel.LOW,
+        conf=0.99,
+        source=ProposalSource.DETERMINISTIC,
+    )
     for level in AutonomyLevel:
         result = apply_policy([p], level, lb)
-        assert not result.auto_applied, f"{level.value}: blocked proposal leaked into auto_applied"
-        assert not result.needs_review, f"{level.value}: blocked proposal leaked into needs_review"
+        assert not result.auto_applied, (
+            f"{level.value}: blocked proposal leaked into auto_applied"
+        )
+        assert not result.needs_review, (
+            f"{level.value}: blocked proposal leaked into needs_review"
+        )
         assert result.blocked, f"{level.value}: should be in blocked"
         assert result.blocked[0][0].config == "CONFIG_BTRFS_FS"
 
@@ -159,7 +179,10 @@ def test_advise_auto_applies_high_confidence_deterministic(intel_laptop: Snapsho
     res = resolve(intel_laptop)
     lb = compute_load_bearing(intel_laptop, res)
     p = _proposal(
-        "CONFIG_X86_AMD_PSTATE", "y", risk=RiskLevel.LOW, conf=0.99,
+        "CONFIG_X86_AMD_PSTATE",
+        "y",
+        risk=RiskLevel.LOW,
+        conf=0.99,
         source=ProposalSource.DETERMINISTIC,
     )
     r = apply_policy([p], AutonomyLevel.ADVISE, lb)
@@ -173,7 +196,10 @@ def test_advise_does_not_auto_apply_llm_high_confidence(intel_laptop: Snapshot):
     res = resolve(intel_laptop)
     lb = compute_load_bearing(intel_laptop, res)
     p = _proposal(
-        "CONFIG_104_QUAD_8", "m", risk=RiskLevel.LOW, conf=0.99,
+        "CONFIG_104_QUAD_8",
+        "m",
+        risk=RiskLevel.LOW,
+        conf=0.99,
         source=ProposalSource.LLM,
     )
     r = apply_policy([p], AutonomyLevel.ADVISE, lb)
@@ -187,7 +213,10 @@ def test_advise_keeps_low_confidence_deterministic_in_review(intel_laptop: Snaps
     res = resolve(intel_laptop)
     lb = compute_load_bearing(intel_laptop, res)
     p = _proposal(
-        "CONFIG_104_QUAD_8", "m", risk=RiskLevel.LOW, conf=0.8,
+        "CONFIG_104_QUAD_8",
+        "m",
+        risk=RiskLevel.LOW,
+        conf=0.8,
         source=ProposalSource.DETERMINISTIC,
     )
     r = apply_policy([p], AutonomyLevel.ADVISE, lb)

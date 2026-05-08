@@ -149,7 +149,9 @@ class InstallDepsPlan:
 # ── plan builder ───────────────────────────────────────────────────────────
 
 
-def _packages_for_target(spec: DistroSpec, target: Target, *, recommended: bool) -> list[str]:
+def _packages_for_target(
+    spec: DistroSpec, target: Target, *, recommended: bool
+) -> list[str]:
     """Compose the package list for a given target, in stable order."""
     pkgs: list[str] = []
     seen: set[str] = set()
@@ -174,7 +176,9 @@ def _packages_for_target(spec: DistroSpec, target: Target, *, recommended: bool)
     return pkgs
 
 
-def _query_installed(family: Family, packages: list[str]) -> tuple[list[str], list[str]]:
+def _query_installed(
+    family: Family, packages: list[str]
+) -> tuple[list[str], list[str]]:
     """Return ``(missing, installed)`` partition of ``packages``.
 
     Conservative on probe failure: when the query tool is unavailable
@@ -343,13 +347,20 @@ def execute(
     if plan.missing:
         argv = plan.full_argv
         rc, dur, log_path = _run_step(argv, "install_packages", log_dir)
-        runs.append(StepRun(
-            name="install_packages", argv=argv,
-            exit_code=rc, duration_s=dur, log_path=log_path,
-        ))
+        runs.append(
+            StepRun(
+                name="install_packages",
+                argv=argv,
+                exit_code=rc,
+                duration_s=dur,
+                log_path=log_path,
+            )
+        )
 
-    if install_virtme and plan.optional_python_pkgs and (
-        not plan.missing or any(r.exit_code == 0 for r in runs)
+    if (
+        install_virtme
+        and plan.optional_python_pkgs
+        and (not plan.missing or any(r.exit_code == 0 for r in runs))
     ):
         for pkg in plan.optional_python_pkgs:
             # `uv tool install` matches autokernel's stack: uv is already
@@ -357,10 +368,15 @@ def execute(
             # under ~/.local/share/uv/tools/ with a shim on PATH.
             argv = ["uv", "tool", "install", pkg]
             rc, dur, log_path = _run_step(argv, f"uv_tool_{pkg}", log_dir)
-            runs.append(StepRun(
-                name=f"uv_tool_install_{pkg}", argv=argv,
-                exit_code=rc, duration_s=dur, log_path=log_path,
-            ))
+            runs.append(
+                StepRun(
+                    name=f"uv_tool_install_{pkg}",
+                    argv=argv,
+                    exit_code=rc,
+                    duration_s=dur,
+                    log_path=log_path,
+                )
+            )
 
     return InstallDepsResult(plan=plan, runs=runs, log_dir=log_dir)
 
@@ -378,7 +394,10 @@ def _run_step(
         if log_path is not None:
             with log_path.open("wb") as f:
                 proc = subprocess.run(
-                    argv, stdout=f, stderr=subprocess.STDOUT, check=False,
+                    argv,
+                    stdout=f,
+                    stderr=subprocess.STDOUT,
+                    check=False,
                 )
         else:
             # Inherit stdio so the user sees the sudo password prompt.

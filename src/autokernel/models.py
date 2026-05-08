@@ -149,7 +149,9 @@ class Snapshot(_Frozen):
     pci: list[PciDevice] = Field(default_factory=list)
     usb: list[UsbDevice] = Field(default_factory=list)
     modaliases: list[Modalias] = Field(default_factory=list)
-    bound_drivers: dict[str, str] = Field(default_factory=dict)  # sysfs_path -> driver name
+    bound_drivers: dict[str, str] = Field(
+        default_factory=dict
+    )  # sysfs_path -> driver name
 
     loaded_modules: list[LoadedModule] = Field(default_factory=list)
     mounts: list[Mount] = Field(default_factory=list)
@@ -183,8 +185,8 @@ class RiskLevel(str, Enum):
 class ProposalSource(str, Enum):
     DETERMINISTIC = "deterministic"  # hardcoded rule
     MICROARCH = "microarch"  # CPU microarchitecture tuning (a deterministic
-                              # rule, but distinguished so renderers can
-                              # surface it under a "tuning" heading)
+    # rule, but distinguished so renderers can
+    # surface it under a "tuning" heading)
     LLM = "llm"  # pydantic-ai agent (the existing tristate-trim path)
     USER = "user"  # explicit user override
     # ── v0.13: multi-dimensional optimization ─────────────────────────
@@ -193,9 +195,9 @@ class ProposalSource(str, Enum):
     # the same RemovalProposal struct but ``proposed_value`` is the
     # selected choice option (CHOICE), 'y'/'n' (TOGGLE), or numeric/
     # string literal (TUNABLE).
-    CHOICE = "choice"     # a Kconfig choice-group selection
-    TOGGLE = "toggle"     # a bool feature toggle (perf/security tradeoff)
-    TUNABLE = "tunable"   # int/string Kconfig value
+    CHOICE = "choice"  # a Kconfig choice-group selection
+    TOGGLE = "toggle"  # a bool feature toggle (perf/security tradeoff)
+    TUNABLE = "tunable"  # int/string Kconfig value
 
 
 class ReviewDecision(str, Enum):

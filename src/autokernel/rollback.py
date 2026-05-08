@@ -26,12 +26,11 @@ successful execute so we don't try to roll the same install back twice.
 from __future__ import annotations
 
 import json
-import subprocess
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from autokernel.bootloader import Bootloader, BootloaderKind
+from autokernel.bootloader import Bootloader
 from autokernel.distro import DistroInfo, Family
 from autokernel.install import InstallStep, StepRun, _run_step
 
@@ -167,7 +166,9 @@ def build_plan(
             rejected_reason=f"install record is unreadable: {e}",
         )
 
-    pkg_names = [_package_name_from_path(Path(p)) for p in record.get("package_paths", [])]
+    pkg_names = [
+        _package_name_from_path(Path(p)) for p in record.get("package_paths", [])
+    ]
 
     if not bootloader.is_supported:
         return RollbackPlan(

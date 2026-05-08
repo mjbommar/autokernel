@@ -4,10 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 
 from autokernel.modinfo import (
-    ModuleInfo,
     _parse_modinfo_filename_line,
     parse_builtin_modinfo,
 )

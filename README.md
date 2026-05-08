@@ -70,7 +70,8 @@ uv run autokernel preflight
 ```bash
 uv run pre-commit run --all-files
 scripts/validate-docker.sh
-scripts/validate-qemu.sh  # QEMU smoke; set AUTOKERNEL_QEMU_KERNEL if /boot has no vmlinuz
+scripts/validate-qemu.sh /path/to/linux-source  # uses arch/x86/boot/bzImage
+scripts/qemu-busybox-shell.sh /path/to/linux-source  # interactive BusyBox shell
 ```
 
 The Docker validation image runs the same static checks and pytest suite

@@ -75,8 +75,7 @@ _MODULAR = ModuleStrategySpec(
 
 
 module_strategies: dict[str, ModuleStrategySpec] = {
-    spec.strategy: spec
-    for spec in (_DISTRO, _MONOLITHIC, _MODULAR)
+    spec.strategy: spec for spec in (_DISTRO, _MONOLITHIC, _MODULAR)
 }
 
 

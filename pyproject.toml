@@ -1,21 +1,50 @@
 [project]
 name = "autokernel"
-version = "0.7.0"
-description = "LLM-assisted minimal Linux kernel builder. Multi-distro: Debian/Ubuntu, Fedora/RHEL, Arch, openSUSE, Gentoo, Alpine."
+version = "0.15.0"
+description = "LLM-assisted Linux kernel config optimizer, validator, and distro-native package builder."
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<4"
 license = "MIT"
 authors = [
     { name = "Michael Bommarito", email = "michael.bommarito@gmail.com" },
 ]
-keywords = ["linux", "kernel", "build", "config", "llm", "ai", "claude", "openai", "gentoo", "debian", "fedora", "arch"]
+maintainers = [
+    { name = "Michael Bommarito", email = "michael.bommarito@gmail.com" },
+]
+keywords = [
+    "linux",
+    "kernel",
+    "kconfig",
+    "kernel-build",
+    "kernel-config",
+    "llm",
+    "qemu",
+    "sysadmin",
+    "debian",
+    "fedora",
+    "arch",
+    "opensuse",
+    "gentoo",
+    "alpine",
+]
 classifiers = [
     "Development Status :: 3 - Alpha",
+    "Environment :: Console",
     "Intended Audience :: System Administrators",
     "Intended Audience :: Developers",
+    "Natural Language :: English",
+    "Operating System :: POSIX",
     "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Security",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: System :: Installation/Setup",
     "Topic :: System :: Operating System Kernels :: Linux",
+    "Topic :: System :: Systems Administration",
+    "Typing :: Typed",
 ]
 dependencies = [
     "kconfiglib>=14.1.0",
@@ -28,6 +57,7 @@ dependencies = [
 ]
 
 [project.urls]
+Documentation = "https://github.com/mjbommar/autokernel/tree/master/docs"
 Homepage = "https://github.com/mjbommar/autokernel"
 Issues = "https://github.com/mjbommar/autokernel/issues"
 Repository = "https://github.com/mjbommar/autokernel"
@@ -41,6 +71,34 @@ build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
+    "pre-commit>=4.6.0",
     "pytest>=9.0.3",
     "pytest-asyncio>=1.3.0",
+    "ruff>=0.15.12",
+    "ty>=0.0.34",
 ]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv"]
+skips = [
+    # autokernel is intentionally subprocess-heavy: build, package-manager,
+    # QEMU, and distro probing commands are all executed with shell=False.
+    "B404",
+    "B603",
+    "B607",
+    # False positives: Severity.PASS and /tmp disk-space probing.
+    "B105",
+    "B108",
+]
+
+[tool.vulture]
+paths = ["src"]
+min_confidence = 80
+exclude = [".venv", "build", "dist"]

@@ -16,10 +16,7 @@ from pathlib import Path
 import pytest
 
 from autokernel.kconfig_walk import (
-    BoolToggle,
-    ChoiceGroup,
     KconfigSurface,
-    NumericTunable,
     SymbolType,
     walk,
 )
@@ -36,11 +33,11 @@ def _make_synthetic_source(tmp_path: Path) -> Path:
     arch_dir.mkdir(parents=True)
     (arch_dir / "Kconfig").write_text(
         # An x86-shaped Kconfig with a few real-feeling symbols.
-        'config X86\n'
-        '\tdef_bool y\n'
-        '\nconfig 64BIT\n'
+        "config X86\n"
+        "\tdef_bool y\n"
+        "\nconfig 64BIT\n"
         '\tbool "64-bit kernel"\n'
-        '\tdefault y\n'
+        "\tdefault y\n"
     )
 
     # Top-level Kconfig that sources arch + a few feature pages.
@@ -57,55 +54,55 @@ def _make_synthetic_source(tmp_path: Path) -> Path:
     pre_dir = src / "kernel"
     pre_dir.mkdir()
     (pre_dir / "Kconfig.preempt").write_text(
-        'choice\n'
+        "choice\n"
         '\tprompt "Preemption Model"\n'
-        '\tdefault PREEMPT_VOLUNTARY\n'
-        '\nconfig PREEMPT_NONE\n'
+        "\tdefault PREEMPT_VOLUNTARY\n"
+        "\nconfig PREEMPT_NONE\n"
         '\tbool "No Forced Preemption (Server)"\n'
-        '\thelp\n'
-        '\t  Best throughput, server-style.\n'
-        '\nconfig PREEMPT_VOLUNTARY\n'
+        "\thelp\n"
+        "\t  Best throughput, server-style.\n"
+        "\nconfig PREEMPT_VOLUNTARY\n"
         '\tbool "Voluntary Kernel Preemption (Desktop)"\n'
-        '\thelp\n'
-        '\t  Generic distro default.\n'
-        '\nconfig PREEMPT\n'
+        "\thelp\n"
+        "\t  Generic distro default.\n"
+        "\nconfig PREEMPT\n"
         '\tbool "Preemptible Kernel (Low-Latency Desktop)"\n'
-        '\nconfig PREEMPT_RT\n'
+        "\nconfig PREEMPT_RT\n"
         '\tbool "Fully Preemptible Kernel (Real-Time)"\n'
-        '\nendchoice\n'
+        "\nendchoice\n"
     )
 
     # HZ choice (4 options) — exposes the int tunable form too.
     (pre_dir / "Kconfig.hz").write_text(
-        'choice\n'
+        "choice\n"
         '\tprompt "Timer frequency"\n'
-        '\tdefault HZ_250\n'
-        '\nconfig HZ_100\n'
+        "\tdefault HZ_250\n"
+        "\nconfig HZ_100\n"
         '\tbool "100 HZ"\n'
-        '\nconfig HZ_250\n'
+        "\nconfig HZ_250\n"
         '\tbool "250 HZ"\n'
-        '\nconfig HZ_300\n'
+        "\nconfig HZ_300\n"
         '\tbool "300 HZ"\n'
-        '\nconfig HZ_1000\n'
+        "\nconfig HZ_1000\n"
         '\tbool "1000 HZ"\n'
-        '\nendchoice\n'
-        '\nconfig HZ\n'
-        '\tint\n'
-        '\tdefault 100 if HZ_100\n'
-        '\tdefault 250 if HZ_250\n'
-        '\tdefault 300 if HZ_300\n'
-        '\tdefault 1000 if HZ_1000\n'
+        "\nendchoice\n"
+        "\nconfig HZ\n"
+        "\tint\n"
+        "\tdefault 100 if HZ_100\n"
+        "\tdefault 250 if HZ_250\n"
+        "\tdefault 300 if HZ_300\n"
+        "\tdefault 1000 if HZ_1000\n"
     )
 
     # MODULES — exercises the unsupported `modules` keyword pre-patching.
     mod_dir = src / "kernel" / "module"
     mod_dir.mkdir()
     (mod_dir / "Kconfig").write_text(
-        'menuconfig MODULES\n'
+        "menuconfig MODULES\n"
         '\tbool "Enable loadable module support"\n'
-        '\tmodules\n'
-        '\thelp\n'
-        '\t  Synthetic.\n'
+        "\tmodules\n"
+        "\thelp\n"
+        "\t  Synthetic.\n"
     )
 
     # mm/Kconfig — bool toggles + int tunables + a tristate (must skip).
@@ -113,34 +110,34 @@ def _make_synthetic_source(tmp_path: Path) -> Path:
     mm_dir.mkdir()
     (mm_dir / "Kconfig").write_text(
         # Bool toggle (user-visible — should appear).
-        'config TRANSPARENT_HUGEPAGE\n'
+        "config TRANSPARENT_HUGEPAGE\n"
         '\tbool "Transparent Hugepage Support"\n'
-        '\tdefault y\n'
-        '\thelp\n'
-        '\t  Coalesce 4K pages into 2M ones.\n'
+        "\tdefault y\n"
+        "\thelp\n"
+        "\t  Coalesce 4K pages into 2M ones.\n"
         # Bool toggle without prompt (must NOT appear).
-        '\nconfig SECRET_INTERNAL\n'
-        '\tbool\n'
-        '\tdefault y\n'
+        "\nconfig SECRET_INTERNAL\n"
+        "\tbool\n"
+        "\tdefault y\n"
         # Int tunable (should appear in tunables, not toggles).
-        '\nconfig NR_CPUS\n'
+        "\nconfig NR_CPUS\n"
         '\tint "Maximum number of CPUs"\n'
-        '\trange 2 8192\n'
-        '\tdefault 64\n'
-        '\thelp\n'
-        '\t  Cap; >64 incurs off-stack cpumask.\n'
+        "\trange 2 8192\n"
+        "\tdefault 64\n"
+        "\thelp\n"
+        "\t  Cap; >64 incurs off-stack cpumask.\n"
         # String tunable.
-        '\nconfig LOCALVERSION\n'
+        "\nconfig LOCALVERSION\n"
         '\tstring "Local version - append to kernel release"\n'
         '\tdefault ""\n'
         # Tristate — must NOT appear in toggles or tunables (handled by trim).
-        '\nconfig FOOBAR\n'
+        "\nconfig FOOBAR\n"
         '\ttristate "FooBar driver"\n'
-        '\tdefault m\n'
+        "\tdefault m\n"
         # Symbol marked transitional — must be silently stripped.
-        '\nconfig OLD_NAME\n'
-        '\tbool\n'
-        '\ttransitional\n'
+        "\nconfig OLD_NAME\n"
+        "\tbool\n"
+        "\ttransitional\n"
     )
 
     return src
@@ -163,8 +160,11 @@ def test_walk_resolves_x86_64_to_arch_x86(tmp_path):
     src = _make_synthetic_source(tmp_path)
     surface = walk(src, arch="x86_64")
     # If the arch resolution were broken, walk() would have raised.
-    assert any(c.name == "PREEMPT_VOLUNTARY" or c.name == "PREEMPT_NONE"
-               for ch in surface.choices for c in ch.options)
+    assert any(
+        c.name == "PREEMPT_VOLUNTARY" or c.name == "PREEMPT_NONE"
+        for ch in surface.choices
+        for c in ch.options
+    )
 
 
 def test_walk_strips_transitional_keyword(tmp_path):
@@ -205,9 +205,7 @@ def test_walk_extracts_preempt_choice(tmp_path):
 def test_walk_marks_current_choice_option(tmp_path):
     src = _make_synthetic_source(tmp_path)
     surface = walk(src, arch="x86_64")
-    preempt = next(
-        c for c in surface.choices if c.prompt and "Preemption" in c.prompt
-    )
+    preempt = next(c for c in surface.choices if c.prompt and "Preemption" in c.prompt)
     current = [o.name for o in preempt.options if o.is_current]
     assert current == ["PREEMPT_VOLUNTARY"]
 
@@ -296,10 +294,7 @@ def test_walk_maps_aarch64_to_arm64_srcarch(tmp_path):
     (src / "arch" / "x86" / "Kconfig").rename(src / "arch" / "x86" / "_unused")
     arm_dir = src / "arch" / "arm64"
     arm_dir.mkdir()
-    (arm_dir / "Kconfig").write_text(
-        'config ARM64\n'
-        '\tdef_bool y\n'
-    )
+    (arm_dir / "Kconfig").write_text("config ARM64\n\tdef_bool y\n")
     surface = walk(src, arch="aarch64")
     assert surface.arch == "aarch64"
 
@@ -313,14 +308,14 @@ def test_walk_with_config_path_reflects_actual_assignments(tmp_path):
     src = _make_synthetic_source(tmp_path)
     cfg = tmp_path / "test.config"
     cfg.write_text(
-        '# x86 platform\n'
-        'CONFIG_X86=y\n'
-        'CONFIG_64BIT=y\n'
-        'CONFIG_HZ_1000=y\n'
-        'CONFIG_HZ=1000\n'
-        'CONFIG_NR_CPUS=32\n'
+        "# x86 platform\n"
+        "CONFIG_X86=y\n"
+        "CONFIG_64BIT=y\n"
+        "CONFIG_HZ_1000=y\n"
+        "CONFIG_HZ=1000\n"
+        "CONFIG_NR_CPUS=32\n"
         'CONFIG_LOCALVERSION="-test"\n'
-        '# CONFIG_TRANSPARENT_HUGEPAGE is not set\n'
+        "# CONFIG_TRANSPARENT_HUGEPAGE is not set\n"
     )
     surface = walk(src, arch="x86_64", config_path=cfg)
     nr = next(t for t in surface.tunables if t.name == "NR_CPUS")

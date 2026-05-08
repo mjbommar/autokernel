@@ -4,21 +4,22 @@ from __future__ import annotations
 
 import typer
 from rich.console import Console
+from typing import Any
 
 import pytest
 
 from autokernel import errors
-from autokernel.distro import Family, parse_os_release, spec_for
+from autokernel.distro import parse_os_release, spec_for
 
 
 def _capture(monkeypatch) -> list[str]:
     buf: list[str] = []
     fake = Console(file=None, record=True, width=120)
 
-    def _print(*args, **kwargs):
+    def _print(*args: Any, **kwargs: Any) -> None:
         buf.append(" ".join(str(a) for a in args))
 
-    fake.print = _print
+    monkeypatch.setattr(fake, "print", _print)
     monkeypatch.setattr(errors, "err_console", fake)
     return buf
 

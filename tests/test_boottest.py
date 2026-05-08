@@ -13,7 +13,6 @@ from autokernel import boottest as boottest_mod
 from autokernel.boottest import (
     BootTestPlan,
     Method,
-    Verdict,
     analyze_serial,
     detect_method,
     execute,
@@ -38,6 +37,7 @@ def test_detect_method_falls_back_to_qemu(monkeypatch):
         if c == "qemu-system-x86_64":
             return "/usr/bin/qemu-system-x86_64"
         return None
+
     monkeypatch.setattr(boottest_mod.shutil, "which", _which)
     assert detect_method() == Method.QEMU
 
@@ -50,17 +50,31 @@ def test_detect_method_returns_auto_when_nothing_available(monkeypatch):
 # ── plan builders ──────────────────────────────────────────────────────────
 
 
-def test_qemu_plan_includes_required_flags(tmp_path: Path):
+def test_qemu_plan_includes_required_flags(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(boottest_mod, "_kvm_available", lambda: False)
     bz = tmp_path / "bzImage"
     bz.write_bytes(b"x")
     p = plan(method=Method.QEMU, bzimage_path=bz, kernel_release="6.13.0")
     assert p.method == Method.QEMU
     assert "qemu-system-x86_64" == p.argv[0]
+    assert "-accel" in p.argv and "tcg" in p.argv
+    assert "-cpu" in p.argv and "max" in p.argv
     assert "-kernel" in p.argv and str(bz) in p.argv
     assert "-no-reboot" in p.argv
     # panic=1 in cmdline so kernel reboots immediately on panic and QEMU exits
     append_idx = p.argv.index("-append")
     assert "panic=1" in p.argv[append_idx + 1]
+    assert "earlyprintk=serial" in p.argv[append_idx + 1]
+
+
+def test_qemu_plan_uses_host_cpu_with_kvm(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(boottest_mod, "_kvm_available", lambda: True)
+    bz = tmp_path / "bzImage"
+    bz.write_bytes(b"x")
+    p = plan(method=Method.QEMU, bzimage_path=bz, kernel_release="6.13.0")
+    assert "-enable-kvm" in p.argv
+    assert "-cpu" in p.argv
+    assert p.argv[p.argv.index("-cpu") + 1] == "host"
 
 
 def test_virtme_plan_uses_virtme_ng_when_available(tmp_path: Path, monkeypatch):
@@ -88,7 +102,11 @@ def test_virtme_plan_falls_back_to_virtme_run(tmp_path: Path, monkeypatch):
 def test_auto_method_resolves_at_plan_time(tmp_path: Path, monkeypatch):
     bz = tmp_path / "bzImage"
     bz.write_bytes(b"x")
-    monkeypatch.setattr(boottest_mod.shutil, "which", lambda c: "/usr/bin/qemu-system-x86_64" if c == "qemu-system-x86_64" else None)
+    monkeypatch.setattr(
+        boottest_mod.shutil,
+        "which",
+        lambda c: "/usr/bin/qemu-system-x86_64" if c == "qemu-system-x86_64" else None,
+    )
     p = plan(method=Method.AUTO, bzimage_path=bz, kernel_release="6.13.0")
     assert p.method == Method.QEMU
 
@@ -162,7 +180,7 @@ def test_analyze_qemu_uses_cannot_open_root_alternate():
     'VFS: Unable to mount root fs' line. Either is success."""
     log = (
         "Linux version 6.13\n"
-        "Cannot open root device \"(null)\" or unknown-block(0,0)\n"
+        'Cannot open root device "(null)" or unknown-block(0,0)\n'
         "Kernel panic - not syncing: VFS\n"
     )
     v = analyze_serial(log, method=Method.QEMU)
@@ -214,7 +232,11 @@ def captured_runs(monkeypatch):
 def test_execute_writes_result_and_record(tmp_path: Path, captured_runs, monkeypatch):
     bz = tmp_path / "bzImage"
     bz.write_bytes(b"fake-kernel-bytes")
-    monkeypatch.setattr(boottest_mod.shutil, "which", lambda c: "/usr/bin/qemu-system-x86_64" if c == "qemu-system-x86_64" else None)
+    monkeypatch.setattr(
+        boottest_mod.shutil,
+        "which",
+        lambda c: "/usr/bin/qemu-system-x86_64" if c == "qemu-system-x86_64" else None,
+    )
     p = plan(method=Method.AUTO, bzimage_path=bz, kernel_release="6.13.0")
     snap = tmp_path / "snap"
     snap.mkdir()
@@ -227,6 +249,7 @@ def test_execute_writes_result_and_record(tmp_path: Path, captured_runs, monkeyp
     assert record["bzimage_sha256"]
     # Same hash as our fake bzImage
     import hashlib
+
     assert record["bzimage_sha256"] == hashlib.sha256(b"fake-kernel-bytes").hexdigest()
     # serial log written
     assert Path(record["serial_log"]).exists()
@@ -240,12 +263,18 @@ def test_execute_propagates_failure_verdict(tmp_path: Path, monkeypatch):
         f = kwargs.get("stdout")
         if hasattr(f, "write"):
             f.write(_QEMU_EARLY_PANIC_LOG.encode())
+
         class _R:
             returncode = 0
+
         return _R()
 
     monkeypatch.setattr(boottest_mod.subprocess, "run", _fake)
-    monkeypatch.setattr(boottest_mod.shutil, "which", lambda c: "/usr/bin/qemu-system-x86_64" if c == "qemu-system-x86_64" else None)
+    monkeypatch.setattr(
+        boottest_mod.shutil,
+        "which",
+        lambda c: "/usr/bin/qemu-system-x86_64" if c == "qemu-system-x86_64" else None,
+    )
 
     p = plan(method=Method.AUTO, bzimage_path=bz, kernel_release="6.13.0")
     snap = tmp_path / "snap"
@@ -257,7 +286,11 @@ def test_execute_propagates_failure_verdict(tmp_path: Path, monkeypatch):
 def test_execute_handles_timeout_gracefully(tmp_path: Path, monkeypatch):
     bz = tmp_path / "bzImage"
     bz.write_bytes(b"x")
-    monkeypatch.setattr(boottest_mod.shutil, "which", lambda c: "/usr/bin/qemu-system-x86_64" if c == "qemu-system-x86_64" else None)
+    monkeypatch.setattr(
+        boottest_mod.shutil,
+        "which",
+        lambda c: "/usr/bin/qemu-system-x86_64" if c == "qemu-system-x86_64" else None,
+    )
 
     def _fake(argv, **kwargs):
         raise subprocess.TimeoutExpired(cmd=argv, timeout=kwargs.get("timeout", 60))

@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import pytest
 
 from autokernel.measurements import (
     BuildMeasurements,
@@ -20,7 +19,9 @@ from autokernel.measurements import (
 )
 
 
-def _make_fake_source(tmp_path: Path, *, with_bzimage: bool = True, with_vmlinux: bool = True) -> Path:
+def _make_fake_source(
+    tmp_path: Path, *, with_bzimage: bool = True, with_vmlinux: bool = True
+) -> Path:
     src = tmp_path / "linux"
     src.mkdir()
     if with_bzimage:
@@ -141,10 +142,14 @@ def test_read_boot_test_record_returns_none_when_missing(tmp_path):
 def test_measure_full_composition(tmp_path):
     snap = tmp_path / "snap"
     snap.mkdir()
-    (snap / "boot-test.json").write_text(json.dumps({
-        "verdict_ok": True,
-        "duration_seconds": 0.42,
-    }))
+    (snap / "boot-test.json").write_text(
+        json.dumps(
+            {
+                "verdict_ok": True,
+                "duration_seconds": 0.42,
+            }
+        )
+    )
     src = _make_fake_source(tmp_path)
     proposed = "CONFIG_X=y\nCONFIG_DROPPED=y\n"
     actual = "CONFIG_X=y\n# CONFIG_DROPPED is not set\n"

@@ -30,9 +30,7 @@ asked (the ``apt install`` path needs root).
 from __future__ import annotations
 
 import re
-import shutil
 import subprocess
-import tarfile
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path

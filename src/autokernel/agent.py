@@ -22,12 +22,14 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from pathlib import Path
+from typing import cast
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 
+from autokernel.llm import ServiceTier, normalize_service_tier
 from autokernel.models import (
     ProposalSource,
     RemovalProposal,
@@ -41,7 +43,7 @@ BATCH_SIZE = int(os.environ.get("AUTOKERNEL_BATCH_SIZE", "60"))
 # AUTOKERNEL_SERVICE_TIER: 'flex' / 'priority' / 'auto' (OpenAI-specific tiers).
 # pydantic-ai's ModelSettings.service_tier is a passthrough; provider-specific
 # semantics apply (currently OpenAI honours it via the Responses/Chat APIs).
-DEFAULT_SERVICE_TIER = os.environ.get("AUTOKERNEL_SERVICE_TIER") or None
+DEFAULT_SERVICE_TIER = normalize_service_tier(os.environ.get("AUTOKERNEL_SERVICE_TIER"))
 # Bump when the system prompt changes in a way that should invalidate cached
 # batches (different decision rules → different proposals).
 SYSTEM_PROMPT_VERSION = "v1"
@@ -56,7 +58,9 @@ class _ProposalDraft(BaseModel):
     """
 
     config: str = Field(description="Exact CONFIG_ symbol name")
-    decision: str = Field(description="'remove' to disable, 'keep' to leave alone, 'demote' to switch =y to =m")
+    decision: str = Field(
+        description="'remove' to disable, 'keep' to leave alone, 'demote' to switch =y to =m"
+    )
     reason: str = Field(description="One-sentence rationale tied to specific evidence")
     risk: RiskLevel
     confidence: float = Field(ge=0.0, le=1.0)
@@ -114,7 +118,7 @@ _agent_signature: tuple[str, str | None] | None = None
 
 def _get_agent(
     model: str = DEFAULT_MODEL,
-    service_tier: str | None = DEFAULT_SERVICE_TIER,
+    service_tier: ServiceTier | None = DEFAULT_SERVICE_TIER,
 ) -> Agent[None, _ProposalBatch]:
     """Return a cached Agent, rebuilding it if (model, service_tier) changes."""
     global _agent, _agent_signature
@@ -129,21 +133,30 @@ def _get_agent(
     if service_tier:
         settings = ModelSettings(service_tier=service_tier)
 
-    _agent = Agent(
-        model,
-        system_prompt=_SYSTEM_PROMPT,
-        output_type=_ProposalBatch,
-        model_settings=settings,
+    _agent = cast(
+        Agent[None, _ProposalBatch],
+        Agent(
+            model,
+            system_prompt=_SYSTEM_PROMPT,
+            output_type=_ProposalBatch,
+            model_settings=settings,
+        ),
     )
     _agent_signature = sig
+    if _agent is None:
+        raise RuntimeError("failed to initialize proposal agent")
     return _agent
 
 
 def _evidence_summary(snap: Snapshot) -> str:
     """Compact, LLM-friendly summary of the snapshot."""
     lines: list[str] = []
-    lines.append(f"# Host: {snap.host}  Kernel: {snap.kernel.release}  Arch: {snap.kernel.arch}")
-    lines.append(f"# CPU: {snap.cpu.vendor_id} {snap.cpu.model_name or ''} ({snap.cpu.cores} cores)")
+    lines.append(
+        f"# Host: {snap.host}  Kernel: {snap.kernel.release}  Arch: {snap.kernel.arch}"
+    )
+    lines.append(
+        f"# CPU: {snap.cpu.vendor_id} {snap.cpu.model_name or ''} ({snap.cpu.cores} cores)"
+    )
     lines.append(
         f"# Boot: efi={snap.boot.efi} secure_boot={snap.boot.secure_boot} "
         f"luks={snap.boot.luks_in_chain} root={snap.boot.root_fstype} boot={snap.boot.boot_fstype}"
@@ -162,12 +175,31 @@ def _evidence_summary(snap: Snapshot) -> str:
 
     lines.append("# Mounted filesystems (real):")
     for m in snap.mounts:
-        if m.fstype not in {"proc", "sysfs", "devpts", "cgroup2", "tmpfs", "mqueue", "tracefs", "debugfs", "configfs", "fusectl", "pstore", "bpf", "securityfs", "hugetlbfs", "rpc_pipefs", "nsfs"}:
+        if m.fstype not in {
+            "proc",
+            "sysfs",
+            "devpts",
+            "cgroup2",
+            "tmpfs",
+            "mqueue",
+            "tracefs",
+            "debugfs",
+            "configfs",
+            "fusectl",
+            "pstore",
+            "bpf",
+            "securityfs",
+            "hugetlbfs",
+            "rpc_pipefs",
+            "nsfs",
+        }:
             lines.append(f"  {m.target} ({m.fstype})")
 
     lines.append("# Network interfaces:")
     for n in snap.network:
-        lines.append(f"  {n.name} driver={n.driver or '-'} state={n.operstate or '-'} active={n.is_active}")
+        lines.append(
+            f"  {n.name} driver={n.driver or '-'} state={n.operstate or '-'} active={n.is_active}"
+        )
 
     if snap.dkms:
         lines.append("# DKMS modules (rebuild required for any new kernel):")
@@ -231,9 +263,9 @@ def propose(
     candidates: list[tuple[str, str]],
     *,
     model: str = DEFAULT_MODEL,
-    service_tier: str | None = DEFAULT_SERVICE_TIER,
+    service_tier: ServiceTier | None = DEFAULT_SERVICE_TIER,
     batch_size: int = BATCH_SIZE,
-    progress: callable | None = None,
+    progress: Callable[..., None] | None = None,
     cache_dir: Path | None = None,
 ) -> list[RemovalProposal]:
     """Run the agent over ``candidates`` and return RemovalProposals for
@@ -316,12 +348,15 @@ def propose(
     return out
 
 
-def deterministic_proposals(snap: Snapshot, candidates: Iterable[tuple[str, str]]) -> list[RemovalProposal]:
+def deterministic_proposals(
+    snap: Snapshot, candidates: Iterable[tuple[str, str]]
+) -> list[RemovalProposal]:
     """Hard rules, no LLM. Cheap. These are the guaranteed-safe trims:
     wrong-CPU-vendor, missing-class-of-device.
 
     Returns proposals tagged source=DETERMINISTIC.
     """
+    candidate_list = list(candidates)
     out: list[RemovalProposal] = []
     cpu = snap.cpu.vendor_id
 
@@ -334,11 +369,13 @@ def deterministic_proposals(snap: Snapshot, candidates: Iterable[tuple[str, str]
     has_amdgpu = any(p.vendor_id == "1002" and _is_display(p) for p in snap.pci)
     has_intel_gpu = any(p.vendor_id == "8086" and _is_display(p) for p in snap.pci)
 
-    for sym, val in candidates:
+    for sym, val in candidate_list:
         s = sym.upper()
         proposal: RemovalProposal | None = None
 
-        if cpu == "AuthenticAMD" and ("INTEL_IDLE" in s or s.startswith("CONFIG_X86_INTEL_") or "INTEL_RAPL" in s):
+        if cpu == "AuthenticAMD" and (
+            "INTEL_IDLE" in s or s.startswith("CONFIG_X86_INTEL_") or "INTEL_RAPL" in s
+        ):
             proposal = RemovalProposal(
                 config=sym,
                 current_value=val,
@@ -349,7 +386,9 @@ def deterministic_proposals(snap: Snapshot, candidates: Iterable[tuple[str, str]
                 source=ProposalSource.DETERMINISTIC,
                 evidence=[f"cpu.vendor_id={cpu}"],
             )
-        elif cpu == "GenuineIntel" and (s.startswith("CONFIG_X86_AMD_") or "AMD_PSTATE" in s):
+        elif cpu == "GenuineIntel" and (
+            s.startswith("CONFIG_X86_AMD_") or "AMD_PSTATE" in s
+        ):
             proposal = RemovalProposal(
                 config=sym,
                 current_value=val,
@@ -403,7 +442,7 @@ def deterministic_proposals(snap: Snapshot, candidates: Iterable[tuple[str, str]
     # (CONFIG_MZEN3 / CONFIG_MMETEORLAKE / …). Emits two proposals — one
     # "disable GENERIC_CPU" and one "enable M<arch>" — so the apply step
     # produces a coherent .config.
-    out.extend(_microarch_proposals(snap, candidates))
+    out.extend(_microarch_proposals(snap, candidate_list))
 
     return out
 
@@ -434,43 +473,47 @@ def _microarch_proposals(
 
     proposals: list[RemovalProposal] = []
     if generic_current == "y":
-        proposals.append(RemovalProposal(
-            config="CONFIG_GENERIC_CPU",
-            current_value="y",
-            proposed_value="n",
-            reason=(
-                f"Host CPU is {arch.value} ({snap.cpu.model_name or 'unknown model'}); "
-                f"swap to a tuned microarch symbol for better codegen."
-            ),
-            risk=RiskLevel.LOW,
-            confidence=0.95,
-            source=ProposalSource.MICROARCH,
-            evidence=[
-                f"cpu.vendor_id={snap.cpu.vendor_id}",
-                f"cpu.cpu_family={snap.cpu.cpu_family}",
-                f"cpu.model={snap.cpu.model}",
-            ],
-        ))
+        proposals.append(
+            RemovalProposal(
+                config="CONFIG_GENERIC_CPU",
+                current_value="y",
+                proposed_value="n",
+                reason=(
+                    f"Host CPU is {arch.value} ({snap.cpu.model_name or 'unknown model'}); "
+                    f"swap to a tuned microarch symbol for better codegen."
+                ),
+                risk=RiskLevel.LOW,
+                confidence=0.95,
+                source=ProposalSource.MICROARCH,
+                evidence=[
+                    f"cpu.vendor_id={snap.cpu.vendor_id}",
+                    f"cpu.cpu_family={snap.cpu.cpu_family}",
+                    f"cpu.model={snap.cpu.model}",
+                ],
+            )
+        )
 
     # Only emit the enable when the running config doesn't already have it.
     if target_current != "y":
-        proposals.append(RemovalProposal(
-            config=target_symbol,
-            current_value=target_current or "n",
-            proposed_value="y",
-            reason=(
-                f"Set CPU microarch tuning for {arch.value} "
-                f"({snap.cpu.model_name or 'unknown model'})."
-            ),
-            risk=RiskLevel.LOW,
-            confidence=0.95,
-            source=ProposalSource.MICROARCH,
-            evidence=[
-                f"cpu.vendor_id={snap.cpu.vendor_id}",
-                f"cpu.cpu_family={snap.cpu.cpu_family}",
-                f"cpu.model={snap.cpu.model}",
-                f"kernel.release={snap.kernel.release}",
-            ],
-        ))
+        proposals.append(
+            RemovalProposal(
+                config=target_symbol,
+                current_value=target_current or "n",
+                proposed_value="y",
+                reason=(
+                    f"Set CPU microarch tuning for {arch.value} "
+                    f"({snap.cpu.model_name or 'unknown model'})."
+                ),
+                risk=RiskLevel.LOW,
+                confidence=0.95,
+                source=ProposalSource.MICROARCH,
+                evidence=[
+                    f"cpu.vendor_id={snap.cpu.vendor_id}",
+                    f"cpu.cpu_family={snap.cpu.cpu_family}",
+                    f"cpu.model={snap.cpu.model}",
+                    f"kernel.release={snap.kernel.release}",
+                ],
+            )
+        )
 
     return proposals

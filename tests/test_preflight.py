@@ -2,23 +2,22 @@
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
-from typing import Any
 
-import pytest
 
 from autokernel import preflight as pf
-from autokernel.distro import DistroInfo, Family, parse_os_release, spec_for
+from autokernel.distro import Family, parse_os_release, spec_for
 
 
 def _ctx_for_family(family: Family, snapshot=None) -> pf.CheckContext:
-    info = parse_os_release({
-        Family.DEBIAN: "ID=ubuntu\nID_LIKE=debian\nPRETTY_NAME=\"Ubuntu Test\"\n",
-        Family.FEDORA: "ID=fedora\nPRETTY_NAME=\"Fedora Test\"\n",
-        Family.ARCH: "ID=arch\nPRETTY_NAME=\"Arch Test\"\n",
-        Family.UNKNOWN: "ID=mystery\n",
-    }[family])
+    info = parse_os_release(
+        {
+            Family.DEBIAN: 'ID=ubuntu\nID_LIKE=debian\nPRETTY_NAME="Ubuntu Test"\n',
+            Family.FEDORA: 'ID=fedora\nPRETTY_NAME="Fedora Test"\n',
+            Family.ARCH: 'ID=arch\nPRETTY_NAME="Arch Test"\n',
+            Family.UNKNOWN: "ID=mystery\n",
+        }[family]
+    )
     return pf.CheckContext(distro=info, spec=spec_for(info), snapshot=snapshot)
 
 
@@ -85,10 +84,12 @@ def test_free_ram_pass(monkeypatch, tmp_path: Path):
     fake = tmp_path / "meminfo"
     fake.write_text("MemTotal:       16777216 kB\n")  # 16 GB
     real_open = open
+
     def _fake_open(path, *a, **kw):
         if path == "/proc/meminfo":
             return real_open(fake, *a, **kw)
         return real_open(path, *a, **kw)
+
     monkeypatch.setattr("builtins.open", _fake_open)
     ctx = _ctx_for_family(Family.DEBIAN)
     r = pf.check_free_ram(ctx)
@@ -99,10 +100,12 @@ def test_free_ram_warn_below_4gb(monkeypatch, tmp_path: Path):
     fake = tmp_path / "meminfo"
     fake.write_text("MemTotal:       3145728 kB\n")  # 3 GB
     real_open = open
+
     def _fake_open(path, *a, **kw):
         if path == "/proc/meminfo":
             return real_open(fake, *a, **kw)
         return real_open(path, *a, **kw)
+
     monkeypatch.setattr("builtins.open", _fake_open)
     ctx = _ctx_for_family(Family.DEBIAN)
     r = pf.check_free_ram(ctx)
@@ -121,8 +124,10 @@ def test_build_tools_pass_when_all_present(monkeypatch):
 
 def test_build_tools_fail_with_debian_hint(monkeypatch):
     """Missing flex/bison should produce an `apt install -y` hint."""
+
     def _which(c):
         return None if c in {"flex", "bison"} else f"/usr/bin/{c}"
+
     monkeypatch.setattr(pf.shutil, "which", _which)
     ctx = _ctx_for_family(Family.DEBIAN)
     r = pf.check_build_tools(ctx)
@@ -134,6 +139,7 @@ def test_build_tools_fail_with_debian_hint(monkeypatch):
 def test_build_tools_fail_with_fedora_hint(monkeypatch):
     def _which(c):
         return None if c == "flex" else f"/usr/bin/{c}"
+
     monkeypatch.setattr(pf.shutil, "which", _which)
     ctx = _ctx_for_family(Family.FEDORA)
     r = pf.check_build_tools(ctx)
@@ -144,6 +150,7 @@ def test_build_tools_fail_with_fedora_hint(monkeypatch):
 def test_build_tools_fail_with_arch_hint(monkeypatch):
     def _which(c):
         return None if c == "make" else f"/usr/bin/{c}"
+
     monkeypatch.setattr(pf.shutil, "which", _which)
     ctx = _ctx_for_family(Family.ARCH)
     r = pf.check_build_tools(ctx)
@@ -166,6 +173,7 @@ def test_recommended_tools_pass_when_present(monkeypatch):
 def test_recommended_tools_warn_when_pahole_missing(monkeypatch):
     def _which(c):
         return None if c == "pahole" else f"/usr/bin/{c}"
+
     monkeypatch.setattr(pf.shutil, "which", _which)
     ctx = _ctx_for_family(Family.DEBIAN)
     r = pf.check_recommended_tools(ctx)
@@ -177,6 +185,7 @@ def test_recommended_tools_warn_when_pahole_missing(monkeypatch):
 def test_recommended_tools_arch_uses_pahole_pkg_name(monkeypatch):
     def _which(c):
         return None if c == "pahole" else f"/usr/bin/{c}"
+
     monkeypatch.setattr(pf.shutil, "which", _which)
     ctx = _ctx_for_family(Family.ARCH)
     r = pf.check_recommended_tools(ctx)
@@ -189,6 +198,7 @@ def test_recommended_tools_arch_uses_pahole_pkg_name(monkeypatch):
 
 def test_kernel_dev_libs_pass_when_query_finds_them(monkeypatch):
     """Mock dpkg-query to report all libs installed."""
+
     def _fake_run(*args, **kwargs):
         class R:
             returncode = 0
@@ -197,7 +207,9 @@ def test_kernel_dev_libs_pass_when_query_finds_them(monkeypatch):
                 "libelf-dev install ok installed\n"
                 "libncurses-dev install ok installed\n"
             )
+
         return R()
+
     monkeypatch.setattr(pf.subprocess, "run", _fake_run)
     ctx = _ctx_for_family(Family.DEBIAN)
     r = pf.check_kernel_dev_libs(ctx)
@@ -207,8 +219,10 @@ def test_kernel_dev_libs_pass_when_query_finds_them(monkeypatch):
 def test_kernel_dev_libs_query_unavailable_skips(monkeypatch):
     """If dpkg-query is not on PATH (e.g. running outside Debian), the
     check returns conservatively (no FAIL)."""
+
     def _fake_run(*args, **kwargs):
         raise FileNotFoundError("no dpkg-query")
+
     monkeypatch.setattr(pf.subprocess, "run", _fake_run)
     ctx = _ctx_for_family(Family.DEBIAN)
     r = pf.check_kernel_dev_libs(ctx)
@@ -253,9 +267,9 @@ def test_run_checks_filters_by_tags(monkeypatch):
     info = parse_os_release("ID=ubuntu\nID_LIKE=debian\n")
     run = pf.run_checks(tags={"always", "propose"}, distro=info)
     names = {r.name for r in run.results}
-    assert "distro_recognized" in names      # always
-    assert "build_tools" not in names        # build-only
-    assert "free_disk_space" not in names    # build-only
+    assert "distro_recognized" in names  # always
+    assert "build_tools" not in names  # build-only
+    assert "free_disk_space" not in names  # build-only
 
 
 def test_run_checks_includes_snapshot_checks_when_provided(intel_laptop, monkeypatch):
@@ -277,7 +291,9 @@ def test_run_checks_skips_snapshot_checks_with_no_snapshot(monkeypatch):
 
 def test_run_checks_has_failures_property(monkeypatch):
     """If any FAIL is present, has_failures is True."""
-    monkeypatch.setattr(pf.shutil, "which", lambda c: None if c == "flex" else f"/usr/bin/{c}")
+    monkeypatch.setattr(
+        pf.shutil, "which", lambda c: None if c == "flex" else f"/usr/bin/{c}"
+    )
     info = parse_os_release("ID=ubuntu\nID_LIKE=debian\n")
     run = pf.run_checks(tags={"build"}, distro=info)
     assert run.has_failures

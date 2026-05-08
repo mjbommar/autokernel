@@ -129,6 +129,7 @@ def check_distro_recognized(ctx: CheckContext) -> CheckResult:
 
 def check_python_version(ctx: CheckContext) -> CheckResult:
     import sys
+
     v = sys.version_info
     if (v.major, v.minor) < (3, 12):
         return CheckResult(
@@ -144,7 +145,9 @@ def check_python_version(ctx: CheckContext) -> CheckResult:
     )
 
 
-def check_free_disk_space(ctx: CheckContext, path: str = "/tmp", *, warn_gb: float = 20, fail_gb: float = 5) -> CheckResult:
+def check_free_disk_space(
+    ctx: CheckContext, path: str = "/tmp", *, warn_gb: float = 20, fail_gb: float = 5
+) -> CheckResult:
     """Need ~30GB to build a full kernel comfortably; /tmp is the typical
     scratch location."""
     try:
@@ -161,7 +164,7 @@ def check_free_disk_space(ctx: CheckContext, path: str = "/tmp", *, warn_gb: flo
             name="free_disk_space",
             severity=Severity.FAIL,
             message=f"{path}: {free_gb:.1f} GB free (need >= {fail_gb} GB)",
-            fix_hint=f"free disk space, or build to a different path (--build-dir)",
+            fix_hint="free disk space, or build to a different path (--build-dir)",
             details={"path": path, "free_gb": free_gb},
         )
     if free_gb < warn_gb:
@@ -178,12 +181,16 @@ def check_free_disk_space(ctx: CheckContext, path: str = "/tmp", *, warn_gb: flo
     )
 
 
-def check_free_ram(ctx: CheckContext, *, warn_gb: float = 4, fail_gb: float = 2) -> CheckResult:
+def check_free_ram(
+    ctx: CheckContext, *, warn_gb: float = 4, fail_gb: float = 2
+) -> CheckResult:
     """Modern kernel builds with LTO can use 4 GB+ during link. <2 GB on a
     real build will OOM."""
     try:
         with open("/proc/meminfo") as f:
-            mem_kb = next(int(line.split()[1]) for line in f if line.startswith("MemTotal:"))
+            mem_kb = next(
+                int(line.split()[1]) for line in f if line.startswith("MemTotal:")
+            )
     except (FileNotFoundError, StopIteration):
         return CheckResult(
             name="free_ram",
@@ -227,8 +234,17 @@ def check_cpu_cores(ctx: CheckContext) -> CheckResult:
 # v0.15: clang/lld/llvm-* added because the build verb defaults to
 # --compiler=clang. gcc stays in the list for fallback support.
 _REQUIRED_BUILD_TOOLS = [
-    "gcc", "make", "ld", "flex", "bison", "bc", "perl", "awk", "tar",
-    "clang", "ld.lld",
+    "gcc",
+    "make",
+    "ld",
+    "flex",
+    "bison",
+    "bc",
+    "perl",
+    "awk",
+    "tar",
+    "clang",
+    "ld.lld",
 ]
 _RECOMMENDED_TOOLS = ["ccache", "pahole"]
 
@@ -245,22 +261,43 @@ def check_build_tools(ctx: CheckContext) -> CheckResult:
 
     # Map missing executable → distro package name(s).
     pkg_map_debian = {
-        "gcc": "build-essential", "make": "build-essential", "ld": "binutils",
-        "flex": "flex", "bison": "bison", "bc": "bc", "perl": "perl",
-        "awk": "gawk", "tar": "tar",
-        "clang": "clang", "ld.lld": "lld",
+        "gcc": "build-essential",
+        "make": "build-essential",
+        "ld": "binutils",
+        "flex": "flex",
+        "bison": "bison",
+        "bc": "bc",
+        "perl": "perl",
+        "awk": "gawk",
+        "tar": "tar",
+        "clang": "clang",
+        "ld.lld": "lld",
     }
     pkg_map_fedora = {
-        "gcc": "gcc", "make": "make", "ld": "binutils",
-        "flex": "flex", "bison": "bison", "bc": "bc", "perl": "perl",
-        "awk": "gawk", "tar": "tar",
-        "clang": "clang", "ld.lld": "lld",
+        "gcc": "gcc",
+        "make": "make",
+        "ld": "binutils",
+        "flex": "flex",
+        "bison": "bison",
+        "bc": "bc",
+        "perl": "perl",
+        "awk": "gawk",
+        "tar": "tar",
+        "clang": "clang",
+        "ld.lld": "lld",
     }
     pkg_map_arch = {
-        "gcc": "base-devel", "make": "base-devel", "ld": "base-devel",
-        "flex": "flex", "bison": "bison", "bc": "bc", "perl": "perl",
-        "awk": "gawk", "tar": "tar",
-        "clang": "clang", "ld.lld": "lld",
+        "gcc": "base-devel",
+        "make": "base-devel",
+        "ld": "base-devel",
+        "flex": "flex",
+        "bison": "bison",
+        "bc": "bc",
+        "perl": "perl",
+        "awk": "gawk",
+        "tar": "tar",
+        "clang": "clang",
+        "ld.lld": "lld",
     }
     fam_map = {
         Family.DEBIAN: pkg_map_debian,
@@ -290,8 +327,8 @@ def check_recommended_tools(ctx: CheckContext) -> CheckResult:
     pkg_for = {
         Family.DEBIAN: {"ccache": "ccache", "pahole": "dwarves"},
         Family.FEDORA: {"ccache": "ccache", "pahole": "dwarves"},
-        Family.ARCH:   {"ccache": "ccache", "pahole": "pahole"},
-        Family.SUSE:   {"ccache": "ccache", "pahole": "dwarves"},
+        Family.ARCH: {"ccache": "ccache", "pahole": "pahole"},
+        Family.SUSE: {"ccache": "ccache", "pahole": "dwarves"},
     }.get(ctx.spec.family, {"ccache": "ccache", "pahole": "dwarves"})
     pkgs = sorted({pkg_for.get(t, t) for t in missing})
     msg = f"recommended tools missing: {', '.join(missing)}"
@@ -311,8 +348,8 @@ def check_kernel_dev_libs(ctx: CheckContext) -> CheckResult:
     pkgs = {
         Family.DEBIAN: ["libssl-dev", "libelf-dev", "libncurses-dev"],
         Family.FEDORA: ["openssl-devel", "elfutils-libelf-devel", "ncurses-devel"],
-        Family.ARCH:   ["openssl", "libelf", "ncurses"],
-        Family.SUSE:   ["libopenssl-devel", "libelf-devel", "ncurses-devel"],
+        Family.ARCH: ["openssl", "libelf", "ncurses"],
+        Family.SUSE: ["libopenssl-devel", "libelf-devel", "ncurses-devel"],
     }.get(fam)
     if pkgs is None:
         return CheckResult(
@@ -354,7 +391,9 @@ def _query_packages_missing(family: Family, pkgs: list[str]) -> list[str]:
         return []
 
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30, check=False)
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=30, check=False
+        )
     except (FileNotFoundError, subprocess.TimeoutExpired):
         return []
     if result.returncode != 0:
@@ -411,7 +450,9 @@ def check_dmesg_readable(ctx: CheckContext) -> CheckResult:
 def check_secure_boot(ctx: CheckContext) -> CheckResult:
     """Custom kernels need a signed boot path (or sb disabled)."""
     if not Path("/sys/firmware/efi").exists():
-        return CheckResult(name="secure_boot", severity=Severity.SKIP, message="not an EFI boot")
+        return CheckResult(
+            name="secure_boot", severity=Severity.SKIP, message="not an EFI boot"
+        )
     mokutil = _which("mokutil")
     if mokutil is None:
         return CheckResult(
@@ -422,10 +463,16 @@ def check_secure_boot(ctx: CheckContext) -> CheckResult:
         )
     try:
         out = subprocess.run(
-            [mokutil, "--sb-state"], capture_output=True, text=True, timeout=10, check=False
+            [mokutil, "--sb-state"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
         ).stdout
     except subprocess.TimeoutExpired:
-        return CheckResult(name="secure_boot", severity=Severity.SKIP, message="mokutil timed out")
+        return CheckResult(
+            name="secure_boot", severity=Severity.SKIP, message="mokutil timed out"
+        )
     if "SecureBoot enabled" in out:
         return CheckResult(
             name="secure_boot",
@@ -434,15 +481,21 @@ def check_secure_boot(ctx: CheckContext) -> CheckResult:
             fix_hint="see Arch wiki for sbctl / shim+MOK; otherwise disable Secure Boot in firmware",
         )
     if "SecureBoot disabled" in out:
-        return CheckResult(name="secure_boot", severity=Severity.PASS, message="Secure Boot disabled")
-    return CheckResult(name="secure_boot", severity=Severity.SKIP, message=out.strip()[:120])
+        return CheckResult(
+            name="secure_boot", severity=Severity.PASS, message="Secure Boot disabled"
+        )
+    return CheckResult(
+        name="secure_boot", severity=Severity.SKIP, message=out.strip()[:120]
+    )
 
 
 def check_root_or_sudo(ctx: CheckContext) -> CheckResult:
     """Some verbs (install, source-package install) need root. We don't
     require it for the *current* run but warn that some operations will."""
     if os.geteuid() == 0:
-        return CheckResult(name="root_or_sudo", severity=Severity.PASS, message="running as root")
+        return CheckResult(
+            name="root_or_sudo", severity=Severity.PASS, message="running as root"
+        )
     if _which("sudo"):
         return CheckResult(
             name="root_or_sudo",
@@ -590,7 +643,10 @@ def check_grub_tools(ctx: CheckContext) -> CheckResult:
         name="grub_tools",
         severity=Severity.FAIL,
         message="neither grub-reboot nor grub2-reboot on PATH",
-        fix_hint=_install_hint(ctx.spec, ["grub2-common"] if ctx.spec.family == Family.DEBIAN else ["grub2-tools"]),
+        fix_hint=_install_hint(
+            ctx.spec,
+            ["grub2-common"] if ctx.spec.family == Family.DEBIAN else ["grub2-tools"],
+        ),
     )
 
 
@@ -644,7 +700,11 @@ def check_virtme_available(ctx: CheckContext) -> CheckResult:
 
 def check_snapshot_running_config(ctx: CheckContext) -> CheckResult:
     if ctx.snapshot is None:
-        return CheckResult(name="snapshot_running_config", severity=Severity.SKIP, message="no snapshot")
+        return CheckResult(
+            name="snapshot_running_config",
+            severity=Severity.SKIP,
+            message="no snapshot",
+        )
     if ctx.snapshot.running_config_path and ctx.snapshot.running_config_path.exists():
         return CheckResult(
             name="snapshot_running_config",
@@ -664,10 +724,16 @@ def check_snapshot_running_config(ctx: CheckContext) -> CheckResult:
 
 def check_snapshot_modinfo(ctx: CheckContext) -> CheckResult:
     if ctx.snapshot is None:
-        return CheckResult(name="snapshot_modinfo", severity=Severity.SKIP, message="no snapshot")
+        return CheckResult(
+            name="snapshot_modinfo", severity=Severity.SKIP, message="no snapshot"
+        )
     p = ctx.snapshot.modules_builtin_modinfo_path
     if p and p.exists():
-        return CheckResult(name="snapshot_modinfo", severity=Severity.PASS, message=f"modules.builtin.modinfo: {p}")
+        return CheckResult(
+            name="snapshot_modinfo",
+            severity=Severity.PASS,
+            message=f"modules.builtin.modinfo: {p}",
+        )
     return CheckResult(
         name="snapshot_modinfo",
         severity=Severity.WARN,
@@ -677,9 +743,15 @@ def check_snapshot_modinfo(ctx: CheckContext) -> CheckResult:
 
 def check_snapshot_dkms_clean(ctx: CheckContext) -> CheckResult:
     if ctx.snapshot is None:
-        return CheckResult(name="snapshot_dkms_clean", severity=Severity.SKIP, message="no snapshot")
+        return CheckResult(
+            name="snapshot_dkms_clean", severity=Severity.SKIP, message="no snapshot"
+        )
     if not ctx.snapshot.dkms:
-        return CheckResult(name="snapshot_dkms_clean", severity=Severity.PASS, message="no DKMS modules")
+        return CheckResult(
+            name="snapshot_dkms_clean",
+            severity=Severity.PASS,
+            message="no DKMS modules",
+        )
     names = ", ".join(d.name for d in ctx.snapshot.dkms)
     return CheckResult(
         name="snapshot_dkms_clean",
@@ -707,23 +779,42 @@ class _Registered:
 #   "snapshot" — needs a Snapshot in the context
 _REGISTRY: list[tuple[str, _Registered]] = [
     ("distro_recognized", _Registered(check_distro_recognized, frozenset({"always"}))),
-    ("python_version",    _Registered(check_python_version,    frozenset({"always"}))),
-    ("cpu_cores",         _Registered(check_cpu_cores,         frozenset({"always", "build"}))),
-    ("free_ram",          _Registered(check_free_ram,          frozenset({"always", "build"}))),
-    ("free_disk_space",   _Registered(check_free_disk_space,   frozenset({"build"}))),
-    ("dmesg_readable",    _Registered(check_dmesg_readable,    frozenset({"scan"}))),
-    ("secure_boot",       _Registered(check_secure_boot,       frozenset({"build", "install"}))),
-    ("root_or_sudo",      _Registered(check_root_or_sudo,      frozenset({"install"}))),
-    ("build_tools",       _Registered(check_build_tools,       frozenset({"build"}))),
+    ("python_version", _Registered(check_python_version, frozenset({"always"}))),
+    ("cpu_cores", _Registered(check_cpu_cores, frozenset({"always", "build"}))),
+    ("free_ram", _Registered(check_free_ram, frozenset({"always", "build"}))),
+    ("free_disk_space", _Registered(check_free_disk_space, frozenset({"build"}))),
+    ("dmesg_readable", _Registered(check_dmesg_readable, frozenset({"scan"}))),
+    ("secure_boot", _Registered(check_secure_boot, frozenset({"build", "install"}))),
+    ("root_or_sudo", _Registered(check_root_or_sudo, frozenset({"install"}))),
+    ("build_tools", _Registered(check_build_tools, frozenset({"build"}))),
     ("recommended_tools", _Registered(check_recommended_tools, frozenset({"build"}))),
-    ("kernel_dev_libs",   _Registered(check_kernel_dev_libs,   frozenset({"build"}))),
-    ("snapshot_running_config", _Registered(check_snapshot_running_config, frozenset({"propose", "apply", "snapshot"}))),
-    ("snapshot_modinfo", _Registered(check_snapshot_modinfo, frozenset({"propose", "snapshot"}))),
-    ("snapshot_dkms_clean", _Registered(check_snapshot_dkms_clean, frozenset({"build", "install", "snapshot"}))),
+    ("kernel_dev_libs", _Registered(check_kernel_dev_libs, frozenset({"build"}))),
+    (
+        "snapshot_running_config",
+        _Registered(
+            check_snapshot_running_config, frozenset({"propose", "apply", "snapshot"})
+        ),
+    ),
+    (
+        "snapshot_modinfo",
+        _Registered(check_snapshot_modinfo, frozenset({"propose", "snapshot"})),
+    ),
+    (
+        "snapshot_dkms_clean",
+        _Registered(
+            check_snapshot_dkms_clean, frozenset({"build", "install", "snapshot"})
+        ),
+    ),
     # install-specific
-    ("bootloader_supported", _Registered(check_bootloader_supported, frozenset({"install"}))),
+    (
+        "bootloader_supported",
+        _Registered(check_bootloader_supported, frozenset({"install"})),
+    ),
     ("boot_writable", _Registered(check_boot_writable, frozenset({"install"}))),
-    ("fallback_kernel_present", _Registered(check_fallback_kernel_present, frozenset({"install"}))),
+    (
+        "fallback_kernel_present",
+        _Registered(check_fallback_kernel_present, frozenset({"install"})),
+    ),
     ("grub_tools", _Registered(check_grub_tools, frozenset({"install"}))),
     # boot-test
     ("qemu_available", _Registered(check_qemu_available, frozenset({"boot-test"}))),
@@ -754,10 +845,13 @@ def run_checks(
         if tags is not None and reg.tags.isdisjoint(tags) and "always" not in reg.tags:
             continue
         if "snapshot" in reg.tags and snapshot is None:
-            out.results.append(CheckResult(
-                name=_name, severity=Severity.SKIP,
-                message="needs snapshot (pass SNAPSHOT_DIR to preflight)",
-            ))
+            out.results.append(
+                CheckResult(
+                    name=_name,
+                    severity=Severity.SKIP,
+                    message="needs snapshot (pass SNAPSHOT_DIR to preflight)",
+                )
+            )
             continue
         out.results.append(reg.fn(ctx))
     return out

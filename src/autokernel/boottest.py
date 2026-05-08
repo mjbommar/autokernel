@@ -96,10 +96,16 @@ def _virtme_argv(bzimage: Path, *, command: str = "true") -> list[str]:
     binary = "virtme-ng" if shutil.which("virtme-ng") else "virtme-run"
     return [
         binary,
-        "--kimg", str(bzimage),
+        "--kimg",
+        str(bzimage),
         "--no-virt-net",  # no host network bleed-through
-        "--script-sh", f"{command} && echo AUTOKERNEL_BOOT_TEST_OK",
+        "--script-sh",
+        f"{command} && echo AUTOKERNEL_BOOT_TEST_OK",
     ]
+
+
+def _kvm_available() -> bool:
+    return Path("/dev/kvm").exists() and os.access("/dev/kvm", os.R_OK | os.W_OK)
 
 
 def _qemu_argv(bzimage: Path) -> list[str]:
@@ -109,21 +115,39 @@ def _qemu_argv(bzimage: Path) -> list[str]:
     * ``-nographic`` — pipe serial to stdout, no X11 popup.
     * ``-no-reboot`` — when the kernel "reboots" after panic, QEMU exits
       cleanly instead of looping.
+    * ``-M pc`` keeps the virtual hardware conservative and predictable.
+    * KVM uses ``-cpu host`` so host-tuned kernels see the expected CPU
+      feature set. TCG falls back to ``-cpu max`` for the same reason.
     * ``-append`` sets the kernel cmdline. ``panic=1`` forces an
       immediate reboot on panic (no 10-second pause), so QEMU exits.
       ``console=ttyS0`` routes printk to the serial port we read.
     * ``-smp 1 -m 512`` keeps memory + cores tight; we're not running
       anything but the kernel itself.
     """
-    return [
+    argv = [
         "qemu-system-x86_64",
-        "-kernel", str(bzimage),
-        "-append", "console=ttyS0 panic=1 quiet",
-        "-nographic",
-        "-no-reboot",
-        "-m", "512",
-        "-smp", "1",
+        "-M",
+        "pc",
     ]
+    if _kvm_available():
+        argv.extend(["-enable-kvm", "-cpu", "host"])
+    else:
+        argv.extend(["-accel", "tcg", "-cpu", "max"])
+    argv.extend(
+        [
+            "-kernel",
+            str(bzimage),
+            "-append",
+            "console=ttyS0 earlyprintk=serial panic=1",
+            "-nographic",
+            "-no-reboot",
+            "-m",
+            "512",
+            "-smp",
+            "1",
+        ]
+    )
+    return argv
 
 
 def plan(
@@ -191,7 +215,7 @@ def analyze_serial(text: str, *, method: Method, kernel_release: str = "") -> Ve
             panic_idx = text.find("Kernel panic")
             return Verdict(
                 False,
-                f"kernel panic in virtme: {text[panic_idx:panic_idx + 200]!r}",
+                f"kernel panic in virtme: {text[panic_idx : panic_idx + 200]!r}",
             )
         return Verdict(False, "virtme exited without success sentinel")
 
@@ -219,8 +243,7 @@ def analyze_serial(text: str, *, method: Method, kernel_release: str = "") -> Ve
 
     return Verdict(
         False,
-        f"kernel panic BEFORE rootfs stage: "
-        f"{text[panic_idx:panic_idx + 240]!r}",
+        f"kernel panic BEFORE rootfs stage: {text[panic_idx : panic_idx + 240]!r}",
     )
 
 
@@ -257,9 +280,7 @@ def execute(plan: BootTestPlan, *, snapshot_dir: Path) -> BootTestResult:
 
     argv_log.write_text(
         f"# method: {plan.method.value}\n"
-        f"# timeout: {plan.timeout}\n"
-        + " ".join(repr(a) for a in plan.argv)
-        + "\n"
+        f"# timeout: {plan.timeout}\n" + " ".join(repr(a) for a in plan.argv) + "\n"
     )
 
     started = datetime.now(UTC)
@@ -283,8 +304,8 @@ def execute(plan: BootTestPlan, *, snapshot_dir: Path) -> BootTestResult:
         if e.stdout:
             try:
                 serial_log.write_bytes(e.stdout)
-            except Exception:
-                pass
+            except OSError:
+                captured = e.stdout
         captured = serial_log.read_bytes() if serial_log.exists() else b""
         rc = -1
     except FileNotFoundError as e:

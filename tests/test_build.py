@@ -7,8 +7,6 @@ locations, and result objects.
 
 from __future__ import annotations
 
-import os
-import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +16,6 @@ from autokernel import build as build_mod
 from autokernel.build import (
     BuildResult,
     PrepareResult,
-    StepResult,
     build,
     prepare,
 )
@@ -157,7 +154,13 @@ def test_build_invokes_bindeb_pkg(tmp_path: Path, captured_runs):
     result = build(source_dir=src, snapshot_dir=snap, jobs=8)
 
     assert len(captured_runs) == 1
-    assert captured_runs[0]["argv"] == ["make", "-j8", "CC=clang", "HOSTCC=clang", "bindeb-pkg"]
+    assert captured_runs[0]["argv"] == [
+        "make",
+        "-j8",
+        "CC=clang",
+        "HOSTCC=clang",
+        "bindeb-pkg",
+    ]
     assert isinstance(result, BuildResult)
     assert result.steps[0].ok is True
 
@@ -170,15 +173,27 @@ def test_build_default_jobs_uses_cpu_count(tmp_path: Path, captured_runs, monkey
     monkeypatch.setattr(build_mod.os, "cpu_count", lambda: 16)
 
     build(source_dir=src, snapshot_dir=snap)
-    assert captured_runs[0]["argv"] == ["make", "-j16", "CC=clang", "HOSTCC=clang", "bindeb-pkg"]
+    assert captured_runs[0]["argv"] == [
+        "make",
+        "-j16",
+        "CC=clang",
+        "HOSTCC=clang",
+        "bindeb-pkg",
+    ]
 
 
-def test_build_ccache_wraps_cc_when_available(tmp_path: Path, captured_runs, monkeypatch):
+def test_build_ccache_wraps_cc_when_available(
+    tmp_path: Path, captured_runs, monkeypatch
+):
     src = _make_fake_kernel_source(tmp_path)
     (src / ".config").write_text("CONFIG_X=y\n")
     snap = tmp_path / "snap"
     snap.mkdir()
-    monkeypatch.setattr(build_mod.shutil, "which", lambda c: "/usr/bin/ccache" if c == "ccache" else None)
+    monkeypatch.setattr(
+        build_mod.shutil,
+        "which",
+        lambda c: "/usr/bin/ccache" if c == "ccache" else None,
+    )
 
     build(source_dir=src, snapshot_dir=snap, jobs=2)
     env = captured_runs[0]["env"]
@@ -191,7 +206,11 @@ def test_build_no_ccache_when_disabled(tmp_path: Path, captured_runs, monkeypatc
     (src / ".config").write_text("CONFIG_X=y\n")
     snap = tmp_path / "snap"
     snap.mkdir()
-    monkeypatch.setattr(build_mod.shutil, "which", lambda c: "/usr/bin/ccache" if c == "ccache" else None)
+    monkeypatch.setattr(
+        build_mod.shutil,
+        "which",
+        lambda c: "/usr/bin/ccache" if c == "ccache" else None,
+    )
 
     build(source_dir=src, snapshot_dir=snap, jobs=2, use_ccache=False)
     env = captured_runs[0]["env"]
@@ -253,7 +272,7 @@ def test_prepare_strips_missing_distro_cert_paths(tmp_path, monkeypatch):
     src = _make_fake_kernel_source(tmp_path)
     cfg = tmp_path / "final.config"
     cfg.write_text(
-        'CONFIG_FOO=y\n'
+        "CONFIG_FOO=y\n"
         'CONFIG_SYSTEM_TRUSTED_KEYS="debian/canonical-certs.pem"\n'
         'CONFIG_SYSTEM_REVOCATION_KEYS="debian/canonical-revoked-certs.pem"\n'
     )
@@ -283,12 +302,11 @@ def test_prepare_keeps_existing_cert_paths(tmp_path, monkeypatch):
     src = _make_fake_kernel_source(tmp_path)
     real_key = src / "certs" / "my-signing.pem"
     real_key.parent.mkdir(parents=True)
-    real_key.write_text("-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n")
-    cfg = tmp_path / "final.config"
-    cfg.write_text(
-        'CONFIG_FOO=y\n'
-        'CONFIG_SYSTEM_TRUSTED_KEYS="certs/my-signing.pem"\n'
+    real_key.write_text(
+        "-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n"
     )
+    cfg = tmp_path / "final.config"
+    cfg.write_text('CONFIG_FOO=y\nCONFIG_SYSTEM_TRUSTED_KEYS="certs/my-signing.pem"\n')
     snap = tmp_path / "snap"
     snap.mkdir()
 
@@ -307,9 +325,7 @@ def test_prepare_keeps_existing_cert_paths(tmp_path, monkeypatch):
 def test_prepare_leaves_already_empty_cert_paths(tmp_path, monkeypatch):
     src = _make_fake_kernel_source(tmp_path)
     cfg = tmp_path / "final.config"
-    cfg.write_text(
-        'CONFIG_FOO=y\nCONFIG_SYSTEM_TRUSTED_KEYS=""\n'
-    )
+    cfg.write_text('CONFIG_FOO=y\nCONFIG_SYSTEM_TRUSTED_KEYS=""\n')
     snap = tmp_path / "snap"
     snap.mkdir()
 
@@ -359,7 +375,11 @@ def test_prepare_with_localmodconfig_runs_extra_steps(tmp_path, monkeypatch):
     # Three steps: initial olddefconfig, localmodconfig, post-trim olddefconfig
     assert len(result.steps) == 3
     step_names = [s.name for s in result.steps]
-    assert step_names == ["olddefconfig", "localmodconfig", "olddefconfig-after-localmodconfig"]
+    assert step_names == [
+        "olddefconfig",
+        "localmodconfig",
+        "olddefconfig-after-localmodconfig",
+    ]
     # The localmodconfig step must invoke `yes '' | make LSMOD=...`
     lmc_argv = calls[1]
     assert lmc_argv[:2] == ["sh", "-c"]
@@ -390,6 +410,7 @@ def test_prepare_without_localmodconfig_runs_only_olddefconfig(tmp_path, monkeyp
 
 def test_build_env_clang_default(tmp_path):
     from autokernel.build import _build_env
+
     env = _build_env(use_ccache=False, env_overrides=None)
     # Default is clang.
     assert env.get("CC") == "clang"
@@ -399,12 +420,14 @@ def test_build_env_clang_default(tmp_path):
 
 def test_build_env_llvm_sets_llvm_flag():
     from autokernel.build import _build_env
+
     env = _build_env(use_ccache=False, env_overrides=None, compiler="llvm")
     assert env["LLVM"] == "1"
 
 
 def test_build_env_gcc_explicit():
     from autokernel.build import _build_env
+
     env = _build_env(use_ccache=False, env_overrides=None, compiler="gcc")
     assert env.get("CC") == "gcc"
     assert env.get("HOSTCC") == "gcc"
@@ -413,18 +436,21 @@ def test_build_env_gcc_explicit():
 
 def test_build_env_unknown_compiler_raises():
     from autokernel.build import _build_env
+
     with pytest.raises(ValueError, match="unknown compiler"):
         _build_env(use_ccache=False, env_overrides=None, compiler="msvc")
 
 
 def test_build_env_lto_thin_adds_kcflags():
     from autokernel.build import _build_env
+
     env = _build_env(use_ccache=False, env_overrides=None, lto="thin")
     assert "-flto=thin" in env.get("KCFLAGS", "")
 
 
 def test_build_env_lto_full():
     from autokernel.build import _build_env
+
     env = _build_env(use_ccache=False, env_overrides=None, lto="full")
     kcflags = env.get("KCFLAGS", "")
     assert "-flto" in kcflags and "-flto=thin" not in kcflags
@@ -432,14 +458,20 @@ def test_build_env_lto_full():
 
 def test_build_env_lto_none_no_kcflags_change():
     from autokernel.build import _build_env
-    env = _build_env(use_ccache=False, env_overrides={"KCFLAGS": "existing"}, lto="none")
+
+    env = _build_env(
+        use_ccache=False, env_overrides={"KCFLAGS": "existing"}, lto="none"
+    )
     # env_overrides win; we don't add anything for lto=none.
     assert env["KCFLAGS"] == "existing"
 
 
 def test_build_env_ccache_wraps_clang(tmp_path, monkeypatch):
     from autokernel.build import _build_env
-    monkeypatch.setattr("shutil.which", lambda c: "/usr/bin/ccache" if c == "ccache" else None)
+
+    monkeypatch.setattr(
+        "shutil.which", lambda c: "/usr/bin/ccache" if c == "ccache" else None
+    )
     env = _build_env(use_ccache=True, env_overrides=None, compiler="clang")
     # ccache wraps the active CC.
     assert "ccache" in env["CC"]
@@ -481,7 +513,14 @@ def test_build_kernel_only_target_runs_bzImage_modules(tmp_path, captured_runs):
 
     build(source_dir=src, snapshot_dir=snap, jobs=8, target="kernel-only")
     assert len(captured_runs) == 1
-    assert captured_runs[0]["argv"] == ["make", "-j8", "CC=clang", "HOSTCC=clang", "bzImage", "modules"]
+    assert captured_runs[0]["argv"] == [
+        "make",
+        "-j8",
+        "CC=clang",
+        "HOSTCC=clang",
+        "bzImage",
+        "modules",
+    ]
 
 
 # ── compiler binary pre-flight in build verb (v0.16.1) ───────────────────
@@ -505,8 +544,9 @@ def test_build_cli_fails_fast_when_clang_missing(tmp_path, monkeypatch):
     stdshutil.copytree(fixture, snap)
     (snap / "final.config").write_text("CONFIG_X=y\n")
 
-    monkeypatch.setattr("shutil.which",
-                        lambda c: None if c == "clang" else f"/usr/bin/{c}")
+    monkeypatch.setattr(
+        "shutil.which", lambda c: None if c == "clang" else f"/usr/bin/{c}"
+    )
 
     result = runner.invoke(
         cli_mod.app,
@@ -533,11 +573,13 @@ def test_build_cli_passes_preflight_when_compiler_on_path(tmp_path, monkeypatch)
 
     # clang on PATH; mock the actual subprocess so we don't run make.
     monkeypatch.setattr("shutil.which", lambda c: f"/usr/bin/{c}")
+
     def _ok(argv, **kwargs):
         for f in (kwargs.get("stdout"), kwargs.get("stderr")):
             if hasattr(f, "write"):
                 f.write(b"")
         return _FakeProcess(returncode=0)
+
     monkeypatch.setattr(build_mod.subprocess, "run", _ok)
 
     result = runner.invoke(
@@ -552,16 +594,19 @@ def test_build_cli_passes_preflight_when_compiler_on_path(tmp_path, monkeypatch)
 
 def test_compiler_make_vars_for_clang():
     from autokernel.build import _compiler_make_vars
+
     assert _compiler_make_vars("clang") == ["CC=clang", "HOSTCC=clang"]
 
 
 def test_compiler_make_vars_for_llvm():
     from autokernel.build import _compiler_make_vars
+
     assert _compiler_make_vars("llvm") == ["LLVM=1"]
 
 
 def test_compiler_make_vars_for_gcc():
     from autokernel.build import _compiler_make_vars
+
     assert _compiler_make_vars("gcc") == ["CC=gcc", "HOSTCC=gcc"]
 
 
@@ -574,7 +619,13 @@ def test_build_argv_includes_compiler_vars(tmp_path, captured_runs):
     snap = tmp_path / "snap"
     snap.mkdir()
 
-    build(source_dir=src, snapshot_dir=snap, jobs=8, compiler="clang", target="kernel-only")
+    build(
+        source_dir=src,
+        snapshot_dir=snap,
+        jobs=8,
+        compiler="clang",
+        target="kernel-only",
+    )
     assert len(captured_runs) == 1
     argv = captured_runs[0]["argv"]
     assert "CC=clang" in argv
@@ -590,12 +641,14 @@ def test_prepare_olddefconfig_includes_compiler_vars(tmp_path, monkeypatch):
     snap = tmp_path / "snap"
     snap.mkdir()
     captured = []
+
     def _ok(argv, **kwargs):
         captured.append(list(argv))
         for f in (kwargs.get("stdout"), kwargs.get("stderr")):
             if hasattr(f, "write"):
                 f.write(b"")
         return _FakeProcess(returncode=0)
+
     monkeypatch.setattr(build_mod.subprocess, "run", _ok)
 
     prepare(source_dir=src, config_path=cfg, snapshot_dir=snap, compiler="clang")

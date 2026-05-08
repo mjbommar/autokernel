@@ -21,7 +21,6 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-import typer
 from rich.console import Console
 from rich.panel import Panel
 from rich.prompt import Confirm
@@ -107,20 +106,23 @@ def run(
     snapshot_dir.mkdir(parents=True, exist_ok=True)
 
     distro = detect_distro()
-    console.print(Panel.fit(
-        f"[bold]autokernel quickstart[/bold]\n"
-        f"  host: {distro.pretty_name or distro.id} (family={distro.family.value})\n"
-        f"  snapshot dir: {snapshot_dir}\n\n"
-        f"[dim]This walks you through the pipeline step by step. "
-        f"Each step prompts before it runs; Ctrl-C exits cleanly.[/dim]",
-        title="Welcome",
-    ))
+    console.print(
+        Panel.fit(
+            f"[bold]autokernel quickstart[/bold]\n"
+            f"  host: {distro.pretty_name or distro.id} (family={distro.family.value})\n"
+            f"  snapshot dir: {snapshot_dir}\n\n"
+            f"[dim]This walks you through the pipeline step by step. "
+            f"Each step prompts before it runs; Ctrl-C exits cleanly.[/dim]",
+            title="Welcome",
+        )
+    )
 
     # ── 1. preflight ────────────────────────────────────────────────────
     if not _confirm(_STEPS[0], yes=yes, console=console):
         return
     pf_run = preflight_mod.run_checks(tags={"always", "build"}, distro=distro)
     from autokernel.cli import _render_preflight  # avoid circular at import time
+
     _render_preflight(pf_run, distro=distro, for_="build")
     if pf_run.has_failures:
         # Surface the one-shot fix verb instead of just "go install stuff yourself."
@@ -143,7 +145,9 @@ def run(
         return
     if not skip_llm:
         skip_llm = _maybe_skip_llm(console=console)
-    _run_propose(snapshot_dir, skip_llm=skip_llm, console=console, err_console=err_console)
+    _run_propose(
+        snapshot_dir, skip_llm=skip_llm, console=console, err_console=err_console
+    )
 
     # ── 4. review ──────────────────────────────────────────────────────
     if not _confirm(_STEPS[3], yes=yes, console=console):
@@ -158,19 +162,21 @@ def run(
     # ── done ───────────────────────────────────────────────────────────
     final = snapshot_dir / "final.config"
     kfrag = snapshot_dir / "auto.kfrag"
-    console.print(Panel.fit(
-        f"[green]✓ done[/green]\n\n"
-        f"  snapshot:   {snapshot_dir}\n"
-        f"  proposal:   {snapshot_dir / 'proposal.json'}\n"
-        f"  kfrag:      {kfrag}\n"
-        f"  final cfg:  {final}\n\n"
-        f"[bold]next:[/bold] to actually compile a kernel:\n"
-        f"  autokernel fetch-source\n"
-        f"  autokernel build {snapshot_dir} --kernel-source <path>            # prepare only\n"
-        f"  autokernel build {snapshot_dir} --kernel-source <path> --execute  # ~30 min\n"
-        f"  autokernel install {snapshot_dir} --execute   # one-shot probation boot\n",
-        title="Quickstart complete",
-    ))
+    console.print(
+        Panel.fit(
+            f"[green]✓ done[/green]\n\n"
+            f"  snapshot:   {snapshot_dir}\n"
+            f"  proposal:   {snapshot_dir / 'proposal.json'}\n"
+            f"  kfrag:      {kfrag}\n"
+            f"  final cfg:  {final}\n\n"
+            f"[bold]next:[/bold] to actually compile a kernel:\n"
+            f"  autokernel fetch-source\n"
+            f"  autokernel build {snapshot_dir} --kernel-source <path>            # prepare only\n"
+            f"  autokernel build {snapshot_dir} --kernel-source <path> --execute  # ~30 min\n"
+            f"  autokernel install {snapshot_dir} --execute   # one-shot probation boot\n",
+            title="Quickstart complete",
+        )
+    )
 
 
 # ── prompts ────────────────────────────────────────────────────────────────
@@ -248,7 +254,9 @@ def _run_scan(snapshot_dir: Path, *, console: Console, err_console: Console) -> 
         )
 
     snap = snap_mod.load(snapshot_dir)
-    (snapshot_dir / "snapshot.json").write_text(snap.model_dump_json(indent=2, exclude_none=True))
+    (snapshot_dir / "snapshot.json").write_text(
+        snap.model_dump_json(indent=2, exclude_none=True)
+    )
     console.print(
         f"[green]✓ scanned[/green]   "
         f"pci={len(snap.pci)}  usb={len(snap.usb)}  "
@@ -261,7 +269,10 @@ def _run_propose(
 ) -> None:
     from autokernel.agent import deterministic_proposals, propose as llm_propose
     from autokernel.policy import (
-        AutonomyLevel, apply_policy, compute_load_bearing, to_diff,
+        AutonomyLevel,
+        apply_policy,
+        compute_load_bearing,
+        to_diff,
     )
     from autokernel.resolve import _running_config_symbols, candidate_trims, resolve
 
@@ -285,11 +296,15 @@ def _run_propose(
     else:
         cap = 200  # quickstart caps to keep cost predictable
         if len(llm_pool) > cap:
-            console.print(f"[dim]capping LLM pool at {cap} symbols (the rest are deferred)[/dim]")
+            console.print(
+                f"[dim]capping LLM pool at {cap} symbols (the rest are deferred)[/dim]"
+            )
             not_considered = [s for s, _ in llm_pool[cap:]]
             llm_pool = llm_pool[:cap]
         cache_dir = snapshot_dir / "batches"
-        with console.status(f"[cyan]asking LLM about {len(llm_pool)} candidates…[/cyan]"):
+        with console.status(
+            f"[cyan]asking LLM about {len(llm_pool)} candidates…[/cyan]"
+        ):
             try:
                 llm = llm_propose(snap, llm_pool, cache_dir=cache_dir)
             except Exception as e:  # noqa: BLE001 — report any provider error gracefully
@@ -301,7 +316,12 @@ def _run_propose(
     all_proposals = det + llm
     load_bearing = compute_load_bearing(snap, resolution)
     pr = apply_policy(all_proposals, AutonomyLevel.ADVISE, load_bearing)
-    diff = to_diff(snap.running_config_path, AutonomyLevel.ADVISE, pr, not_considered=not_considered)
+    diff = to_diff(
+        snap.running_config_path,
+        AutonomyLevel.ADVISE,
+        pr,
+        not_considered=not_considered,
+    )
     (snapshot_dir / "proposal.json").write_text(diff.model_dump_json(indent=2))
 
     console.print(
@@ -334,13 +354,17 @@ def _run_review(snapshot_dir: Path, *, console: Console, err_console: Console) -
         *preset_accept_recommended(),
     ]
     rs = apply_rules(
-        diff.needs_review, rules,
-        base_diff_path=proposal_path, reviewer=Reviewer.POLICY,
+        diff.needs_review,
+        rules,
+        base_diff_path=proposal_path,
+        reviewer=Reviewer.POLICY,
     )
     (snapshot_dir / "review.json").write_text(rs.model_dump_json(indent=2))
     header = write_kfrag(
-        snapshot_dir / "auto.kfrag", rs,
-        snapshot_dir=snapshot_dir, autonomy=diff.autonomy,
+        snapshot_dir / "auto.kfrag",
+        rs,
+        snapshot_dir=snapshot_dir,
+        autonomy=diff.autonomy,
     )
     console.print(
         f"[green]✓ reviewed[/green]   "
@@ -358,12 +382,16 @@ def _run_apply(snapshot_dir: Path, *, console: Console, err_console: Console) ->
     kfrag_path = snapshot_dir / "auto.kfrag"
     if not kfrag_path.exists():
         raise err.hint_missing_kfrag(snapshot_dir, kfrag_path)
+    if snap.running_config_path is None:
+        raise err.hint_no_running_config(snapshot_dir)
 
     merged_text, report = merge_kfrag(snap.running_config_path, kfrag_path)
     resolution = resolve(snap)
     lb = compute_load_bearing(snap, resolution)
     base_text = snap.running_config_path.read_text()
-    findings = validate_load_bearing(merged_text, dict(lb.reasons), base_config_text=base_text)
+    findings = validate_load_bearing(
+        merged_text, dict(lb.reasons), base_config_text=base_text
+    )
     if findings:
         raise err.hint_load_bearing_brick([f.symbol for f in findings])
 

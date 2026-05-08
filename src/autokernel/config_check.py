@@ -30,10 +30,8 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from enum import Enum
-from pathlib import Path
 
 from autokernel.kconfig_walk import (
-    BoolToggle,
     ChoiceGroup,
     KconfigSurface,
     NumericTunable,
@@ -46,7 +44,9 @@ class FindingKind(str, Enum):
     OLDDEFCONFIG_STRIPPED = "olddefconfig_stripped"  # set in proposed but not in actual
     DEAD_LETTER_CHOICE = "dead_letter_choice"  # choice option whose parent is disabled
     OUT_OF_RANGE_TUNABLE = "out_of_range_tunable"  # int outside ranges
-    DEMOTED_TO_DEFAULT = "demoted_to_default"  # set to value that matches Kconfig default
+    DEMOTED_TO_DEFAULT = (
+        "demoted_to_default"  # set to value that matches Kconfig default
+    )
 
 
 @dataclass(frozen=True)
@@ -162,15 +162,17 @@ def check(
         entry = idx.get(sym)
         # Symbol doesn't exist in target Kconfig at all.
         if entry is None:
-            errors.append(Finding(
-                kind=FindingKind.UNKNOWN_SYMBOL,
-                symbol=sym,
-                detail=(
-                    f"{sym}={value!r} not found in target kernel's Kconfig — "
-                    "either renamed, version-skew, or hallucinated by the LLM."
-                ),
-                is_error=True,
-            ))
+            errors.append(
+                Finding(
+                    kind=FindingKind.UNKNOWN_SYMBOL,
+                    symbol=sym,
+                    detail=(
+                        f"{sym}={value!r} not found in target kernel's Kconfig — "
+                        "either renamed, version-skew, or hallucinated by the LLM."
+                    ),
+                    is_error=True,
+                )
+            )
             continue
 
         # Choice-option dead-letter check: the parent's "is this
@@ -181,43 +183,54 @@ def check(
         # dead-letter.
         if isinstance(entry, tuple):
             parent_choice, _opt = entry
-            assert isinstance(parent_choice, ChoiceGroup)
+            if not isinstance(parent_choice, ChoiceGroup):
+                continue
             any_current = any(o.is_current for o in parent_choice.options)
             if not any_current and value == "y":
-                warnings.append(Finding(
-                    kind=FindingKind.DEAD_LETTER_CHOICE,
-                    symbol=sym,
-                    detail=(
-                        f"{sym}=y is an option of choice "
-                        f"{parent_choice.prompt!r} whose parent feature is "
-                        f"disabled — olddefconfig will silently drop this."
-                    ),
-                    is_error=False,
-                ))
+                warnings.append(
+                    Finding(
+                        kind=FindingKind.DEAD_LETTER_CHOICE,
+                        symbol=sym,
+                        detail=(
+                            f"{sym}=y is an option of choice "
+                            f"{parent_choice.prompt!r} whose parent feature is "
+                            f"disabled — olddefconfig will silently drop this."
+                        ),
+                        is_error=False,
+                    )
+                )
 
         # Out-of-range tunable check.
-        if isinstance(entry, NumericTunable) and entry.type in (SymbolType.INT, SymbolType.HEX):
+        if isinstance(entry, NumericTunable) and entry.type in (
+            SymbolType.INT,
+            SymbolType.HEX,
+        ):
             if entry.ranges:
                 v = _strip_quotes(value)
                 try:
-                    n = int(v, 0) if entry.type == SymbolType.HEX or v.startswith("0x") else int(v)
+                    n = (
+                        int(v, 0)
+                        if entry.type == SymbolType.HEX or v.startswith("0x")
+                        else int(v)
+                    )
                 except ValueError:
                     n = None
                 if n is not None:
                     in_range = any(
-                        int(lo, 0) <= n <= int(hi, 0)
-                        for lo, hi in entry.ranges
+                        int(lo, 0) <= n <= int(hi, 0) for lo, hi in entry.ranges
                     )
                     if not in_range:
-                        errors.append(Finding(
-                            kind=FindingKind.OUT_OF_RANGE_TUNABLE,
-                            symbol=sym,
-                            detail=(
-                                f"{sym}={value!r} is outside the symbol's "
-                                f"declared range(s) {entry.ranges}."
-                            ),
-                            is_error=True,
-                        ))
+                        errors.append(
+                            Finding(
+                                kind=FindingKind.OUT_OF_RANGE_TUNABLE,
+                                symbol=sym,
+                                detail=(
+                                    f"{sym}={value!r} is outside the symbol's "
+                                    f"declared range(s) {entry.ranges}."
+                                ),
+                                is_error=True,
+                            )
+                        )
 
     # Post-olddefconfig stripped check.
     if actual is not None:
@@ -229,16 +242,18 @@ def check(
             # If the proposal said =y but olddefconfig left it =n (or
             # vice versa), it was stripped.
             if _normalize(actual_value) != _normalize(value):
-                warnings.append(Finding(
-                    kind=FindingKind.OLDDEFCONFIG_STRIPPED,
-                    symbol=sym,
-                    detail=(
-                        f"{sym} proposed as {value!r} but olddefconfig "
-                        f"resolved to {actual_value!r}. Probably a "
-                        f"dependency conflict."
-                    ),
-                    is_error=False,
-                ))
+                warnings.append(
+                    Finding(
+                        kind=FindingKind.OLDDEFCONFIG_STRIPPED,
+                        symbol=sym,
+                        detail=(
+                            f"{sym} proposed as {value!r} but olddefconfig "
+                            f"resolved to {actual_value!r}. Probably a "
+                            f"dependency conflict."
+                        ),
+                        is_error=False,
+                    )
+                )
 
     return CheckReport(errors=errors, warnings=warnings)
 

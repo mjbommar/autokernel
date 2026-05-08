@@ -9,12 +9,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 
 from autokernel.bootloader import (
     Bootloader,
     BootloaderKind,
-    detect,
     detect_with_root,
 )
 
@@ -87,7 +85,9 @@ def test_grub2_debian_regenerate_uses_update_grub_or_mkconfig(monkeypatch):
         grub_tool_prefix="",
     )
     # When update-grub is on PATH, prefer it (Debian convention)
-    monkeypatch.setattr("autokernel.bootloader.shutil.which", lambda c: f"/usr/sbin/{c}")
+    monkeypatch.setattr(
+        "autokernel.bootloader.shutil.which", lambda c: f"/usr/sbin/{c}"
+    )
     assert bl.regenerate_cmd() == ["update-grub"]
 
     # When update-grub is NOT on PATH, fall back to grub-mkconfig

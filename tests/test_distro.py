@@ -57,7 +57,7 @@ def test_manjaro_id_like_resolves_to_arch():
 
 
 def test_unknown_id_falls_back_to_unknown_family():
-    info = parse_os_release('ID=mysterydistro\n')
+    info = parse_os_release("ID=mysterydistro\n")
     assert info.id == "mysterydistro"
     assert info.family == Family.UNKNOWN
 
@@ -181,15 +181,18 @@ def test_detect_falls_back_to_unknown_when_nothing_found(tmp_path: Path):
 # ── clang as default compiler (v0.15) — every family ship clang ───────────
 
 
-@pytest.mark.parametrize("os_release_id,expected_clang_pkg", [
-    ("ubuntu",        "clang"),
-    ("debian",        "clang"),
-    ("fedora",        "clang"),
-    ("rhel",          "clang"),
-    ("arch",          "clang"),
-    ("opensuse-leap", "clang"),
-    ("alpine",        "clang"),
-])
+@pytest.mark.parametrize(
+    "os_release_id,expected_clang_pkg",
+    [
+        ("ubuntu", "clang"),
+        ("debian", "clang"),
+        ("fedora", "clang"),
+        ("rhel", "clang"),
+        ("arch", "clang"),
+        ("opensuse-leap", "clang"),
+        ("alpine", "clang"),
+    ],
+)
 def test_clang_in_every_distro_build_deps(os_release_id, expected_clang_pkg):
     """v0.15 made clang the default compiler. Every family's build_deps
     must include the clang binary's package, otherwise `autokernel
@@ -213,11 +216,15 @@ def test_lld_in_debian_family_for_native_lto():
 
 def _load_synthetic(os_id: str):
     from autokernel.distro import parse_os_release
+
     fam_map = {
-        "ubuntu": "debian", "debian": "debian",
-        "fedora": "rhel fedora", "rhel": "fedora",
+        "ubuntu": "debian",
+        "debian": "debian",
+        "fedora": "rhel fedora",
+        "rhel": "fedora",
         "arch": "arch",
-        "opensuse-leap": "opensuse suse", "opensuse-tumbleweed": "opensuse suse",
+        "opensuse-leap": "opensuse suse",
+        "opensuse-tumbleweed": "opensuse suse",
         "alpine": "alpine",
         "gentoo": "gentoo",
     }

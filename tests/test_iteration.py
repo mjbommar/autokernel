@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
-import pytest
 
 from autokernel.iteration import (
     IterationRecord,
@@ -32,8 +28,12 @@ def _record(
 ) -> IterationRecord:
     return IterationRecord(
         iteration=n,
-        ctx_summary={"workload": "desktop", "threat": "balanced",
-                     "modules": "distro", "aggression": "balanced"},
+        ctx_summary={
+            "workload": "desktop",
+            "threat": "balanced",
+            "modules": "distro",
+            "aggression": "balanced",
+        },
         proposals=proposals or ["CONFIG_X", "CONFIG_Y"],
         measurements=BuildMeasurements(
             bzimage_bytes=bzimage_bytes,
@@ -87,7 +87,7 @@ def test_summarize_renders_recent_iterations():
     history = [
         _record(1, bzimage_bytes=18_000_000, landed=12, proposed=18),
         _record(2, bzimage_bytes=16_800_000, landed=11, proposed=14),
-        _record(3, bzimage_bytes=16_500_000, landed=5,  proposed=9),
+        _record(3, bzimage_bytes=16_500_000, landed=5, proposed=9),
     ]
     text = summarize_history_for_prompt(history)
     assert "i=1" in text
@@ -202,7 +202,9 @@ def test_has_not_converged_with_missing_measurements():
     history = [
         _record(1, bzimage_bytes=18_000_000),
         IterationRecord(
-            iteration=2, ctx_summary={}, proposals=[],
+            iteration=2,
+            ctx_summary={},
+            proposals=[],
             measurements=BuildMeasurements(bzimage_bytes=None),
         ),
     ]
@@ -275,15 +277,22 @@ def test_summarize_skips_regressed_iterations_in_fitness_trend():
     text = summarize_history_for_prompt(history, target="size")
     # Guidance should be based on i=1 → i=3 (good→good), not i=1 → i=2.
     # i=1 → i=3 is shrinking (-1.25%), so we expect "shrinking" guidance.
-    assert "shrinking" in text.lower() or "going" in text.lower() or "stable" in text.lower()
+    assert (
+        "shrinking" in text.lower()
+        or "going" in text.lower()
+        or "stable" in text.lower()
+    )
 
 
 def test_fitness_trend_line_handles_missing_values():
     from autokernel.iteration import _fitness_trend_line
+
     history = [
         _record(1, bzimage_bytes=18_000_000),
         IterationRecord(
-            iteration=2, ctx_summary={}, proposals=[],
+            iteration=2,
+            ctx_summary={},
+            proposals=[],
             measurements=BuildMeasurements(bzimage_bytes=None),
         ),
     ]

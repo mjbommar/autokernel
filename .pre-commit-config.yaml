@@ -1,0 +1,32 @@
+repos:
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check
+        language: system
+        types_or: [python, pyi]
+
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format
+        language: system
+        types_or: [python, pyi]
+
+      - id: ty-check
+        name: ty check
+        entry: uv run ty check
+        language: system
+        pass_filenames: false
+
+      - id: bandit
+        name: uvx bandit
+        entry: uvx bandit -q -c pyproject.toml -r src
+        language: system
+        pass_filenames: false
+
+      - id: vulture
+        name: uvx vulture
+        entry: uvx vulture --config pyproject.toml
+        language: system
+        pass_filenames: false

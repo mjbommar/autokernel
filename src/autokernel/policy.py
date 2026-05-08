@@ -133,7 +133,9 @@ class LoadBearingSet:
         return (sym in self.symbols, self.reasons.get(sym))
 
 
-def compute_load_bearing(snap: Snapshot, resolution: ResolutionResult) -> LoadBearingSet:
+def compute_load_bearing(
+    snap: Snapshot, resolution: ResolutionResult
+) -> LoadBearingSet:
     lb = LoadBearingSet()
 
     for sym in _HARD_BLOCKLIST:

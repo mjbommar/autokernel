@@ -1,29 +1,29 @@
 """autokernel CLI — verb-by-verb pipeline.
 
-    autokernel preflight [SNAPSHOT_DIR] [--for=...]
-        Pre-flight checks: distro, build tools, libs, disk, RAM, etc.
+autokernel preflight [SNAPSHOT_DIR] [--for=...]
+    Pre-flight checks: distro, build tools, libs, disk, RAM, etc.
 
-    autokernel scan [OUTDIR]
-        Run the bash collector, parse into a Snapshot, save snapshot.json.
+autokernel scan [OUTDIR]
+    Run the bash collector, parse into a Snapshot, save snapshot.json.
 
-    autokernel propose SNAPSHOT_DIR
-        Run resolver + deterministic + LLM agent → proposal report.
+autokernel propose SNAPSHOT_DIR
+    Run resolver + deterministic + LLM agent → proposal report.
 
-    autokernel review SNAPSHOT_DIR
-        Apply bulk decision rules to the proposal; emit review.json + kfrag.
+autokernel review SNAPSHOT_DIR
+    Apply bulk decision rules to the proposal; emit review.json + kfrag.
 
-    autokernel apply SNAPSHOT_DIR
-        Merge the kfrag into the snapshot's running .config; emit final.config.
+autokernel apply SNAPSHOT_DIR
+    Merge the kfrag into the snapshot's running .config; emit final.config.
 
-    autokernel build SNAPSHOT_DIR --kernel-source PATH
-        Drop final.config into a kernel source tree; run olddefconfig;
-        optionally build a package with `make <target>` (--execute).
+autokernel build SNAPSHOT_DIR --kernel-source PATH
+    Drop final.config into a kernel source tree; run olddefconfig;
+    optionally build a package with `make <target>` (--execute).
 
-    autokernel install SNAPSHOT_DIR [--package PATH] [--execute] [--commit]
-        Distro-aware kernel package install with one-shot probation.
+autokernel install SNAPSHOT_DIR [--package PATH] [--execute] [--commit]
+    Distro-aware kernel package install with one-shot probation.
 
-    autokernel rollback SNAPSHOT_DIR [--execute]
-        Undo the most recent install: remove the package, regenerate config.
+autokernel rollback SNAPSHOT_DIR [--execute]
+    Undo the most recent install: remove the package, regenerate config.
 """
 
 from __future__ import annotations
@@ -58,7 +58,6 @@ from autokernel.kfrag import write_kfrag
 from autokernel.merge import merge_kfrag, validate_load_bearing
 from autokernel.models import (
     ConfigDiff,
-    RemovalProposal,
     Reviewer,
     ReviewSet,
 )
@@ -70,9 +69,6 @@ from autokernel.policy import (
 )
 from autokernel.resolve import candidate_trims, resolve
 from autokernel.review import (
-    AcceptRule,
-    DeferRule,
-    RejectRule,
     apply_rules,
     preset_accept_deterministic,
     preset_accept_low_risk,
@@ -152,11 +148,14 @@ def _run_dimension_passes(
     sub-pass writes its cache under ``<snapshot_dir>/batches/dim-<n>/``.
     """
     from autokernel.agent_dims import (
-        propose_choices, propose_toggles, propose_tunables,
+        propose_choices,
+        propose_toggles,
+        propose_tunables,
     )
     from autokernel.kconfig_walk import walk as walk_kconfig
     from autokernel.workload import (
-        WorkloadProfile, detect as detect_workload,
+        WorkloadProfile,
+        detect as detect_workload,
     )
 
     if skip_llm:
@@ -170,7 +169,7 @@ def _run_dimension_passes(
         raise err.fail(
             f"--dimension={','.join(sorted(requested))} requires --kernel-source",
             why="we need to walk the target kernel's Kconfig to know what's available",
-            fix=f"pass --kernel-source=<path-to-kernel-source> (e.g. ~/build/sources/linux-X.Y)",
+            fix="pass --kernel-source=<path-to-kernel-source> (e.g. ~/build/sources/linux-X.Y)",
             exit_code=2,
         )
 
@@ -195,6 +194,7 @@ def _run_dimension_passes(
 
     # Compose the four-axis context.
     from autokernel.optimize_context import context_from_flags
+
     try:
         ctx = context_from_flags(
             preset=preset,
@@ -206,6 +206,7 @@ def _run_dimension_passes(
         )
     except KeyError as e:
         from autokernel.optimize_context import PRESETS
+
         raise typer.BadParameter(
             f"unknown --preset {e.args[0]!r}. Valid: {sorted(PRESETS)}"
         )
@@ -249,45 +250,63 @@ def _run_dimension_passes(
 
     cache_root = snapshot_dir / "batches"
     out: list = []
-    kwargs = {"model": cfg.model}
-    if cfg.service_tier:
-        kwargs["service_tier"] = cfg.service_tier
 
     if "choices" in requested:
         with console.status("[cyan]choice groups…[/cyan]"):
+
             def _p(i, n, sz, *, cached=False):
                 tag = "[dim](cached)[/dim]" if cached else ""
                 console.log(f"  choice batch {i}/{n} ({sz}) {tag}")
+
             ch = propose_choices(
-                snap, surface, ctx, history_text=history_text,
+                snap,
+                surface,
+                ctx,
+                history_text=history_text,
                 cache_dir=cache_root / "dim-choices",
-                progress=_p, **kwargs,
+                progress=_p,
+                model=cfg.model,
+                service_tier=cfg.service_tier,
             )
         console.print(f"[dim]choice proposals: {len(ch)}[/dim]")
         out.extend(ch)
 
     if "toggles" in requested:
         with console.status("[cyan]bool toggles…[/cyan]"):
+
             def _p(i, n, sz, *, cached=False):
                 tag = "[dim](cached)[/dim]" if cached else ""
                 console.log(f"  toggle batch {i}/{n} ({sz}) {tag}")
+
             tg = propose_toggles(
-                snap, surface, ctx, history_text=history_text,
+                snap,
+                surface,
+                ctx,
+                history_text=history_text,
                 cache_dir=cache_root / "dim-toggles",
-                progress=_p, **kwargs,
+                progress=_p,
+                model=cfg.model,
+                service_tier=cfg.service_tier,
             )
         console.print(f"[dim]toggle proposals: {len(tg)}[/dim]")
         out.extend(tg)
 
     if "tunables" in requested:
         with console.status("[cyan]numeric tunables…[/cyan]"):
+
             def _p(i, n, sz, *, cached=False):
                 tag = "[dim](cached)[/dim]" if cached else ""
                 console.log(f"  tunable batch {i}/{n} ({sz}) {tag}")
+
             tn = propose_tunables(
-                snap, surface, ctx, history_text=history_text,
+                snap,
+                surface,
+                ctx,
+                history_text=history_text,
                 cache_dir=cache_root / "dim-tunables",
-                progress=_p, **kwargs,
+                progress=_p,
+                model=cfg.model,
+                service_tier=cfg.service_tier,
             )
         console.print(f"[dim]tunable proposals: {len(tn)}[/dim]")
         out.extend(tn)
@@ -297,7 +316,9 @@ def _run_dimension_passes(
 
 @app.command()
 def scan(
-    outdir: Annotated[Path | None, typer.Argument(help="Where to write the snapshot")] = None,
+    outdir: Annotated[
+        Path | None, typer.Argument(help="Where to write the snapshot")
+    ] = None,
 ) -> None:
     """Collect hardware/system inventory into SNAPSHOT_DIR."""
     collector = _SCRIPTS_DIR / "collect.sh"
@@ -325,21 +346,23 @@ def scan(
     snapshot_json = snapdir / "snapshot.json"
     snapshot_json.write_text(snap.model_dump_json(indent=2, exclude_none=True))
 
-    console.print(Panel.fit(
-        f"[green]✓ snapshot saved[/green]\n"
-        f"  dir:     {snapdir}\n"
-        f"  pci:     {len(snap.pci)}\n"
-        f"  usb:     {len(snap.usb)}\n"
-        f"  modaliases: {len(snap.modaliases)}\n"
-        f"  loaded modules: {len(snap.loaded_modules)}\n"
-        f"  mounts:  {len(snap.mounts)}\n"
-        f"  dkms:    {len(snap.dkms)}\n"
-        f"  initramfs modules: {len(snap.initramfs_modules)}\n"
-        f"  firmware loads: {len(snap.firmware)}\n"
-        f"  running config: {snap.running_config_path}\n"
-        f"\n[dim]next: autokernel propose {snapdir}[/dim]",
-        title="autokernel scan",
-    ))
+    console.print(
+        Panel.fit(
+            f"[green]✓ snapshot saved[/green]\n"
+            f"  dir:     {snapdir}\n"
+            f"  pci:     {len(snap.pci)}\n"
+            f"  usb:     {len(snap.usb)}\n"
+            f"  modaliases: {len(snap.modaliases)}\n"
+            f"  loaded modules: {len(snap.loaded_modules)}\n"
+            f"  mounts:  {len(snap.mounts)}\n"
+            f"  dkms:    {len(snap.dkms)}\n"
+            f"  initramfs modules: {len(snap.initramfs_modules)}\n"
+            f"  firmware loads: {len(snap.firmware)}\n"
+            f"  running config: {snap.running_config_path}\n"
+            f"\n[dim]next: autokernel propose {snapdir}[/dim]",
+            title="autokernel scan",
+        )
+    )
 
 
 def _validate_snapshot_dir(snapshot_dir: Path) -> None:
@@ -349,26 +372,115 @@ def _validate_snapshot_dir(snapshot_dir: Path) -> None:
 
 @app.command()
 def propose(
-    snapshot_dir: Annotated[Path, typer.Argument(help="Directory from `autokernel scan`")],
-    autonomy: Annotated[AutonomyLevel, typer.Option(help="How aggressive to be")] = AutonomyLevel.ADVISE,
-    skip_llm: Annotated[bool, typer.Option(help="Skip the LLM stage; only run deterministic rules")] = False,
-    max_candidates: Annotated[int, typer.Option(help="Cap the number of candidates passed to the LLM")] = 600,
-    llm_mode: Annotated[str, typer.Option("--llm-mode", help="Mode preset: auto|cheap|fast|quality. Picks the best model from a provider you have credentials for. Overridden by --model.")] = "auto",
-    model: Annotated[str | None, typer.Option(help="Literal pydantic-ai model id (e.g. 'anthropic:claude-opus-4-7'). Overrides --llm-mode.")] = None,
-    service_tier: Annotated[str | None, typer.Option(help="OpenAI service_tier: 'flex' | 'priority' | 'auto'")] = None,
-    out: Annotated[Path | None, typer.Option(help="Write proposal JSON to this path")] = None,
-    force_dkms: Annotated[bool, typer.Option(help="Allow auto-* autonomy even when DKMS modules are present (use only if you understand the rebuild risk)")] = False,
-    no_cpu_tune: Annotated[bool, typer.Option("--no-cpu-tune", help="Don't propose CPU microarch tuning (CONFIG_M<arch>=y).")] = False,
+    snapshot_dir: Annotated[
+        Path, typer.Argument(help="Directory from `autokernel scan`")
+    ],
+    autonomy: Annotated[
+        AutonomyLevel, typer.Option(help="How aggressive to be")
+    ] = AutonomyLevel.ADVISE,
+    skip_llm: Annotated[
+        bool, typer.Option(help="Skip the LLM stage; only run deterministic rules")
+    ] = False,
+    max_candidates: Annotated[
+        int, typer.Option(help="Cap the number of candidates passed to the LLM")
+    ] = 600,
+    llm_mode: Annotated[
+        str,
+        typer.Option(
+            "--llm-mode",
+            help="Mode preset: auto|cheap|fast|quality. Picks the best model from a provider you have credentials for. Overridden by --model.",
+        ),
+    ] = "auto",
+    model: Annotated[
+        str | None,
+        typer.Option(
+            help="Literal pydantic-ai model id (e.g. 'anthropic:claude-opus-4-7'). Overrides --llm-mode."
+        ),
+    ] = None,
+    service_tier: Annotated[
+        str | None,
+        typer.Option(help="OpenAI service_tier: 'flex' | 'priority' | 'auto'"),
+    ] = None,
+    out: Annotated[
+        Path | None, typer.Option(help="Write proposal JSON to this path")
+    ] = None,
+    force_dkms: Annotated[
+        bool,
+        typer.Option(
+            help="Allow auto-* autonomy even when DKMS modules are present (use only if you understand the rebuild risk)"
+        ),
+    ] = False,
+    no_cpu_tune: Annotated[
+        bool,
+        typer.Option(
+            "--no-cpu-tune",
+            help="Don't propose CPU microarch tuning (CONFIG_M<arch>=y).",
+        ),
+    ] = False,
     # ── v0.13: multi-dimensional optimization ─────────────────────────────
-    dimension: Annotated[str, typer.Option("--dimension", help="Which optimization dimensions to run. 'modules' = the existing trim path. 'choices' = pick PREEMPT/HZ/IOSCHED/etc. 'toggles' = bool perf/security knobs. 'tunables' = NR_CPUS, LOG_BUF_SHIFT etc. 'all' = run every dimension. Comma-separate to pick a subset (e.g. 'modules,toggles').")] = "modules",
-    workload: Annotated[str | None, typer.Option("--workload", help="Override the auto-detected workload profile. One of: desktop, laptop, server, vm-guest, realtime, embedded.")] = None,
-    threat: Annotated[str | None, typer.Option("--threat", help="Security threat model. One of: permissive, balanced, paranoid. Default: balanced.")] = None,
-    modules_strategy: Annotated[str | None, typer.Option("--modules", help="Module composition strategy. One of: distro, monolithic, modular. Default: distro.")] = None,
-    aggression: Annotated[str | None, typer.Option("--aggression", help="Confidence threshold for proposals. One of: conservative (≥0.85), balanced (≥0.65, default), aggressive (≥0.40).")] = None,
-    preset: Annotated[str | None, typer.Option("--preset", help="Named four-axis combination shortcut (e.g. 'gaming-desktop', 'paranoid-laptop', 'hardened-server', 'cloud-vm', 'lean-static', 'hyperoptimize'). Per-axis flags override.")] = None,
-    kernel_source: Annotated[Path | None, typer.Option("--kernel-source", help="Path to a kernel source tree. Required for --dimension={choices,toggles,tunables,all} so we can walk Kconfig and see what's available on the target kernel.")] = None,
-    history_from: Annotated[Path | None, typer.Option("--history-from", help="(closed-loop) Path to a prompt-ready iteration-history block. Prepended to dim-agent prompts so they reason about prior rounds.")] = None,
-    base_config: Annotated[Path | None, typer.Option("--base-config", help="(closed-loop) Override the .config we compare against. Default: snapshot's running_config. Pass iterations/i<N-1>/final.config to chain rounds.")] = None,
+    dimension: Annotated[
+        str,
+        typer.Option(
+            "--dimension",
+            help="Which optimization dimensions to run. 'modules' = the existing trim path. 'choices' = pick PREEMPT/HZ/IOSCHED/etc. 'toggles' = bool perf/security knobs. 'tunables' = NR_CPUS, LOG_BUF_SHIFT etc. 'all' = run every dimension. Comma-separate to pick a subset (e.g. 'modules,toggles').",
+        ),
+    ] = "modules",
+    workload: Annotated[
+        str | None,
+        typer.Option(
+            "--workload",
+            help="Override the auto-detected workload profile. One of: desktop, laptop, server, vm-guest, realtime, embedded.",
+        ),
+    ] = None,
+    threat: Annotated[
+        str | None,
+        typer.Option(
+            "--threat",
+            help="Security threat model. One of: permissive, balanced, paranoid. Default: balanced.",
+        ),
+    ] = None,
+    modules_strategy: Annotated[
+        str | None,
+        typer.Option(
+            "--modules",
+            help="Module composition strategy. One of: distro, monolithic, modular. Default: distro.",
+        ),
+    ] = None,
+    aggression: Annotated[
+        str | None,
+        typer.Option(
+            "--aggression",
+            help="Confidence threshold for proposals. One of: conservative (≥0.85), balanced (≥0.65, default), aggressive (≥0.40).",
+        ),
+    ] = None,
+    preset: Annotated[
+        str | None,
+        typer.Option(
+            "--preset",
+            help="Named four-axis combination shortcut (e.g. 'gaming-desktop', 'paranoid-laptop', 'hardened-server', 'cloud-vm', 'lean-static', 'hyperoptimize'). Per-axis flags override.",
+        ),
+    ] = None,
+    kernel_source: Annotated[
+        Path | None,
+        typer.Option(
+            "--kernel-source",
+            help="Path to a kernel source tree. Required for --dimension={choices,toggles,tunables,all} so we can walk Kconfig and see what's available on the target kernel.",
+        ),
+    ] = None,
+    history_from: Annotated[
+        Path | None,
+        typer.Option(
+            "--history-from",
+            help="(closed-loop) Path to a prompt-ready iteration-history block. Prepended to dim-agent prompts so they reason about prior rounds.",
+        ),
+    ] = None,
+    base_config: Annotated[
+        Path | None,
+        typer.Option(
+            "--base-config",
+            help="(closed-loop) Override the .config we compare against. Default: snapshot's running_config. Pass iterations/i<N-1>/final.config to chain rounds.",
+        ),
+    ] = None,
 ) -> None:
     """Generate a proposed kernel config trim from a snapshot.
 
@@ -393,10 +505,10 @@ def propose(
         _render_dkms_panel(snap.dkms)
         if autonomy in _AUTO_LEVELS and not force_dkms:
             err_console.print(
-                f"[red]DKMS modules detected[/red] — auto-* autonomy is unsafe without "
-                f"verifying they rebuild against the new kernel. Refusing.\n"
-                f"  Re-run with --autonomy=advise to review proposals manually, or "
-                f"--force-dkms to override (you'll need to test the rebuild yourself)."
+                "[red]DKMS modules detected[/red] — auto-* autonomy is unsafe without "
+                "verifying they rebuild against the new kernel. Refusing.\n"
+                "  Re-run with --autonomy=advise to review proposals manually, or "
+                "--force-dkms to override (you'll need to test the rebuild yourself)."
             )
             raise typer.Exit(3)
 
@@ -414,6 +526,7 @@ def propose(
     console.print(f"  candidate trims: {len(candidate_syms)}")
 
     from autokernel.resolve import _running_config_symbols
+
     # Closed-loop: when --base-config is given, we compare against THAT
     # so iteration N proposes on top of iteration N-1's accepted changes
     # rather than the original snapshot's running config.
@@ -425,11 +538,13 @@ def propose(
     det = deterministic_proposals(snap, candidates)
     if no_cpu_tune:
         from autokernel.models import ProposalSource as _PS
+
         det = [p for p in det if p.source != _PS.MICROARCH]
 
     # Surface CPU tune separately so the user sees what we recommended for
     # their host (and can opt out with --no-cpu-tune if they don't want it).
     from autokernel.cpu import recommend as _cpu_recommend
+
     cpu_rec = _cpu_recommend(snap.cpu, snap.kernel.release)
     if cpu_rec is not None and not no_cpu_tune:
         arch, sym = cpu_rec
@@ -486,10 +601,14 @@ def propose(
         )
 
         cache_dir = snapshot_dir / "batches"
-        with console.status(f"[cyan]asking LLM about {len(llm_pool)} candidates…[/cyan]"):
+        with console.status(
+            f"[cyan]asking LLM about {len(llm_pool)} candidates…[/cyan]"
+        ):
+
             def _progress(i: int, n: int, sz: int, *, cached: bool = False) -> None:
                 tag = "[dim](cached)[/dim]" if cached else ""
                 console.log(f"  batch {i}/{n} ({sz} symbols) {tag}")
+
             kwargs: dict = {"model": cfg.model}
             if cfg.service_tier:
                 kwargs["service_tier"] = cfg.service_tier
@@ -542,7 +661,9 @@ def propose(
     all_proposals = det + llm + extra_proposals
     load_bearing = compute_load_bearing(snap, resolution)
     pr = apply_policy(all_proposals, autonomy, load_bearing)
-    diff = to_diff(snap.running_config_path, autonomy, pr, not_considered=not_considered)
+    diff = to_diff(
+        snap.running_config_path, autonomy, pr, not_considered=not_considered
+    )
 
     # ── render + persist ────────────────────────────────────────────────
     _render_diff(diff)
@@ -556,15 +677,19 @@ def propose(
 
 
 def _render_dkms_panel(dkms: list) -> None:
-    body = "\n".join(f"  {d.name}/{d.version}  for {d.kernel}  ({d.status})" for d in dkms)
-    console.print(Panel(
-        f"[bold]DKMS modules detected[/bold]\n{body}\n\n"
-        f"[dim]These out-of-tree modules must rebuild against any new kernel "
-        f"or the kernel will fail to boot/run them. Verify rebuilds before "
-        f"installing a custom kernel.[/dim]",
-        title="DKMS",
-        border_style="yellow",
-    ))
+    body = "\n".join(
+        f"  {d.name}/{d.version}  for {d.kernel}  ({d.status})" for d in dkms
+    )
+    console.print(
+        Panel(
+            f"[bold]DKMS modules detected[/bold]\n{body}\n\n"
+            f"[dim]These out-of-tree modules must rebuild against any new kernel "
+            f"or the kernel will fail to boot/run them. Verify rebuilds before "
+            f"installing a custom kernel.[/dim]",
+            title="DKMS",
+            border_style="yellow",
+        )
+    )
 
 
 def _render_diff(diff) -> None:
@@ -600,7 +725,10 @@ def _render_diff(diff) -> None:
         tbl(f"annotations ({len(diff.annotations)})", diff.annotations, "cyan")
 
     if diff.blocked:
-        t = Table(title=f"blocked by load-bearing policy ({len(diff.blocked)})", header_style="red")
+        t = Table(
+            title=f"blocked by load-bearing policy ({len(diff.blocked)})",
+            header_style="red",
+        )
         t.add_column("symbol", style="red")
         t.add_column("would-be reason")
         t.add_column("blocked because")
@@ -619,17 +747,60 @@ def _render_diff(diff) -> None:
 
 @app.command()
 def review(
-    snapshot_dir: Annotated[Path, typer.Argument(help="Directory from `autokernel scan` (must contain proposal.json)")],
-    proposal: Annotated[Path | None, typer.Option(help="Override path to proposal.json")] = None,
-    accept_recommended: Annotated[bool, typer.Option(help="Bulk-accept everything that isn't risk=high")] = False,
-    accept_low_risk: Annotated[bool, typer.Option(help="Bulk-accept only risk=low")] = False,
-    accept_deterministic: Annotated[bool, typer.Option(help="Bulk-accept only deterministic-source proposals")] = False,
-    reject_subsystem: Annotated[list[str] | None, typer.Option("--reject-subsystem", help="Veto a whole subsystem (repeatable). Examples: crypto security kasan debug")] = None,
-    reject_pattern: Annotated[list[str] | None, typer.Option("--reject-pattern", help="Veto symbols matching glob (repeatable). Example: 'CONFIG_DEBUG_*'")] = None,
-    interactive: Annotated[bool, typer.Option("--interactive/--no-interactive", help="After bulk rules apply, open a TUI to step through remaining deferred items")] = False,
-    out: Annotated[Path | None, typer.Option(help="Where to write review.json (default: SNAPSHOT_DIR/review.json)")] = None,
-    kfrag: Annotated[Path | None, typer.Option(help="Where to write the kfrag (default: SNAPSHOT_DIR/auto.kfrag)")] = None,
-    reviewer: Annotated[Reviewer, typer.Option(help="Identity to record on each decision")] = Reviewer.POLICY,
+    snapshot_dir: Annotated[
+        Path,
+        typer.Argument(
+            help="Directory from `autokernel scan` (must contain proposal.json)"
+        ),
+    ],
+    proposal: Annotated[
+        Path | None, typer.Option(help="Override path to proposal.json")
+    ] = None,
+    accept_recommended: Annotated[
+        bool, typer.Option(help="Bulk-accept everything that isn't risk=high")
+    ] = False,
+    accept_low_risk: Annotated[
+        bool, typer.Option(help="Bulk-accept only risk=low")
+    ] = False,
+    accept_deterministic: Annotated[
+        bool, typer.Option(help="Bulk-accept only deterministic-source proposals")
+    ] = False,
+    reject_subsystem: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--reject-subsystem",
+            help="Veto a whole subsystem (repeatable). Examples: crypto security kasan debug",
+        ),
+    ] = None,
+    reject_pattern: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--reject-pattern",
+            help="Veto symbols matching glob (repeatable). Example: 'CONFIG_DEBUG_*'",
+        ),
+    ] = None,
+    interactive: Annotated[
+        bool,
+        typer.Option(
+            "--interactive/--no-interactive",
+            help="After bulk rules apply, open a TUI to step through remaining deferred items",
+        ),
+    ] = False,
+    out: Annotated[
+        Path | None,
+        typer.Option(
+            help="Where to write review.json (default: SNAPSHOT_DIR/review.json)"
+        ),
+    ] = None,
+    kfrag: Annotated[
+        Path | None,
+        typer.Option(
+            help="Where to write the kfrag (default: SNAPSHOT_DIR/auto.kfrag)"
+        ),
+    ] = None,
+    reviewer: Annotated[
+        Reviewer, typer.Option(help="Identity to record on each decision")
+    ] = Reviewer.POLICY,
 ) -> None:
     """Apply bulk decision rules to a proposal and emit a kfrag.
 
@@ -693,6 +864,7 @@ def review(
     # them from review-time decisions.
     if diff.auto_applied:
         from autokernel.models import ReviewDecision, ReviewedProposal
+
         pre_accepted = [
             ReviewedProposal(
                 proposal=p,
@@ -769,7 +941,9 @@ def _render_review(rs: ReviewSet, rule_labels: list[str]) -> None:
         t.add_column("examples", overflow="fold")
         for ss in sorted(groups, key=lambda s: -len(groups[s])):
             syms = groups[ss]
-            t.add_row(ss, str(len(syms)), ", ".join(syms[:5]) + ("…" if len(syms) > 5 else ""))
+            t.add_row(
+                ss, str(len(syms)), ", ".join(syms[:5]) + ("…" if len(syms) > 5 else "")
+            )
         console.print(t)
 
     _group_summary("accepted", rs.accepted, "green")
@@ -779,10 +953,30 @@ def _render_review(rs: ReviewSet, rule_labels: list[str]) -> None:
 
 @app.command()
 def apply(
-    snapshot_dir: Annotated[Path, typer.Argument(help="Snapshot directory containing running_config + auto.kfrag")],
-    kfrag: Annotated[Path | None, typer.Option(help="Override path to the kfrag (default: SNAPSHOT_DIR/auto.kfrag)")] = None,
-    out: Annotated[Path | None, typer.Option(help="Where to write the merged config (default: SNAPSHOT_DIR/final.config)")] = None,
-    no_validate: Annotated[bool, typer.Option(help="Skip the load-bearing validation pass (don't use unless you know what you're doing)")] = False,
+    snapshot_dir: Annotated[
+        Path,
+        typer.Argument(
+            help="Snapshot directory containing running_config + auto.kfrag"
+        ),
+    ],
+    kfrag: Annotated[
+        Path | None,
+        typer.Option(
+            help="Override path to the kfrag (default: SNAPSHOT_DIR/auto.kfrag)"
+        ),
+    ] = None,
+    out: Annotated[
+        Path | None,
+        typer.Option(
+            help="Where to write the merged config (default: SNAPSHOT_DIR/final.config)"
+        ),
+    ] = None,
+    no_validate: Annotated[
+        bool,
+        typer.Option(
+            help="Skip the load-bearing validation pass (don't use unless you know what you're doing)"
+        ),
+    ] = False,
 ) -> None:
     """Merge the snapshot's kfrag into the running .config, validate, write final.config."""
     _validate_snapshot_dir(snapshot_dir)
@@ -855,16 +1049,58 @@ def _render_validation_failures(findings) -> None:
 
 @app.command()
 def build(
-    snapshot_dir: Annotated[Path, typer.Argument(help="Snapshot directory containing final.config")],
-    kernel_source: Annotated[Path, typer.Option("--kernel-source", help="Path to a kernel source tree (must contain a top-level Makefile)")],
-    execute: Annotated[bool, typer.Option(help="Run the actual `make <target>` (default is prepare-only: drop config + olddefconfig)")] = False,
-    jobs: Annotated[int | None, typer.Option(help="Parallel make jobs (default: $(nproc))")] = None,
-    no_ccache: Annotated[bool, typer.Option(help="Disable ccache wrapping even when available")] = False,
-    target: Annotated[str, typer.Option(help="Make target for --execute. Default 'auto' picks per distro: bindeb-pkg (Debian/Ubuntu), rpm-pkg (Fedora/SUSE), targz-pkg (Arch/Gentoo/other).")] = "auto",
-    force_dkms: Annotated[bool, typer.Option(help="Allow --execute even with DKMS modules present")] = False,
-    localmodconfig: Annotated[bool, typer.Option("--localmodconfig", help="After dropping final.config, also run `make LSMOD=<snap>/lsmod localmodconfig` to disable every module not currently loaded on the host. Cuts module count ~6000→~250 on stock Ubuntu, build time 5-10× faster.")] = False,
-    compiler: Annotated[str, typer.Option("--compiler", help="Compiler toolchain. 'clang' (default; CC=clang), 'llvm' (LLVM=1: clang+lld+llvm-bin; required for clang-LTO/CFI), 'gcc'.")] = "clang",
-    lto: Annotated[str, typer.Option("--lto", help="Link-time optimization. 'none' (default, fastest builds), 'thin' (clang thin-LTO; +5-10% throughput, +30% build), 'full' (clang full-LTO; +5-12%, +200% build).")] = "none",
+    snapshot_dir: Annotated[
+        Path, typer.Argument(help="Snapshot directory containing final.config")
+    ],
+    kernel_source: Annotated[
+        Path,
+        typer.Option(
+            "--kernel-source",
+            help="Path to a kernel source tree (must contain a top-level Makefile)",
+        ),
+    ],
+    execute: Annotated[
+        bool,
+        typer.Option(
+            help="Run the actual `make <target>` (default is prepare-only: drop config + olddefconfig)"
+        ),
+    ] = False,
+    jobs: Annotated[
+        int | None, typer.Option(help="Parallel make jobs (default: $(nproc))")
+    ] = None,
+    no_ccache: Annotated[
+        bool, typer.Option(help="Disable ccache wrapping even when available")
+    ] = False,
+    target: Annotated[
+        str,
+        typer.Option(
+            help="Make target for --execute. Default 'auto' picks per distro: bindeb-pkg (Debian/Ubuntu), rpm-pkg (Fedora/SUSE), targz-pkg (Arch/Gentoo/other)."
+        ),
+    ] = "auto",
+    force_dkms: Annotated[
+        bool, typer.Option(help="Allow --execute even with DKMS modules present")
+    ] = False,
+    localmodconfig: Annotated[
+        bool,
+        typer.Option(
+            "--localmodconfig",
+            help="After dropping final.config, also run `make LSMOD=<snap>/lsmod localmodconfig` to disable every module not currently loaded on the host. Cuts module count ~6000→~250 on stock Ubuntu, build time 5-10× faster.",
+        ),
+    ] = False,
+    compiler: Annotated[
+        str,
+        typer.Option(
+            "--compiler",
+            help="Compiler toolchain. 'clang' (default; CC=clang), 'llvm' (LLVM=1: clang+lld+llvm-bin; required for clang-LTO/CFI), 'gcc'.",
+        ),
+    ] = "clang",
+    lto: Annotated[
+        str,
+        typer.Option(
+            "--lto",
+            help="Link-time optimization. 'none' (default, fastest builds), 'thin' (clang thin-LTO; +5-10% throughput, +30% build), 'full' (clang full-LTO; +5-12%, +200% build).",
+        ),
+    ] = "none",
 ) -> None:
     """Drop final.config into a kernel source tree, run olddefconfig, optionally build."""
     _validate_snapshot_dir(snapshot_dir)
@@ -881,8 +1117,8 @@ def build(
     if execute and snap.dkms and not force_dkms:
         _render_dkms_panel(snap.dkms)
         err_console.print(
-            f"[red]DKMS modules detected[/red] — refusing --execute without "
-            f"--force-dkms. Verify they rebuild against the new kernel first."
+            "[red]DKMS modules detected[/red] — refusing --execute without "
+            "--force-dkms. Verify they rebuild against the new kernel first."
         )
         raise typer.Exit(3)
 
@@ -890,16 +1126,17 @@ def build(
     # PATH. Without this, the build would die mid-make with a confusing
     # "command not found" deep in the kernel's recipe chain.
     import shutil as _shutil
+
     compiler_bin = {"clang": "clang", "llvm": "clang", "gcc": "gcc"}.get(compiler)
     if compiler_bin and _shutil.which(compiler_bin) is None:
         raise err.fail(
             f"--compiler={compiler!r} but {compiler_bin!r} is not on PATH",
             why=(
-                f"the build verb defaults to clang as of v0.15. Either install "
-                f"the toolchain (recommended) or pass --compiler=gcc to use "
-                f"the gcc fallback."
+                "the build verb defaults to clang as of v0.15. Either install "
+                "the toolchain (recommended) or pass --compiler=gcc to use "
+                "the gcc fallback."
             ),
-            fix=f"autokernel install-deps --for build --execute",
+            fix="autokernel install-deps --for build --execute",
             exit_code=2,
         )
 
@@ -940,15 +1177,17 @@ def build(
         raise typer.Exit(prep.steps[-1].exit_code)
 
     if not execute:
-        console.print(Panel.fit(
-            f"[green]✓ prepared[/green]\n"
-            f"  source:  {prep.source_dir}\n"
-            f"  config:  {prep.config_path}\n"
-            f"  logs:    {prep.log_dir}\n"
-            f"\n[dim]run with --execute to invoke `make {target}` "
-            f"(this is the slow step; ~15-60 min).[/dim]",
-            title="autokernel build (prepare-only)",
-        ))
+        console.print(
+            Panel.fit(
+                f"[green]✓ prepared[/green]\n"
+                f"  source:  {prep.source_dir}\n"
+                f"  config:  {prep.config_path}\n"
+                f"  logs:    {prep.log_dir}\n"
+                f"\n[dim]run with --execute to invoke `make {target}` "
+                f"(this is the slow step; ~15-60 min).[/dim]",
+                title="autokernel build (prepare-only)",
+            )
+        )
         return
 
     # ── execute ──────────────────────────────────────────────────────────
@@ -979,22 +1218,26 @@ def build(
 
     if bres.deb_paths:
         body = "\n".join(f"  {p}" for p in bres.deb_paths)
-        console.print(Panel.fit(
-            f"[green]✓ built[/green]\n"
-            f"  source:  {bres.source_dir}\n"
-            f"  logs:    {bres.log_dir}\n\n"
-            f"[bold]artifacts[/bold]\n{body}",
-            title="autokernel build",
-        ))
+        console.print(
+            Panel.fit(
+                f"[green]✓ built[/green]\n"
+                f"  source:  {bres.source_dir}\n"
+                f"  logs:    {bres.log_dir}\n\n"
+                f"[bold]artifacts[/bold]\n{body}",
+                title="autokernel build",
+            )
+        )
     elif bres.target == "kernel-only" and bres.bzimage_path:
         bz_size_mb = bres.bzimage_path.stat().st_size / (1024 * 1024)
-        console.print(Panel.fit(
-            f"[green]✓ built (kernel-only)[/green]\n"
-            f"  source:  {bres.source_dir}\n"
-            f"  logs:    {bres.log_dir}\n"
-            f"  bzImage: {bres.bzimage_path} ({bz_size_mb:.2f} MB)",
-            title="autokernel build",
-        ))
+        console.print(
+            Panel.fit(
+                f"[green]✓ built (kernel-only)[/green]\n"
+                f"  source:  {bres.source_dir}\n"
+                f"  logs:    {bres.log_dir}\n"
+                f"  bzImage: {bres.bzimage_path} ({bz_size_mb:.2f} MB)",
+                title="autokernel build",
+            )
+        )
     else:
         err_console.print(
             "[yellow]build returned 0 but no linux-*.deb found in source parent[/yellow]"
@@ -1021,9 +1264,20 @@ def _render_step_results(label: str, steps: list, log_dir: Path) -> None:
 
 @app.command()
 def preflight(
-    snapshot_dir: Annotated[Path | None, typer.Argument(help="Optional snapshot dir; enables snapshot-aware checks")] = None,
-    for_: Annotated[str, typer.Option("--for", help="Which verb's checks to run: all|scan|propose|apply|build|install")] = "all",
-    strict: Annotated[bool, typer.Option(help="Treat WARN as failure for the exit code")] = False,
+    snapshot_dir: Annotated[
+        Path | None,
+        typer.Argument(help="Optional snapshot dir; enables snapshot-aware checks"),
+    ] = None,
+    for_: Annotated[
+        str,
+        typer.Option(
+            "--for",
+            help="Which verb's checks to run: all|scan|propose|apply|build|install",
+        ),
+    ] = "all",
+    strict: Annotated[
+        bool, typer.Option(help="Treat WARN as failure for the exit code")
+    ] = False,
 ) -> None:
     """Run pre-flight system checks before invoking other verbs.
 
@@ -1039,17 +1293,19 @@ def preflight(
         snap = snap_mod.load(snapshot_dir)
 
     tag_map = {
-        "all":      None,
-        "scan":     {"always", "scan"},
-        "propose":  {"always", "propose"},
-        "apply":    {"always", "apply"},
-        "build":    {"always", "build"},
-        "install":  {"always", "install"},
+        "all": None,
+        "scan": {"always", "scan"},
+        "propose": {"always", "propose"},
+        "apply": {"always", "apply"},
+        "build": {"always", "build"},
+        "install": {"always", "install"},
         "boot-test": {"always", "boot-test"},
     }
     tags = tag_map.get(for_)
     if for_ not in tag_map:
-        err_console.print(f"[red]unknown --for value:[/red] {for_!r}; use one of {list(tag_map)}")
+        err_console.print(
+            f"[red]unknown --for value:[/red] {for_!r}; use one of {list(tag_map)}"
+        )
         raise typer.Exit(2)
 
     distro = detect_distro()
@@ -1065,7 +1321,9 @@ def preflight(
 
 def _render_preflight(run, *, distro, for_: str) -> None:
     console.rule(f"preflight — for={for_}")
-    console.print(f"[dim]host: {distro.pretty_name or distro.id} (family={distro.family.value})[/dim]")
+    console.print(
+        f"[dim]host: {distro.pretty_name or distro.id} (family={distro.family.value})[/dim]"
+    )
 
     sev_color = {
         preflight_mod.Severity.PASS: "green",
@@ -1110,10 +1368,22 @@ def _render_preflight(run, *, distro, for_: str) -> None:
 
 @app.command("fetch-source")
 def fetch_source_cmd(
-    kernel_version: Annotated[str | None, typer.Option("--kernel-version", help="Kernel version (e.g. 6.13.0). Defaults to running uname -r")] = None,
-    method: Annotated[FetchMethod, typer.Option(help="Acquisition method")] = FetchMethod.AUTO,
-    out: Annotated[Path, typer.Option("--out", help="Working directory for downloads + extraction")] = Path.home() / ".cache" / "autokernel" / "kernels",
-    dry_run: Annotated[bool, typer.Option(help="Print the plan without executing")] = False,
+    kernel_version: Annotated[
+        str | None,
+        typer.Option(
+            "--kernel-version",
+            help="Kernel version (e.g. 6.13.0). Defaults to running uname -r",
+        ),
+    ] = None,
+    method: Annotated[
+        FetchMethod, typer.Option(help="Acquisition method")
+    ] = FetchMethod.AUTO,
+    out: Annotated[
+        Path, typer.Option("--out", help="Working directory for downloads + extraction")
+    ] = Path.home() / ".cache" / "autokernel" / "kernels",
+    dry_run: Annotated[
+        bool, typer.Option(help="Print the plan without executing")
+    ] = False,
 ) -> None:
     """Acquire a kernel source tree distro-aware (Debian apt-get source, Fedora SRPM, kernel.org tarball, …)."""
     import os
@@ -1143,8 +1413,8 @@ def fetch_source_cmd(
 
     if plan.needs_root and os.geteuid() != 0:
         err_console.print(
-            f"[yellow]plan requires root for some steps; "
-            f"prepend `sudo` to the commands above or rerun with sudo[/yellow]"
+            "[yellow]plan requires root for some steps; "
+            "prepend `sudo` to the commands above or rerun with sudo[/yellow]"
         )
 
     try:
@@ -1189,9 +1459,15 @@ def _render_fetch_plan(plan, distro, dry_run: bool) -> None:
 
 @app.command()
 def quickstart(
-    snapshot_dir: Annotated[Path, typer.Argument(help="Where to put the snapshot + artifacts")] = Path.home() / ".local" / "share" / "autokernel" / "quickstart",
-    yes: Annotated[bool, typer.Option("--yes", "-y", help="Don't prompt; run all steps")] = False,
-    skip_llm: Annotated[bool, typer.Option(help="Skip the LLM step (free; deterministic-only proposal)")] = False,
+    snapshot_dir: Annotated[
+        Path, typer.Argument(help="Where to put the snapshot + artifacts")
+    ] = Path.home() / ".local" / "share" / "autokernel" / "quickstart",
+    yes: Annotated[
+        bool, typer.Option("--yes", "-y", help="Don't prompt; run all steps")
+    ] = False,
+    skip_llm: Annotated[
+        bool, typer.Option(help="Skip the LLM step (free; deterministic-only proposal)")
+    ] = False,
 ) -> None:
     """Guided walk-through: preflight → scan → propose → review → apply."""
     from autokernel import quickstart as quickstart_mod
@@ -1210,14 +1486,50 @@ def quickstart(
 
 @app.command()
 def install(
-    snapshot_dir: Annotated[Path, typer.Argument(help="Snapshot directory containing built package(s)")],
-    package: Annotated[list[Path] | None, typer.Option("--package", help="Path to a built package (.deb/.rpm/.pkg.tar.zst). Repeatable. If omitted, autokernel scans the snapshot dir for the most recent package.")] = None,
-    kernel_entry: Annotated[str | None, typer.Option(help="GRUB menu entry name to arm for one-shot boot. If omitted, the arm step is skipped (run --commit later instead).")] = None,
-    execute: Annotated[bool, typer.Option(help="Actually run the install. Default: dry-run.")] = False,
-    commit: Annotated[bool, typer.Option(help="Promote the running kernel to permanent default (after a successful probation boot).")] = False,
-    no_probation: Annotated[bool, typer.Option("--no-probation", help="Skip the one-shot grub-reboot step (NOT RECOMMENDED).")] = False,
-    skip_preflight: Annotated[bool, typer.Option(help="Skip pre-flight checks (use only if you've verified them yourself).")] = False,
-    skip_boot_test: Annotated[bool, typer.Option(help="Don't require a recent successful `boot-test` for this snapshot. Override only when you know what you're doing.")] = False,
+    snapshot_dir: Annotated[
+        Path, typer.Argument(help="Snapshot directory containing built package(s)")
+    ],
+    package: Annotated[
+        list[Path] | None,
+        typer.Option(
+            "--package",
+            help="Path to a built package (.deb/.rpm/.pkg.tar.zst). Repeatable. If omitted, autokernel scans the snapshot dir for the most recent package.",
+        ),
+    ] = None,
+    kernel_entry: Annotated[
+        str | None,
+        typer.Option(
+            help="GRUB menu entry name to arm for one-shot boot. If omitted, the arm step is skipped (run --commit later instead)."
+        ),
+    ] = None,
+    execute: Annotated[
+        bool, typer.Option(help="Actually run the install. Default: dry-run.")
+    ] = False,
+    commit: Annotated[
+        bool,
+        typer.Option(
+            help="Promote the running kernel to permanent default (after a successful probation boot)."
+        ),
+    ] = False,
+    no_probation: Annotated[
+        bool,
+        typer.Option(
+            "--no-probation",
+            help="Skip the one-shot grub-reboot step (NOT RECOMMENDED).",
+        ),
+    ] = False,
+    skip_preflight: Annotated[
+        bool,
+        typer.Option(
+            help="Skip pre-flight checks (use only if you've verified them yourself)."
+        ),
+    ] = False,
+    skip_boot_test: Annotated[
+        bool,
+        typer.Option(
+            help="Don't require a recent successful `boot-test` for this snapshot. Override only when you know what you're doing."
+        ),
+    ] = False,
 ) -> None:
     """Install a built kernel package with one-shot probation, or commit a successful boot."""
     import os
@@ -1231,15 +1543,21 @@ def install(
     if commit:
         if kernel_entry is None:
             kernel_entry = os.uname().release
-            console.print(f"[dim]commit: defaulting to running kernel '{kernel_entry}'[/dim]")
+            console.print(
+                f"[dim]commit: defaulting to running kernel '{kernel_entry}'[/dim]"
+            )
         plan = install_mod.build_commit_plan(
-            distro=distro, bootloader=bootloader, kernel_entry=kernel_entry,
+            distro=distro,
+            bootloader=bootloader,
+            kernel_entry=kernel_entry,
         )
         _render_install_plan(plan, distro=distro, bootloader=bootloader, mode="commit")
         if not plan.is_valid:
             raise err.hint_unsupported_bootloader(bootloader.kind.value)
         if not execute:
-            console.print("\n[dim]dry-run; pass --execute to actually run the commands[/dim]")
+            console.print(
+                "\n[dim]dry-run; pass --execute to actually run the commands[/dim]"
+            )
             return
         if os.geteuid() != 0:
             raise err.hint_not_root("`autokernel install --commit --execute`")
@@ -1267,7 +1585,9 @@ def install(
     if not skip_preflight:
         snap = snap_mod.load(snapshot_dir)
         run = preflight_mod.run_checks(
-            tags={"always", "install"}, snapshot=snap, distro=distro,
+            tags={"always", "install"},
+            snapshot=snap,
+            distro=distro,
         )
         _render_preflight(run, distro=distro, for_="install")
         if run.has_failures:
@@ -1360,24 +1680,28 @@ def install(
     _render_install_result(result)
     if not result.ok:
         raise typer.Exit(result.step_runs[-1].exit_code)
-    console.print(Panel.fit(
-        f"[green]✓ kernel installed[/green]\n"
-        f"  log dir: {result.log_dir}\n"
-        f"  record:  {result.record_path}\n\n"
-        f"[bold]next:[/bold]\n"
-        f"  reboot — the new kernel will boot ONCE (one-shot probation).\n"
-        f"  if it boots successfully:\n"
-        f"    autokernel install {snapshot_dir} --commit --execute\n"
-        f"  if it fails to boot, GRUB falls back automatically; then:\n"
-        f"    autokernel rollback {snapshot_dir} --execute",
-        title="autokernel install",
-    ))
+    console.print(
+        Panel.fit(
+            f"[green]✓ kernel installed[/green]\n"
+            f"  log dir: {result.log_dir}\n"
+            f"  record:  {result.record_path}\n\n"
+            f"[bold]next:[/bold]\n"
+            f"  reboot — the new kernel will boot ONCE (one-shot probation).\n"
+            f"  if it boots successfully:\n"
+            f"    autokernel install {snapshot_dir} --commit --execute\n"
+            f"  if it fails to boot, GRUB falls back automatically; then:\n"
+            f"    autokernel rollback {snapshot_dir} --execute",
+            title="autokernel install",
+        )
+    )
 
 
 @app.command()
 def rollback(
     snapshot_dir: Annotated[Path, typer.Argument(help="Snapshot directory")],
-    execute: Annotated[bool, typer.Option(help="Actually run the rollback. Default: dry-run.")] = False,
+    execute: Annotated[
+        bool, typer.Option(help="Actually run the rollback. Default: dry-run.")
+    ] = False,
 ) -> None:
     """Undo the most recent autokernel install for SNAPSHOT_DIR."""
     import os
@@ -1387,7 +1711,9 @@ def rollback(
     bootloader = bootloader_mod.detect()
 
     plan = rollback_mod.build_plan(
-        snapshot_dir=snapshot_dir, distro=distro, bootloader=bootloader,
+        snapshot_dir=snapshot_dir,
+        distro=distro,
+        bootloader=bootloader,
     )
     _render_rollback_plan(plan, distro=distro, bootloader=bootloader)
 
@@ -1491,7 +1817,13 @@ def _render_install_result(result) -> None:
 
 @config_app.command("show")
 def config_show(
-    spec: Annotated[str, typer.Option("--mode", help="Pretend the user passed this --llm-mode / --model and show what it'd resolve to. Default: 'auto'.")] = "auto",
+    spec: Annotated[
+        str,
+        typer.Option(
+            "--mode",
+            help="Pretend the user passed this --llm-mode / --model and show what it'd resolve to. Default: 'auto'.",
+        ),
+    ] = "auto",
 ) -> None:
     """Show the resolved LLM configuration + per-provider availability."""
     rep = llm_mod.status_report()
@@ -1519,10 +1851,7 @@ def config_show(
         if cfg.mode is not None:
             body += f"\n  mode preset: {cfg.mode.value}"
     else:
-        body = (
-            f"[red]✗ cannot resolve {spec!r}[/red]\n"
-            f"  [dim]{err_msg}[/dim]"
-        )
+        body = f"[red]✗ cannot resolve {spec!r}[/red]\n  [dim]{err_msg}[/dim]"
     console.print(Panel.fit(body, title="autokernel config (resolved)"))
 
     # Per-provider availability table.
@@ -1536,7 +1865,12 @@ def config_show(
         default_auto = defaults.get(llm_mod.LLMMode.AUTO, "—")
         env_label = ", ".join(s.env_vars)
         if s.available:
-            t.add_row(s.provider.value, env_label, f"[green]✓ {s.api_key_var}[/green]", default_auto)
+            t.add_row(
+                s.provider.value,
+                env_label,
+                f"[green]✓ {s.api_key_var}[/green]",
+                default_auto,
+            )
         else:
             t.add_row(s.provider.value, env_label, "[dim]·[/dim]", default_auto)
     console.print(t)
@@ -1556,8 +1890,15 @@ def config_show(
 
 @config_app.command("test")
 def config_test(
-    spec: Annotated[str, typer.Option("--mode", help="Mode preset or literal model id to test (default: 'auto').")] = "auto",
-    service_tier: Annotated[str | None, typer.Option("--service-tier", help="OpenAI service_tier override")] = None,
+    spec: Annotated[
+        str,
+        typer.Option(
+            "--mode", help="Mode preset or literal model id to test (default: 'auto')."
+        ),
+    ] = "auto",
+    service_tier: Annotated[
+        str | None, typer.Option("--service-tier", help="OpenAI service_tier override")
+    ] = None,
 ) -> None:
     """Send a tiny prompt to the configured model to verify credentials.
 
@@ -1601,10 +1942,32 @@ def config_test(
 
 @app.command("install-deps")
 def install_deps_cmd(
-    target: Annotated[installdeps_mod.Target, typer.Option("--for", help="What to install for: build / boot-test / install / all")] = installdeps_mod.Target.ALL,
-    execute: Annotated[bool, typer.Option(help="Actually run the install. Default: dry-run (just print the command).")] = False,
-    no_recommended: Annotated[bool, typer.Option("--no-recommended", help="Skip recommended-but-not-required packages (ccache, etc.)")] = False,
-    no_virtme: Annotated[bool, typer.Option("--no-virtme", help="Don't suggest/install virtme-ng (the boot-test enhancement)")] = False,
+    target: Annotated[
+        installdeps_mod.Target,
+        typer.Option(
+            "--for", help="What to install for: build / boot-test / install / all"
+        ),
+    ] = installdeps_mod.Target.ALL,
+    execute: Annotated[
+        bool,
+        typer.Option(
+            help="Actually run the install. Default: dry-run (just print the command)."
+        ),
+    ] = False,
+    no_recommended: Annotated[
+        bool,
+        typer.Option(
+            "--no-recommended",
+            help="Skip recommended-but-not-required packages (ccache, etc.)",
+        ),
+    ] = False,
+    no_virtme: Annotated[
+        bool,
+        typer.Option(
+            "--no-virtme",
+            help="Don't suggest/install virtme-ng (the boot-test enhancement)",
+        ),
+    ] = False,
 ) -> None:
     """Install missing system packages for build / boot-test / install.
 
@@ -1644,12 +2007,16 @@ def install_deps_cmd(
         return
 
     if not execute:
-        console.print("\n[dim]dry-run; pass --execute to actually run the commands above[/dim]")
+        console.print(
+            "\n[dim]dry-run; pass --execute to actually run the commands above[/dim]"
+        )
         return
 
     log_dir = Path.home() / ".cache" / "autokernel" / "install-deps"
     log_dir.mkdir(parents=True, exist_ok=True)
-    console.print("\n[cyan]running install plan…[/cyan] [dim](will prompt for sudo password if needed)[/dim]")
+    console.print(
+        "\n[cyan]running install plan…[/cyan] [dim](will prompt for sudo password if needed)[/dim]"
+    )
     result = installdeps_mod.execute(
         p,
         log_dir=log_dir,
@@ -1658,13 +2025,19 @@ def install_deps_cmd(
     if not result.ok:
         rc = next((r.exit_code for r in result.runs if r.exit_code != 0), 1)
         raise typer.Exit(rc)
-    console.print(Panel.fit(
-        "[green]✓ install complete[/green]\n"
-        f"  installed: {len(p.missing)} system package(s)"
-        + (f" + {len(p.optional_python_pkgs)} uv tool(s)" if p.optional_python_pkgs else "")
-        + f"\n\n[dim]next: `autokernel preflight --for {target.value}` should now be all-green[/dim]",
-        title="autokernel install-deps",
-    ))
+    console.print(
+        Panel.fit(
+            "[green]✓ install complete[/green]\n"
+            f"  installed: {len(p.missing)} system package(s)"
+            + (
+                f" + {len(p.optional_python_pkgs)} uv tool(s)"
+                if p.optional_python_pkgs
+                else ""
+            )
+            + f"\n\n[dim]next: `autokernel preflight --for {target.value}` should now be all-green[/dim]",
+            title="autokernel install-deps",
+        )
+    )
 
 
 def _render_install_deps_plan(plan_obj, *, distro) -> None:
@@ -1707,10 +2080,27 @@ def _render_install_deps_plan(plan_obj, *, distro) -> None:
 
 @app.command()
 def minitram(
-    snapshot_dir: Annotated[Path, typer.Argument(help="Snapshot directory from `autokernel scan`")],
-    out: Annotated[Path | None, typer.Option(help="Output path. Default: <snap>/initramfs.cpio.zst")] = None,
-    include_dropbear: Annotated[bool, typer.Option("--dropbear", help="Include static dropbear for headless rescue SSH (~700 KB).")] = False,
-    execute: Annotated[bool, typer.Option("--execute", help="Actually build the cpio.zst archive (default is dry-run, just print the plan).")] = False,
+    snapshot_dir: Annotated[
+        Path, typer.Argument(help="Snapshot directory from `autokernel scan`")
+    ],
+    out: Annotated[
+        Path | None,
+        typer.Option(help="Output path. Default: <snap>/initramfs.cpio.zst"),
+    ] = None,
+    include_dropbear: Annotated[
+        bool,
+        typer.Option(
+            "--dropbear",
+            help="Include static dropbear for headless rescue SSH (~700 KB).",
+        ),
+    ] = False,
+    execute: Annotated[
+        bool,
+        typer.Option(
+            "--execute",
+            help="Actually build the cpio.zst archive (default is dry-run, just print the plan).",
+        ),
+    ] = False,
 ) -> None:
     """Generate a minimal initramfs from snapshot evidence.
 
@@ -1724,6 +2114,7 @@ def minitram(
     pack the cpio.zst archive.
     """
     from autokernel import minitram as minitram_mod
+
     _validate_snapshot_dir(snapshot_dir)
     snap = snap_mod.load(snapshot_dir)
 
@@ -1737,7 +2128,9 @@ def minitram(
     for t in p.tools:
         console.print(f"    · [yellow]{t.name}[/yellow] ({t.host_path}): {t.rationale}")
         if t.libs:
-            console.print(f"        deps: {', '.join(Path(l).name for l in t.libs[:5])}")
+            console.print(
+                f"        deps: {', '.join(Path(lib).name for lib in t.libs[:5])}"
+            )
     console.print(f"  modules:   {len(p.modules)}")
     for m in p.modules[:15]:
         console.print(f"    · [cyan]{m.name}[/cyan]: {m.rationale}")
@@ -1745,7 +2138,9 @@ def minitram(
         console.print(f"    · … {len(p.modules) - 15} more")
     console.print()
     if not execute:
-        console.print("[dim]dry-run; pass --execute to actually build initramfs.cpio.zst[/dim]")
+        console.print(
+            "[dim]dry-run; pass --execute to actually build initramfs.cpio.zst[/dim]"
+        )
         return
 
     out_path = out or (snapshot_dir / "initramfs.cpio.zst")
@@ -1756,25 +2151,37 @@ def minitram(
         err_console.print(f"[red]minitram build failed: {e}[/red]")
         raise typer.Exit(1) from None
     size_mb = result.bytes / (1024 * 1024)
-    console.print(Panel.fit(
-        f"[green]✓ built[/green]\n"
-        f"  archive:   {result.archive_path}\n"
-        f"  size:      {size_mb:.2f} MB ({result.bytes:,} bytes)\n"
-        f"  modules:   {result.n_modules}\n"
-        f"  tools:     {result.n_tools}\n"
-        f"  plan:      {result.plan_path}",
-        title="autokernel minitram",
-        border_style="green",
-    ))
+    console.print(
+        Panel.fit(
+            f"[green]✓ built[/green]\n"
+            f"  archive:   {result.archive_path}\n"
+            f"  size:      {size_mb:.2f} MB ({result.bytes:,} bytes)\n"
+            f"  modules:   {result.n_modules}\n"
+            f"  tools:     {result.n_tools}\n"
+            f"  plan:      {result.plan_path}",
+            title="autokernel minitram",
+            border_style="green",
+        )
+    )
 
 
 @app.command("boot-test")
 def boot_test(
     snapshot_dir: Annotated[Path, typer.Argument(help="Snapshot directory")],
-    kernel_source: Annotated[Path, typer.Option("--kernel-source", help="Path to the kernel source tree containing the freshly-built bzImage")],
-    method: Annotated[boottest_mod.Method, typer.Option(help="virtme | qemu | auto")] = boottest_mod.Method.AUTO,
+    kernel_source: Annotated[
+        Path,
+        typer.Option(
+            "--kernel-source",
+            help="Path to the kernel source tree containing the freshly-built bzImage",
+        ),
+    ],
+    method: Annotated[
+        boottest_mod.Method, typer.Option(help="virtme | qemu | auto")
+    ] = boottest_mod.Method.AUTO,
     timeout: Annotated[float, typer.Option(help="Hard timeout in seconds")] = 60.0,
-    dry_run: Annotated[bool, typer.Option(help="Print the plan without executing")] = False,
+    dry_run: Annotated[
+        bool, typer.Option(help="Print the plan without executing")
+    ] = False,
 ) -> None:
     """Boot the freshly-built kernel in a VM to verify it works.
 
@@ -1827,7 +2234,9 @@ def boot_test(
         console.print("\n[dim]dry-run; pass without --dry-run to actually boot[/dim]")
         return
 
-    console.print(f"\n[cyan]booting kernel {plan_obj.kernel_release} via {plan_obj.method.value}…[/cyan]")
+    console.print(
+        f"\n[cyan]booting kernel {plan_obj.kernel_release} via {plan_obj.method.value}…[/cyan]"
+    )
     result = boottest_mod.execute(plan_obj, snapshot_dir=snapshot_dir)
     _render_boot_test_result(result)
     if not result.verdict.ok:
@@ -1848,27 +2257,31 @@ def _render_boot_test_plan(plan_obj) -> None:
 
 def _render_boot_test_result(result) -> None:
     if result.verdict.ok:
-        console.print(Panel.fit(
-            f"[green]✓ PASS[/green]\n"
-            f"  reason:   {result.verdict.reason}\n"
-            f"  duration: {result.duration_s:.1f}s\n"
-            f"  bzimage:  sha256:{result.bzimage_sha256[:16]}…\n"
-            f"  log:      {result.serial_log_path}\n"
-            f"  record:   {result.record_path}",
-            title="boot-test",
-            border_style="green",
-        ))
+        console.print(
+            Panel.fit(
+                f"[green]✓ PASS[/green]\n"
+                f"  reason:   {result.verdict.reason}\n"
+                f"  duration: {result.duration_s:.1f}s\n"
+                f"  bzimage:  sha256:{result.bzimage_sha256[:16]}…\n"
+                f"  log:      {result.serial_log_path}\n"
+                f"  record:   {result.record_path}",
+                title="boot-test",
+                border_style="green",
+            )
+        )
     else:
-        console.print(Panel.fit(
-            f"[red]✗ FAIL[/red]\n"
-            f"  reason:   {result.verdict.reason}\n"
-            f"  exit:     {result.exit_code}\n"
-            f"  duration: {result.duration_s:.1f}s\n"
-            f"  log:      {result.serial_log_path}\n"
-            f"  [yellow]inspect the serial log to see what went wrong[/yellow]",
-            title="boot-test",
-            border_style="red",
-        ))
+        console.print(
+            Panel.fit(
+                f"[red]✗ FAIL[/red]\n"
+                f"  reason:   {result.verdict.reason}\n"
+                f"  exit:     {result.exit_code}\n"
+                f"  duration: {result.duration_s:.1f}s\n"
+                f"  log:      {result.serial_log_path}\n"
+                f"  [yellow]inspect the serial log to see what went wrong[/yellow]",
+                title="boot-test",
+                border_style="red",
+            )
+        )
 
 
 # ── iterate (closed-loop) ─────────────────────────────────────────────────
@@ -1876,26 +2289,78 @@ def _render_boot_test_result(result) -> None:
 
 @app.command()
 def iterate(
-    snapshot_dir: Annotated[Path, typer.Argument(help="Snapshot directory from `autokernel scan`")],
-    kernel_source: Annotated[Path, typer.Option("--kernel-source", help="Kernel source tree (must contain Makefile + Kconfig)")],
-    max_iterations: Annotated[int, typer.Option("--max-iterations", help="Stop after N rounds even if not converged")] = 3,
-    target: Annotated[str, typer.Option("--target", help="Fitness function: size | boot-time | surface | balanced")] = "size",
-    converge: Annotated[str, typer.Option("--converge", help="Stop early when: stable-size | no-new-proposals | max-iter")] = "stable-size",
-    auto_revert: Annotated[bool, typer.Option("--auto-revert/--no-auto-revert", help="Revert + continue when an iteration regresses")] = True,
-    execute: Annotated[bool, typer.Option("--execute", help="Actually run the build for each iteration. Without --execute, runs propose+check+apply only (dry).")] = False,
+    snapshot_dir: Annotated[
+        Path, typer.Argument(help="Snapshot directory from `autokernel scan`")
+    ],
+    kernel_source: Annotated[
+        Path,
+        typer.Option(
+            "--kernel-source",
+            help="Kernel source tree (must contain Makefile + Kconfig)",
+        ),
+    ],
+    max_iterations: Annotated[
+        int,
+        typer.Option(
+            "--max-iterations", help="Stop after N rounds even if not converged"
+        ),
+    ] = 3,
+    target: Annotated[
+        str,
+        typer.Option(
+            "--target", help="Fitness function: size | boot-time | surface | balanced"
+        ),
+    ] = "size",
+    converge: Annotated[
+        str,
+        typer.Option(
+            "--converge",
+            help="Stop early when: stable-size | no-new-proposals | max-iter",
+        ),
+    ] = "stable-size",
+    auto_revert: Annotated[
+        bool,
+        typer.Option(
+            "--auto-revert/--no-auto-revert",
+            help="Revert + continue when an iteration regresses",
+        ),
+    ] = True,
+    execute: Annotated[
+        bool,
+        typer.Option(
+            "--execute",
+            help="Actually run the build for each iteration. Without --execute, runs propose+check+apply only (dry).",
+        ),
+    ] = False,
     # Pass-through to propose:
-    dimension: Annotated[str, typer.Option("--dimension", help="Which optimization dimensions to run.")] = "all",
+    dimension: Annotated[
+        str, typer.Option("--dimension", help="Which optimization dimensions to run.")
+    ] = "all",
     workload: Annotated[str | None, typer.Option("--workload")] = None,
     threat: Annotated[str | None, typer.Option("--threat")] = None,
     modules_strategy: Annotated[str | None, typer.Option("--modules")] = None,
     aggression: Annotated[str | None, typer.Option("--aggression")] = None,
     preset: Annotated[str | None, typer.Option("--preset")] = None,
-    autonomy: Annotated[AutonomyLevel, typer.Option(help="propose autonomy level")] = AutonomyLevel.ADVISE,
+    autonomy: Annotated[
+        AutonomyLevel, typer.Option(help="propose autonomy level")
+    ] = AutonomyLevel.ADVISE,
     llm_mode: Annotated[str, typer.Option("--llm-mode")] = "auto",
     model: Annotated[str | None, typer.Option("--model")] = None,
     service_tier: Annotated[str | None, typer.Option()] = None,
-    compiler: Annotated[str, typer.Option("--compiler", help="Compiler: clang (default) / llvm / gcc. Forwarded to each iteration's build.")] = "clang",
-    lto: Annotated[str, typer.Option("--lto", help="LTO: none (default) / thin / full. Forwarded to each iteration's build.")] = "none",
+    compiler: Annotated[
+        str,
+        typer.Option(
+            "--compiler",
+            help="Compiler: clang (default) / llvm / gcc. Forwarded to each iteration's build.",
+        ),
+    ] = "clang",
+    lto: Annotated[
+        str,
+        typer.Option(
+            "--lto",
+            help="LTO: none (default) / thin / full. Forwarded to each iteration's build.",
+        ),
+    ] = "none",
 ) -> None:
     """Run the closed-loop optimizer: propose → check → apply → build →
     boot-test → measure, for up to ``--max-iterations`` rounds.
@@ -1909,15 +2374,10 @@ def iterate(
     With ``--execute`` it goes the full distance per round.
     """
     from autokernel.iteration import (
-        IterationRecord,
-        auto_revert_set,
         has_converged,
-        iteration_dir,
         load_history,
         save_record,
-        summarize_history_for_prompt,
     )
-    from autokernel.measurements import measure
     from autokernel.optimize_context import context_from_flags
     from autokernel.workload import detect as detect_workload
 
@@ -1928,14 +2388,19 @@ def iterate(
     detection = detect_workload(snap)
     try:
         ctx = context_from_flags(
-            preset=preset, workload=workload, threat=threat,
-            modules=modules_strategy, aggression=aggression,
+            preset=preset,
+            workload=workload,
+            threat=threat,
+            modules=modules_strategy,
+            aggression=aggression,
             detected_workload=detection.profile,
         )
     except (KeyError, ValueError) as e:
         raise typer.BadParameter(str(e))
 
-    console.rule(f"iterate — target={target}, converge={converge}, max={max_iterations}")
+    console.rule(
+        f"iterate — target={target}, converge={converge}, max={max_iterations}"
+    )
     console.print(
         f"context: workload=[bold]{ctx.workload.value}[/bold] "
         f"threat=[bold]{ctx.threat.value}[/bold] "
@@ -1974,22 +2439,32 @@ def iterate(
         history.append(record)
 
         # Convergence check.
-        if converge == "stable-size" and has_converged(history, window=2, size_delta_pct=1.0):
-            console.print(f"[green]converged on size at iteration {iter_n} — stopping.[/green]")
+        if converge == "stable-size" and has_converged(
+            history, window=2, size_delta_pct=1.0
+        ):
+            console.print(
+                f"[green]converged on size at iteration {iter_n} — stopping.[/green]"
+            )
             break
         if converge == "no-new-proposals" and not record.proposals:
-            console.print(f"[green]no new proposals at iteration {iter_n} — converged.[/green]")
+            console.print(
+                f"[green]no new proposals at iteration {iter_n} — converged.[/green]"
+            )
             break
 
     # Summary.
     console.rule("iterate summary")
     if history:
-        sizes = [r.measurements.bzimage_bytes for r in history if r.measurements.bzimage_bytes]
+        sizes = [
+            r.measurements.bzimage_bytes
+            for r in history
+            if r.measurements.bzimage_bytes
+        ]
         if len(sizes) >= 2:
             delta = (sizes[-1] - sizes[0]) / sizes[0] * 100
             console.print(
                 f"  iterations: {len(history)}"
-                f"  bzImage: {sizes[0]/1e6:.2f}MB → {sizes[-1]/1e6:.2f}MB "
+                f"  bzImage: {sizes[0] / 1e6:.2f}MB → {sizes[-1] / 1e6:.2f}MB "
                 f"({delta:+.1f}%)"
             )
         passes = sum(1 for r in history if r.measurements.boot_test_passed)
@@ -2011,15 +2486,23 @@ def _run_config_check(snapshot_dir: Path, kernel_source: Path) -> tuple[int, int
     try:
         from autokernel.config_check import check
         from autokernel.kconfig_walk import walk
-        surface = walk(kernel_source, arch="x86_64",
-                       config_path=snapshot_dir.parent / "running_config" if (snapshot_dir.parent / "running_config").exists() else None)
+
+        surface = walk(
+            kernel_source,
+            arch="x86_64",
+            config_path=snapshot_dir.parent / "running_config"
+            if (snapshot_dir.parent / "running_config").exists()
+            else None,
+        )
         report = check(final_cfg.read_text(), surface)
         if report.errors:
             console.print(f"[red]config_check: {len(report.errors)} errors[/red]")
             for f in report.errors[:5]:
                 console.print(f"  [red]✗[/red] {f.symbol}: {f.detail}")
         if report.warnings:
-            console.print(f"[yellow]config_check: {len(report.warnings)} warnings[/yellow]")
+            console.print(
+                f"[yellow]config_check: {len(report.warnings)} warnings[/yellow]"
+            )
             for f in report.warnings[:3]:
                 console.print(f"  [yellow]·[/yellow] {f.symbol}: {f.detail}")
         return (len(report.errors), len(report.warnings))
@@ -2051,10 +2534,12 @@ def _run_one_iteration(
     """One iteration of the closed loop. Returns an IterationRecord."""
     import sys
     import time
-    from autokernel.iteration import IterationRecord, iteration_dir, summarize_history_for_prompt
+    from autokernel.iteration import (
+        IterationRecord,
+        iteration_dir,
+        summarize_history_for_prompt,
+    )
     from autokernel.measurements import measure
-    from autokernel.config_check import check as check_config
-    from autokernel.kconfig_walk import walk as walk_kconfig
 
     iter_dir = iteration_dir(snapshot_dir, iter_n)
     iter_dir.mkdir(parents=True, exist_ok=True)
@@ -2078,7 +2563,9 @@ def _run_one_iteration(
 
     # 1. propose — invoke the propose verb's logic with our ctx.
     _step(f"propose --dimension={dimension}")
-    history_block = summarize_history_for_prompt(history, target=target) if history else None
+    history_block = (
+        summarize_history_for_prompt(history, target=target) if history else None
+    )
     if history_block:
         console.print("[dim]" + history_block + "[/dim]")
 
@@ -2116,8 +2603,12 @@ def _run_one_iteration(
     # output dir. That keeps each iteration's artifacts separate and
     # keeps this orchestrator small.
     import subprocess
+
     proposal_argv = [
-        "uv", "run", "autokernel", "propose",
+        "uv",
+        "run",
+        "autokernel",
+        "propose",
         str(snapshot_dir),
         f"--autonomy={autonomy.value}",
         f"--dimension={dimension}",
@@ -2145,7 +2636,7 @@ def _run_one_iteration(
     # LLM batch loop.
     propose_env = {**os.environ, "PYTHONUNBUFFERED": "1"}
     rc = subprocess.run(proposal_argv, cwd=Path.cwd(), env=propose_env).returncode
-    _step(f"propose done", done=True, extra=f"({time.time() - t0:.1f}s, rc={rc})")
+    _step("propose done", done=True, extra=f"({time.time() - t0:.1f}s, rc={rc})")
 
     # propose --out wrote to iter_dir/proposal.json. The subsequent
     # review verb reads from <snap>/proposal.json — copy it across so
@@ -2159,11 +2650,15 @@ def _run_one_iteration(
         return IterationRecord(
             iteration=iter_n,
             ctx_summary={
-                "workload": ctx.workload.value, "threat": ctx.threat.value,
-                "modules": ctx.modules.value, "aggression": ctx.aggression.value,
+                "workload": ctx.workload.value,
+                "threat": ctx.threat.value,
+                "modules": ctx.modules.value,
+                "aggression": ctx.aggression.value,
             },
             proposals=[],
-            measurements=__import__("autokernel.measurements", fromlist=["BuildMeasurements"]).BuildMeasurements(),
+            measurements=__import__(
+                "autokernel.measurements", fromlist=["BuildMeasurements"]
+            ).BuildMeasurements(),
             regressed=True,
             revert_reason=f"propose returned {rc}",
         )
@@ -2182,11 +2677,18 @@ def _run_one_iteration(
         # data merging) so iteration N+1 has a real final.config to
         # chain off of via --base-config. Skip the slow build.
         import subprocess
+
         _step("review (--accept-recommended)")
         t0 = time.time()
         subprocess.run(
-            ["uv", "run", "autokernel", "review", str(snapshot_dir),
-             "--accept-recommended"],
+            [
+                "uv",
+                "run",
+                "autokernel",
+                "review",
+                str(snapshot_dir),
+                "--accept-recommended",
+            ],
             cwd=Path.cwd(),
         )
         _step("review done", done=True, extra=f"({time.time() - t0:.1f}s)")
@@ -2205,11 +2707,14 @@ def _run_one_iteration(
         progress_f.close()
 
         from autokernel.measurements import BuildMeasurements
+
         return IterationRecord(
             iteration=iter_n,
             ctx_summary={
-                "workload": ctx.workload.value, "threat": ctx.threat.value,
-                "modules": ctx.modules.value, "aggression": ctx.aggression.value,
+                "workload": ctx.workload.value,
+                "threat": ctx.threat.value,
+                "modules": ctx.modules.value,
+                "aggression": ctx.aggression.value,
             },
             proposals=proposed_syms,
             measurements=BuildMeasurements(proposed_count=len(proposed_syms)),
@@ -2220,7 +2725,11 @@ def _run_one_iteration(
     _step("review (--accept-recommended)")
     t0 = time.time()
     review_argv = [
-        "uv", "run", "autokernel", "review", str(snapshot_dir),
+        "uv",
+        "run",
+        "autokernel",
+        "review",
+        str(snapshot_dir),
         "--accept-recommended",
     ]
     subprocess.run(review_argv, cwd=Path.cwd())
@@ -2255,7 +2764,11 @@ def _run_one_iteration(
     t0 = time.time()
     build_log_path = iter_dir / "build.log"
     build_argv = [
-        "uv", "run", "autokernel", "build", str(snapshot_dir),
+        "uv",
+        "run",
+        "autokernel",
+        "build",
+        str(snapshot_dir),
         f"--kernel-source={kernel_source}",
         "--localmodconfig",
         "--execute",
@@ -2268,7 +2781,9 @@ def _run_one_iteration(
         f"--lto={lto}",
     ]
     with build_log_path.open("w") as f:
-        rc = subprocess.run(build_argv, cwd=Path.cwd(), stdout=f, stderr=subprocess.STDOUT).returncode
+        rc = subprocess.run(
+            build_argv, cwd=Path.cwd(), stdout=f, stderr=subprocess.STDOUT
+        ).returncode
     build_failed = rc != 0
 
     # Snapshot the post-build .config — the actual state the kernel
@@ -2291,7 +2806,11 @@ def _run_one_iteration(
         _step("boot-test")
         t0 = time.time()
         bt_argv = [
-            "uv", "run", "autokernel", "boot-test", str(snapshot_dir),
+            "uv",
+            "run",
+            "autokernel",
+            "boot-test",
+            str(snapshot_dir),
             f"--kernel-source={kernel_source}",
         ]
         subprocess.run(bt_argv, cwd=Path.cwd())
@@ -2304,8 +2823,16 @@ def _run_one_iteration(
     # measure() returns Nones for those fields. The proposed-vs-actual
     # diff still works against final.config + the (possibly stale)
     # source/.config; that's still informative.
-    final_cfg = (snapshot_dir / "final.config").read_text() if (snapshot_dir / "final.config").exists() else None
-    actual_cfg = (kernel_source / ".config").read_text() if (kernel_source / ".config").exists() else None
+    final_cfg = (
+        (snapshot_dir / "final.config").read_text()
+        if (snapshot_dir / "final.config").exists()
+        else None
+    )
+    actual_cfg = (
+        (kernel_source / ".config").read_text()
+        if (kernel_source / ".config").exists()
+        else None
+    )
     measurements = measure(
         snapshot_dir=snapshot_dir,
         source_dir=None if build_failed else kernel_source,
@@ -2319,7 +2846,8 @@ def _run_one_iteration(
     revert_reason = None
     if regressed and auto_revert:
         revert_reason = (
-            "build failed" if build_failed
+            "build failed"
+            if build_failed
             else f"boot test failed: {measurements.boot_failure_mode or 'unknown'}"
         )
         # Restore previous final.config from history if available.
@@ -2328,7 +2856,9 @@ def _run_one_iteration(
             prev_final = prev_dir / "final.config"
             if prev_final.exists():
                 (snapshot_dir / "final.config").write_text(prev_final.read_text())
-                console.print(f"[yellow]reverted to i={history[-1].iteration}'s final.config[/yellow]")
+                console.print(
+                    f"[yellow]reverted to i={history[-1].iteration}'s final.config[/yellow]"
+                )
 
     _step(
         f"iteration done — bzImage={measurements.bzimage_bytes}, "
@@ -2340,8 +2870,10 @@ def _run_one_iteration(
     return IterationRecord(
         iteration=iter_n,
         ctx_summary={
-            "workload": ctx.workload.value, "threat": ctx.threat.value,
-            "modules": ctx.modules.value, "aggression": ctx.aggression.value,
+            "workload": ctx.workload.value,
+            "threat": ctx.threat.value,
+            "modules": ctx.modules.value,
+            "aggression": ctx.aggression.value,
         },
         proposals=proposed_syms,
         measurements=measurements,

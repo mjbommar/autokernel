@@ -97,6 +97,7 @@ async def test_press_r_rejects_first_visible():
     async with app.run_test() as pilot:
         await pilot.press("r")
         await pilot.press("w")
+    assert app.result is not None
     assert {r.proposal.config for r in app.result.rejected} == {"CONFIG_A"}
 
 
@@ -106,6 +107,7 @@ async def test_navigation_then_decision_acts_on_navigated_item():
         await pilot.press("j")  # cursor → CONFIG_B
         await pilot.press("a")
         await pilot.press("w")
+    assert app.result is not None
     assert {r.proposal.config for r in app.result.accepted} == {"CONFIG_B"}
 
 
@@ -115,8 +117,11 @@ async def test_decision_marks_reviewer_user_only_for_touched_items():
         await pilot.press("a")  # CONFIG_A
         await pilot.press("w")
     rs = app.result
-    by_cfg = {**{r.proposal.config: r for r in rs.accepted},
-              **{r.proposal.config: r for r in rs.deferred}}
+    assert rs is not None
+    by_cfg = {
+        **{r.proposal.config: r for r in rs.accepted},
+        **{r.proposal.config: r for r in rs.deferred},
+    }
     assert by_cfg["CONFIG_A"].reviewer == Reviewer.USER
     assert by_cfg["CONFIG_A"].rule == "interactive"
     # CONFIG_B was not touched in the TUI; its rule + reviewer stay as initial.
@@ -131,25 +136,35 @@ async def test_cycle_view_eventually_shows_accepted():
     """Default view is DEFERRED; pressing `f` cycles → ALL → ACCEPTED → REJECTED."""
     rs = ReviewSet(
         base_diff_path=Path("/tmp/p.json"),
-        accepted=[ReviewedProposal(
-            proposal=_proposal("CONFIG_A"),
-            decision=ReviewDecision.ACCEPT,
-            reviewer=Reviewer.POLICY, rule="bulk",
-        )],
-        deferred=[ReviewedProposal(
-            proposal=_proposal("CONFIG_D"),
-            decision=ReviewDecision.DEFER,
-            reviewer=Reviewer.POLICY, rule="init",
-        )],
+        accepted=[
+            ReviewedProposal(
+                proposal=_proposal("CONFIG_A"),
+                decision=ReviewDecision.ACCEPT,
+                reviewer=Reviewer.POLICY,
+                rule="bulk",
+            )
+        ],
+        deferred=[
+            ReviewedProposal(
+                proposal=_proposal("CONFIG_D"),
+                decision=ReviewDecision.DEFER,
+                reviewer=Reviewer.POLICY,
+                rule="init",
+            )
+        ],
     )
     app = ReviewApp(rs)
     async with app.run_test() as pilot:
         # Default view: DEFERRED → cursor lands on CONFIG_D
-        assert app.state.current().proposal.config == "CONFIG_D"
+        current = app.state.current()
+        assert current is not None
+        assert current.proposal.config == "CONFIG_D"
         await pilot.press("f")  # → ALL
         await pilot.press("f")  # → ACCEPTED
         # Now CONFIG_A is the only visible item.
-        assert app.state.current().proposal.config == "CONFIG_A"
+        current = app.state.current()
+        assert current is not None
+        assert current.proposal.config == "CONFIG_A"
         await pilot.press("q")
 
 
@@ -173,11 +188,14 @@ async def test_decision_on_empty_view_is_safe():
     """Pressing 'a' when there's nothing visible must not crash or wedge."""
     rs = ReviewSet(  # all accepted; default view DEFERRED is empty
         base_diff_path=Path("/tmp/p.json"),
-        accepted=[ReviewedProposal(
-            proposal=_proposal("CONFIG_A"),
-            decision=ReviewDecision.ACCEPT,
-            reviewer=Reviewer.POLICY, rule="bulk",
-        )],
+        accepted=[
+            ReviewedProposal(
+                proposal=_proposal("CONFIG_A"),
+                decision=ReviewDecision.ACCEPT,
+                reviewer=Reviewer.POLICY,
+                rule="bulk",
+            )
+        ],
     )
     app = ReviewApp(rs)
     async with app.run_test() as pilot:
@@ -185,6 +203,7 @@ async def test_decision_on_empty_view_is_safe():
         await pilot.press("a")  # no-op (no visible item to act on)
         await pilot.press("w")
     # Output preserves the input.
+    assert app.result is not None
     assert len(app.result.accepted) == 1
 
 
@@ -213,5 +232,6 @@ async def test_save_complete_coverage_invariant():
         await pilot.press("w")
 
     out = app.result
+    assert out is not None
     total = len(out.accepted) + len(out.rejected) + len(out.deferred)
     assert total == 4

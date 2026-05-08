@@ -11,7 +11,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from pathlib import Path
 
-import pytest
 
 from autokernel.models import (
     BootContext,
@@ -21,7 +20,6 @@ from autokernel.models import (
     Snapshot,
 )
 from autokernel.workload import (
-    WorkloadDetection,
     WorkloadProfile,
     detect,
 )
@@ -41,7 +39,10 @@ def _bare_snap(
         snapshot_dir=Path("/tmp/snap"),
         kernel=KernelInfo(release="6.19.0-test", version="#1 SMP", arch=arch),
         cpu=CpuInfo(
-            vendor_id=vendor_id, cpu_family=6, model=170, cores=cores,
+            vendor_id=vendor_id,
+            cpu_family=6,
+            model=170,
+            cores=cores,
             flags=flags or [],
         ),
         boot=BootContext(cmdline="ro quiet"),
@@ -86,18 +87,24 @@ def test_detect_vm_guest_via_hypervisor_cpu_flag(tmp_path):
 
 def test_detect_vm_guest_via_dmi_sys_vendor(tmp_path):
     snap = _bare_snap()
-    sys_root = _make_sys(tmp_path, **{
-        "class/dmi/id/sys_vendor": "QEMU\n",
-    })
+    sys_root = _make_sys(
+        tmp_path,
+        **{
+            "class/dmi/id/sys_vendor": "QEMU\n",
+        },
+    )
     res = detect(snap, sys_root=sys_root)
     assert res.profile == WorkloadProfile.VM_GUEST
 
 
 def test_detect_vm_guest_higher_confidence_with_two_signals(tmp_path):
     snap = _bare_snap(flags=["hypervisor"])
-    sys_root = _make_sys(tmp_path, **{
-        "class/dmi/id/sys_vendor": "Amazon EC2\n",
-    })
+    sys_root = _make_sys(
+        tmp_path,
+        **{
+            "class/dmi/id/sys_vendor": "Amazon EC2\n",
+        },
+    )
     res = detect(snap, sys_root=sys_root)
     assert res.profile == WorkloadProfile.VM_GUEST
     assert res.confidence >= 0.9
@@ -105,9 +112,12 @@ def test_detect_vm_guest_higher_confidence_with_two_signals(tmp_path):
 
 def test_detect_vm_guest_amazon_ec2_partial_match(tmp_path):
     snap = _bare_snap()
-    sys_root = _make_sys(tmp_path, **{
-        "class/dmi/id/sys_vendor": "Amazon EC2\n",
-    })
+    sys_root = _make_sys(
+        tmp_path,
+        **{
+            "class/dmi/id/sys_vendor": "Amazon EC2\n",
+        },
+    )
     res = detect(snap, sys_root=sys_root)
     assert res.profile == WorkloadProfile.VM_GUEST
 
@@ -115,10 +125,13 @@ def test_detect_vm_guest_amazon_ec2_partial_match(tmp_path):
 def test_detect_vm_guest_wins_over_laptop_chassis(tmp_path):
     """Cloud images can claim portable chassis. VM-guest must win."""
     snap = _bare_snap(flags=["hypervisor"])
-    sys_root = _make_sys(tmp_path, **{
-        "class/dmi/id/chassis_type": "10\n",  # Notebook
-        "class/dmi/id/sys_vendor": "QEMU\n",
-    })
+    sys_root = _make_sys(
+        tmp_path,
+        **{
+            "class/dmi/id/chassis_type": "10\n",  # Notebook
+            "class/dmi/id/sys_vendor": "QEMU\n",
+        },
+    )
     res = detect(snap, sys_root=sys_root)
     assert res.profile == WorkloadProfile.VM_GUEST
 
@@ -128,9 +141,12 @@ def test_detect_vm_guest_wins_over_laptop_chassis(tmp_path):
 
 def test_detect_embedded_via_devicetree_and_arch(tmp_path):
     snap = _bare_snap(arch="aarch64")
-    sys_root = _make_sys(tmp_path, **{
-        "firmware/devicetree/base/.placeholder": "",
-    })
+    sys_root = _make_sys(
+        tmp_path,
+        **{
+            "firmware/devicetree/base/.placeholder": "",
+        },
+    )
     res = detect(snap, sys_root=sys_root)
     assert res.profile == WorkloadProfile.EMBEDDED
 
@@ -147,9 +163,12 @@ def test_detect_arm_only_arch_is_embedded_signal(tmp_path):
 
 def test_detect_laptop_via_chassis_type(tmp_path):
     snap = _bare_snap()
-    sys_root = _make_sys(tmp_path, **{
-        "class/dmi/id/chassis_type": "10\n",  # Notebook
-    })
+    sys_root = _make_sys(
+        tmp_path,
+        **{
+            "class/dmi/id/chassis_type": "10\n",  # Notebook
+        },
+    )
     res = detect(snap, sys_root=sys_root)
     assert res.profile == WorkloadProfile.LAPTOP
 
@@ -164,9 +183,12 @@ def test_detect_laptop_via_battery(tmp_path):
 
 def test_detect_laptop_high_confidence_with_both_signals(tmp_path):
     snap = _bare_snap()
-    root = _make_sys(tmp_path, **{
-        "class/dmi/id/chassis_type": "9\n",  # Laptop
-    })
+    root = _make_sys(
+        tmp_path,
+        **{
+            "class/dmi/id/chassis_type": "9\n",  # Laptop
+        },
+    )
     (root / "class/power_supply/BAT0").mkdir(parents=True)
     res = detect(snap, sys_root=root)
     assert res.profile == WorkloadProfile.LAPTOP
@@ -175,9 +197,12 @@ def test_detect_laptop_high_confidence_with_both_signals(tmp_path):
 
 def test_detect_laptop_chassis_31_convertible(tmp_path):
     snap = _bare_snap()
-    sys_root = _make_sys(tmp_path, **{
-        "class/dmi/id/chassis_type": "31\n",  # Convertible
-    })
+    sys_root = _make_sys(
+        tmp_path,
+        **{
+            "class/dmi/id/chassis_type": "31\n",  # Convertible
+        },
+    )
     res = detect(snap, sys_root=sys_root)
     assert res.profile == WorkloadProfile.LAPTOP
 
@@ -187,18 +212,24 @@ def test_detect_laptop_chassis_31_convertible(tmp_path):
 
 def test_detect_server_via_chassis_type(tmp_path):
     snap = _bare_snap(cores=64)
-    sys_root = _make_sys(tmp_path, **{
-        "class/dmi/id/chassis_type": "23\n",  # Rack Mount
-    })
+    sys_root = _make_sys(
+        tmp_path,
+        **{
+            "class/dmi/id/chassis_type": "23\n",  # Rack Mount
+        },
+    )
     res = detect(snap, sys_root=sys_root)
     assert res.profile == WorkloadProfile.SERVER
 
 
 def test_detect_server_via_product_family(tmp_path):
     snap = _bare_snap(cores=32)
-    sys_root = _make_sys(tmp_path, **{
-        "class/dmi/id/product_family": "PowerEdge R740\n",
-    })
+    sys_root = _make_sys(
+        tmp_path,
+        **{
+            "class/dmi/id/product_family": "PowerEdge R740\n",
+        },
+    )
     res = detect(snap, sys_root=sys_root)
     assert res.profile == WorkloadProfile.SERVER
 
@@ -222,21 +253,34 @@ def test_detect_server_does_not_fire_with_only_8_cores(tmp_path):
 
 
 def test_detect_desktop_fallback(tmp_path):
-    snap = _bare_snap(cores=8, pci=[
-        PciDevice(slot="00:02.0", vendor_id="8086", device_id="56a6", class_id="0300"),
-    ])
+    snap = _bare_snap(
+        cores=8,
+        pci=[
+            PciDevice(
+                slot="00:02.0", vendor_id="8086", device_id="56a6", class_id="0300"
+            ),
+        ],
+    )
     sys_root = _make_sys(tmp_path)
     res = detect(snap, sys_root=sys_root)
     assert res.profile == WorkloadProfile.DESKTOP
 
 
 def test_detect_desktop_via_explicit_chassis_type(tmp_path):
-    snap = _bare_snap(cores=8, pci=[
-        PciDevice(slot="00:02.0", vendor_id="8086", device_id="56a6", class_id="0300"),
-    ])
-    sys_root = _make_sys(tmp_path, **{
-        "class/dmi/id/chassis_type": "3\n",  # Desktop
-    })
+    snap = _bare_snap(
+        cores=8,
+        pci=[
+            PciDevice(
+                slot="00:02.0", vendor_id="8086", device_id="56a6", class_id="0300"
+            ),
+        ],
+    )
+    sys_root = _make_sys(
+        tmp_path,
+        **{
+            "class/dmi/id/chassis_type": "3\n",  # Desktop
+        },
+    )
     res = detect(snap, sys_root=sys_root)
     assert res.profile == WorkloadProfile.DESKTOP
     assert res.confidence > 0.8  # higher confidence with explicit chassis
@@ -266,10 +310,13 @@ def test_resolution_order_embedded_beats_laptop(tmp_path):
     """A device-tree-booted ARM laptop is still embedded (Pinebook,
     etc.) — embedded classifier sits ahead of laptop intentionally."""
     snap = _bare_snap(arch="aarch64")
-    root = _make_sys(tmp_path, **{
-        "firmware/devicetree/base/.placeholder": "",
-        "class/dmi/id/chassis_type": "10\n",
-    })
+    root = _make_sys(
+        tmp_path,
+        **{
+            "firmware/devicetree/base/.placeholder": "",
+            "class/dmi/id/chassis_type": "10\n",
+        },
+    )
     (root / "class/power_supply/BAT0").mkdir(parents=True)
     res = detect(snap, sys_root=root)
     assert res.profile == WorkloadProfile.EMBEDDED
@@ -277,9 +324,12 @@ def test_resolution_order_embedded_beats_laptop(tmp_path):
 
 def test_resolution_order_vm_beats_server_chassis(tmp_path):
     snap = _bare_snap(cores=32, flags=["hypervisor"])
-    sys_root = _make_sys(tmp_path, **{
-        "class/dmi/id/chassis_type": "23\n",
-    })
+    sys_root = _make_sys(
+        tmp_path,
+        **{
+            "class/dmi/id/chassis_type": "23\n",
+        },
+    )
     res = detect(snap, sys_root=sys_root)
     assert res.profile == WorkloadProfile.VM_GUEST
 

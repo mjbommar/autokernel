@@ -29,9 +29,9 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from collections.abc import Iterable
+from collections.abc import Callable
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
@@ -47,6 +47,7 @@ from autokernel.knowledge import (
     threat_recipes,
     workload_recipes,
 )
+from autokernel.llm import ServiceTier, normalize_service_tier
 from autokernel.models import (
     ProposalSource,
     RemovalProposal,
@@ -54,11 +55,10 @@ from autokernel.models import (
     Snapshot,
 )
 from autokernel.optimize_context import OptimizationContext
-from autokernel.workload import WorkloadProfile
 
 
 DEFAULT_MODEL = os.environ.get("AUTOKERNEL_MODEL", "anthropic:claude-sonnet-4-6")
-DEFAULT_SERVICE_TIER = os.environ.get("AUTOKERNEL_SERVICE_TIER") or None
+DEFAULT_SERVICE_TIER = normalize_service_tier(os.environ.get("AUTOKERNEL_SERVICE_TIER"))
 SYSTEM_PROMPT_VERSION = "v1"
 
 # Per-dim batch sizes. Choices are small (~6-8 options each) so we can
@@ -75,8 +75,12 @@ TUNABLE_BATCH_SIZE = int(os.environ.get("AUTOKERNEL_TUNABLE_BATCH_SIZE", "20"))
 class _ChoiceDecision(BaseModel):
     """One choice-group decision."""
 
-    choice: str = Field(description="Choice container name OR prompt — match what we sent")
-    selected_option: str = Field(description="Bare CONFIG_NAME (no CONFIG_ prefix) of the chosen option")
+    choice: str = Field(
+        description="Choice container name OR prompt — match what we sent"
+    )
+    selected_option: str = Field(
+        description="Bare CONFIG_NAME (no CONFIG_ prefix) of the chosen option"
+    )
     reason: str
     confidence: float = Field(ge=0.0, le=1.0)
 
@@ -229,13 +233,32 @@ def _evidence_block(
         spec = module_strategies[ctx.modules.value]
         lines.append(f"# Module strategy:  {spec.description}")
         lines.append(f"#   policy:         {spec.policy}")
-    lines.append(f"# Host: {snap.host}  Kernel: {snap.kernel.release}  Arch: {snap.kernel.arch}")
-    lines.append(f"# CPU: {snap.cpu.vendor_id} {snap.cpu.model_name or ''} ({snap.cpu.cores} cores)")
+    lines.append(
+        f"# Host: {snap.host}  Kernel: {snap.kernel.release}  Arch: {snap.kernel.arch}"
+    )
+    lines.append(
+        f"# CPU: {snap.cpu.vendor_id} {snap.cpu.model_name or ''} ({snap.cpu.cores} cores)"
+    )
     if snap.cpu.flags:
-        notable = [f for f in snap.cpu.flags if f in {
-            "hypervisor", "aes", "sha_ni", "rdrand", "avx", "avx2", "avx512f",
-            "vmx", "svm", "tdx_guest", "sev", "sev_es",
-        }]
+        notable = [
+            f
+            for f in snap.cpu.flags
+            if f
+            in {
+                "hypervisor",
+                "aes",
+                "sha_ni",
+                "rdrand",
+                "avx",
+                "avx2",
+                "avx512f",
+                "vmx",
+                "svm",
+                "tdx_guest",
+                "sev",
+                "sev_es",
+            }
+        ]
         if notable:
             lines.append(f"# CPU flags: {', '.join(notable)}")
     lines.append(
@@ -243,8 +266,12 @@ def _evidence_block(
         f"luks={snap.boot.luks_in_chain} root={snap.boot.root_fstype}"
     )
     if snap.pci:
-        gpu_count = sum(1 for d in snap.pci if (d.class_id or "").startswith(("0300", "0302")))
-        lines.append(f"# PCI: {len(snap.pci)} devices total, {gpu_count} display controller(s)")
+        gpu_count = sum(
+            1 for d in snap.pci if (d.class_id or "").startswith(("0300", "0302"))
+        )
+        lines.append(
+            f"# PCI: {len(snap.pci)} devices total, {gpu_count} display controller(s)"
+        )
     return "\n".join(lines)
 
 
@@ -359,10 +386,10 @@ def propose_choices(
     ctx: OptimizationContext,
     *,
     model: str = DEFAULT_MODEL,
-    service_tier: str | None = DEFAULT_SERVICE_TIER,
+    service_tier: ServiceTier | None = DEFAULT_SERVICE_TIER,
     batch_size: int = CHOICE_BATCH_SIZE,
     cache_dir: Path | None = None,
-    progress: callable | None = None,
+    progress: Callable[..., None] | None = None,
     max_choices: int | None = None,
     history_text: str | None = None,
 ) -> list[RemovalProposal]:
@@ -401,7 +428,8 @@ def propose_choices(
             for c in chunk
         )
         cache_path = (
-            cache_dir / f"choice-{_batch_cache_key(model, service_tier, batch_sig, history_text=history_text)}.json"
+            cache_dir
+            / f"choice-{_batch_cache_key(model, service_tier, batch_sig, history_text=history_text)}.json"
             if cache_dir is not None
             else None
         )
@@ -484,60 +512,122 @@ TOGGLE_ALLOWLIST: tuple[str, ...] = (
     "NUMA_BALANCING",
     "NUMA_BALANCING_DEFAULT_ENABLED",
     "SCHED_AUTOGROUP",
-    "SCHED_MC", "SCHED_SMT", "SCHED_CLUSTER", "SCHED_MC_PRIO",
+    "SCHED_MC",
+    "SCHED_SMT",
+    "SCHED_CLUSTER",
+    "SCHED_MC_PRIO",
     "HIGH_RES_TIMERS",
-    "RCU_BOOST", "RCU_NOCB_CPU", "RCU_NOCB_CPU_DEFAULT_ALL",
+    "RCU_BOOST",
+    "RCU_NOCB_CPU",
+    "RCU_NOCB_CPU_DEFAULT_ALL",
     "PREEMPT_DYNAMIC",
-    "PSI", "PSI_DEFAULT_DISABLED",
-    "LRU_GEN", "LRU_GEN_ENABLED",
-    "ZSWAP", "ZSWAP_DEFAULT_ON",
+    "PSI",
+    "PSI_DEFAULT_DISABLED",
+    "LRU_GEN",
+    "LRU_GEN_ENABLED",
+    "ZSWAP",
+    "ZSWAP_DEFAULT_ON",
     "HUGETLBFS",
     # Networking
-    "BPF_SYSCALL", "BPF_JIT", "BPF_JIT_ALWAYS_ON", "BPF_JIT_DEFAULT_ON",
+    "BPF_SYSCALL",
+    "BPF_JIT",
+    "BPF_JIT_ALWAYS_ON",
+    "BPF_JIT_DEFAULT_ON",
     "BPF_UNPRIV_DEFAULT_OFF",
     "XDP_SOCKETS",
     "TCP_CONG_BBR",
-    "NET_SCH_FQ", "NET_SCH_FQ_CODEL",
-    "RPS", "XPS", "RFS_ACCEL",
+    "NET_SCH_FQ",
+    "NET_SCH_FQ_CODEL",
+    "RPS",
+    "XPS",
+    "RFS_ACCEL",
     "NET_RX_BUSY_POLL",
     # Virt / paravirt
-    "PARAVIRT", "PARAVIRT_SPINLOCKS",
-    "KVM_GUEST", "XEN", "HYPERV", "HYPERV_GUEST",
-    "VIRTIO", "VIRTIO_PCI", "VIRTIO_BLK", "VIRTIO_NET", "VIRTIO_CONSOLE",
-    "VIRTIO_BALLOON", "VIRTIO_INPUT", "VIRTIO_FS", "VIRTIO_VSOCK",
+    "PARAVIRT",
+    "PARAVIRT_SPINLOCKS",
+    "KVM_GUEST",
+    "XEN",
+    "HYPERV",
+    "HYPERV_GUEST",
+    "VIRTIO",
+    "VIRTIO_PCI",
+    "VIRTIO_BLK",
+    "VIRTIO_NET",
+    "VIRTIO_CONSOLE",
+    "VIRTIO_BALLOON",
+    "VIRTIO_INPUT",
+    "VIRTIO_FS",
+    "VIRTIO_VSOCK",
     "HW_RANDOM_VIRTIO",
     # CPU vendor / pstate
-    "INTEL_PSTATE", "X86_AMD_PSTATE", "INTEL_IDLE",
+    "INTEL_PSTATE",
+    "X86_AMD_PSTATE",
+    "INTEL_IDLE",
     "X86_NATIVE_CPU",
     # Power management (laptops)
-    "PM", "PM_RUNTIME", "HIBERNATION", "SUSPEND",
-    "ACPI", "ACPI_AC", "ACPI_BATTERY", "ACPI_FAN", "ACPI_THERMAL",
-    "ACPI_DOCK", "ACPI_PLATFORM_PROFILE",
+    "PM",
+    "PM_RUNTIME",
+    "HIBERNATION",
+    "SUSPEND",
+    "ACPI",
+    "ACPI_AC",
+    "ACPI_BATTERY",
+    "ACPI_FAN",
+    "ACPI_THERMAL",
+    "ACPI_DOCK",
+    "ACPI_PLATFORM_PROFILE",
     "BACKLIGHT_CLASS_DEVICE",
-    "PCIEASPM", "USB_AUTOSUSPEND", "PCIE_PME",
+    "PCIEASPM",
+    "USB_AUTOSUSPEND",
+    "PCIE_PME",
     # Security / hardening
-    "RANDOM_TRUST_CPU", "RANDOM_TRUST_BOOTLOADER",
-    "INIT_ON_ALLOC_DEFAULT_ON", "INIT_ON_FREE_DEFAULT_ON",
-    "FORTIFY_SOURCE", "STACKPROTECTOR_STRONG", "VMAP_STACK",
-    "RANDOMIZE_BASE", "RANDOMIZE_MEMORY",
-    "SLAB_FREELIST_HARDENED", "SLAB_FREELIST_RANDOM",
+    "RANDOM_TRUST_CPU",
+    "RANDOM_TRUST_BOOTLOADER",
+    "INIT_ON_ALLOC_DEFAULT_ON",
+    "INIT_ON_FREE_DEFAULT_ON",
+    "FORTIFY_SOURCE",
+    "STACKPROTECTOR_STRONG",
+    "VMAP_STACK",
+    "RANDOMIZE_BASE",
+    "RANDOMIZE_MEMORY",
+    "SLAB_FREELIST_HARDENED",
+    "SLAB_FREELIST_RANDOM",
     "SHUFFLE_PAGE_ALLOCATOR",
     "HARDENED_USERCOPY",
-    "SECURITY_LOCKDOWN_LSM", "SECURITY_LANDLOCK", "SECURITY_YAMA",
-    "MODULE_SIG", "MODULE_SIG_FORCE", "MODULE_SIG_ALL",
-    "STRICT_DEVMEM", "IO_STRICT_DEVMEM",
-    "X86_X32_ABI", "IA32_EMULATION", "MODIFY_LDT_SYSCALL",
-    "PROC_KCORE", "DEVKMEM",
-    "KEXEC", "KEXEC_FILE", "KEXEC_SIG",
+    "SECURITY_LOCKDOWN_LSM",
+    "SECURITY_LANDLOCK",
+    "SECURITY_YAMA",
+    "MODULE_SIG",
+    "MODULE_SIG_FORCE",
+    "MODULE_SIG_ALL",
+    "STRICT_DEVMEM",
+    "IO_STRICT_DEVMEM",
+    "X86_X32_ABI",
+    "IA32_EMULATION",
+    "MODIFY_LDT_SYSCALL",
+    "PROC_KCORE",
+    "DEVKMEM",
+    "KEXEC",
+    "KEXEC_FILE",
+    "KEXEC_SIG",
     # Surface reduction
-    "BT", "SOUND", "INPUT_JOYDEV",
-    "DRM", "DRM_NOUVEAU",
-    "DEBUG_INFO", "DEBUG_INFO_NONE", "DEBUG_KERNEL", "DEBUG_FS",
-    "FTRACE", "KPROBES",
+    "BT",
+    "SOUND",
+    "INPUT_JOYDEV",
+    "DRM",
+    "DRM_NOUVEAU",
+    "DEBUG_INFO",
+    "DEBUG_INFO_NONE",
+    "DEBUG_KERNEL",
+    "DEBUG_FS",
+    "FTRACE",
+    "KPROBES",
     "X86_GENERIC",
     # Build / size
-    "CC_OPTIMIZE_FOR_SIZE", "CC_OPTIMIZE_FOR_PERFORMANCE",
-    "EXPERT", "EMBEDDED",
+    "CC_OPTIMIZE_FOR_SIZE",
+    "CC_OPTIMIZE_FOR_PERFORMANCE",
+    "EXPERT",
+    "EMBEDDED",
 )
 
 
@@ -580,10 +670,10 @@ def propose_toggles(
     ctx: OptimizationContext,
     *,
     model: str = DEFAULT_MODEL,
-    service_tier: str | None = DEFAULT_SERVICE_TIER,
+    service_tier: ServiceTier | None = DEFAULT_SERVICE_TIER,
     batch_size: int = TOGGLE_BATCH_SIZE,
     cache_dir: Path | None = None,
-    progress: callable | None = None,
+    progress: Callable[..., None] | None = None,
     history_text: str | None = None,
 ) -> list[RemovalProposal]:
     """Judge bool feature toggles against the four-axis context.
@@ -608,7 +698,8 @@ def propose_toggles(
 
         batch_sig = "|".join(f"{t.name}={t.current_value}" for t in chunk)
         cache_path = (
-            cache_dir / f"toggle-{_batch_cache_key(model, service_tier, batch_sig, history_text=history_text)}.json"
+            cache_dir
+            / f"toggle-{_batch_cache_key(model, service_tier, batch_sig, history_text=history_text)}.json"
             if cache_dir is not None
             else None
         )
@@ -673,7 +764,8 @@ TUNABLE_ALLOWLIST: tuple[str, ...] = (
     "LOCALVERSION",
     "PHYSICAL_START",
     "DEFAULT_MMAP_MIN_ADDR",
-    "RCU_FANOUT", "RCU_FANOUT_LEAF",
+    "RCU_FANOUT",
+    "RCU_FANOUT_LEAF",
     "MAGIC_SYSRQ_DEFAULT_ENABLE",
 )
 
@@ -703,10 +795,10 @@ def propose_tunables(
     ctx: OptimizationContext,
     *,
     model: str = DEFAULT_MODEL,
-    service_tier: str | None = DEFAULT_SERVICE_TIER,
+    service_tier: ServiceTier | None = DEFAULT_SERVICE_TIER,
     batch_size: int = TUNABLE_BATCH_SIZE,
     cache_dir: Path | None = None,
-    progress: callable | None = None,
+    progress: Callable[..., None] | None = None,
     history_text: str | None = None,
 ) -> list[RemovalProposal]:
     """Pick numeric/string values for whitelisted tunables."""
@@ -726,7 +818,8 @@ def propose_tunables(
 
         batch_sig = "|".join(f"{t.name}={t.current_value}" for t in chunk)
         cache_path = (
-            cache_dir / f"tunable-{_batch_cache_key(model, service_tier, batch_sig, history_text=history_text)}.json"
+            cache_dir
+            / f"tunable-{_batch_cache_key(model, service_tier, batch_sig, history_text=history_text)}.json"
             if cache_dir is not None
             else None
         )
@@ -785,64 +878,94 @@ def propose_tunables(
 # ── agent factories ───────────────────────────────────────────────────────
 
 
-_choice_agent: Agent | None = None
-_choice_agent_sig: tuple[str, str | None] | None = None
+_choice_agent: Agent[None, _ChoiceBatch] | None = None
+_choice_agent_sig: tuple[str, ServiceTier | None] | None = None
 
 
-def _build_choice_agent(model: str, service_tier: str | None) -> Agent[None, _ChoiceBatch]:
+def _build_choice_agent(
+    model: str, service_tier: ServiceTier | None
+) -> Agent[None, _ChoiceBatch]:
     global _choice_agent, _choice_agent_sig
     sig = (model, service_tier)
     if _choice_agent is not None and _choice_agent_sig == sig:
         return _choice_agent
     from pydantic_ai.settings import ModelSettings
-    settings = ModelSettings(service_tier=service_tier) if service_tier else ModelSettings()
-    _choice_agent = Agent(
-        model,
-        system_prompt=_CHOICE_SYSTEM_PROMPT,
-        output_type=_ChoiceBatch,
-        model_settings=settings,
+
+    settings = (
+        ModelSettings(service_tier=service_tier) if service_tier else ModelSettings()
+    )
+    _choice_agent = cast(
+        Agent[None, _ChoiceBatch],
+        Agent(
+            model,
+            system_prompt=_CHOICE_SYSTEM_PROMPT,
+            output_type=_ChoiceBatch,
+            model_settings=settings,
+        ),
     )
     _choice_agent_sig = sig
+    if _choice_agent is None:
+        raise RuntimeError("failed to initialize choice agent")
     return _choice_agent
 
 
-_toggle_agent: Agent | None = None
-_toggle_agent_sig: tuple[str, str | None] | None = None
+_toggle_agent: Agent[None, _ToggleBatch] | None = None
+_toggle_agent_sig: tuple[str, ServiceTier | None] | None = None
 
 
-def _build_toggle_agent(model: str, service_tier: str | None) -> Agent[None, _ToggleBatch]:
+def _build_toggle_agent(
+    model: str, service_tier: ServiceTier | None
+) -> Agent[None, _ToggleBatch]:
     global _toggle_agent, _toggle_agent_sig
     sig = (model, service_tier)
     if _toggle_agent is not None and _toggle_agent_sig == sig:
         return _toggle_agent
     from pydantic_ai.settings import ModelSettings
-    settings = ModelSettings(service_tier=service_tier) if service_tier else ModelSettings()
-    _toggle_agent = Agent(
-        model,
-        system_prompt=_TOGGLE_SYSTEM_PROMPT,
-        output_type=_ToggleBatch,
-        model_settings=settings,
+
+    settings = (
+        ModelSettings(service_tier=service_tier) if service_tier else ModelSettings()
+    )
+    _toggle_agent = cast(
+        Agent[None, _ToggleBatch],
+        Agent(
+            model,
+            system_prompt=_TOGGLE_SYSTEM_PROMPT,
+            output_type=_ToggleBatch,
+            model_settings=settings,
+        ),
     )
     _toggle_agent_sig = sig
+    if _toggle_agent is None:
+        raise RuntimeError("failed to initialize toggle agent")
     return _toggle_agent
 
 
-_tunable_agent: Agent | None = None
-_tunable_agent_sig: tuple[str, str | None] | None = None
+_tunable_agent: Agent[None, _TunableBatch] | None = None
+_tunable_agent_sig: tuple[str, ServiceTier | None] | None = None
 
 
-def _build_tunable_agent(model: str, service_tier: str | None) -> Agent[None, _TunableBatch]:
+def _build_tunable_agent(
+    model: str, service_tier: ServiceTier | None
+) -> Agent[None, _TunableBatch]:
     global _tunable_agent, _tunable_agent_sig
     sig = (model, service_tier)
     if _tunable_agent is not None and _tunable_agent_sig == sig:
         return _tunable_agent
     from pydantic_ai.settings import ModelSettings
-    settings = ModelSettings(service_tier=service_tier) if service_tier else ModelSettings()
-    _tunable_agent = Agent(
-        model,
-        system_prompt=_TUNABLE_SYSTEM_PROMPT,
-        output_type=_TunableBatch,
-        model_settings=settings,
+
+    settings = (
+        ModelSettings(service_tier=service_tier) if service_tier else ModelSettings()
+    )
+    _tunable_agent = cast(
+        Agent[None, _TunableBatch],
+        Agent(
+            model,
+            system_prompt=_TUNABLE_SYSTEM_PROMPT,
+            output_type=_TunableBatch,
+            model_settings=settings,
+        ),
     )
     _tunable_agent_sig = sig
+    if _tunable_agent is None:
+        raise RuntimeError("failed to initialize tunable agent")
     return _tunable_agent

@@ -158,9 +158,7 @@ def _build_env(
     or are set directly in final.config.
     """
     if compiler not in _VALID_COMPILERS:
-        raise ValueError(
-            f"unknown compiler {compiler!r}; valid: {_VALID_COMPILERS}"
-        )
+        raise ValueError(f"unknown compiler {compiler!r}; valid: {_VALID_COMPILERS}")
 
     env = os.environ.copy()
     env.setdefault("KBUILD_BUILD_TIMESTAMP", REPRO_TIMESTAMP_DEFAULT)
@@ -215,16 +213,14 @@ def _run_step(
     env_path = log_dir / f"{name}.env.log"
 
     argv_path.write_text(
-        f"# cwd: {cwd}\n"
-        f"# timeout: {timeout}\n"
-        + " ".join(repr(a) for a in argv)
-        + "\n"
+        f"# cwd: {cwd}\n# timeout: {timeout}\n" + " ".join(repr(a) for a in argv) + "\n"
     )
     env_path.write_text(
         "\n".join(
             f"{k}={v}"
             for k, v in sorted(env.items())
-            if k.startswith("KBUILD_") or k in {"CC", "HOSTCC", "ARCH", "CROSS_COMPILE", "SOURCE_DATE_EPOCH"}
+            if k.startswith("KBUILD_")
+            or k in {"CC", "HOSTCC", "ARCH", "CROSS_COMPILE", "SOURCE_DATE_EPOCH"}
         )
         + "\n"
     )
@@ -316,8 +312,10 @@ def prepare(
     _strip_missing_distro_cert_paths(target, source_dir)
 
     env = _build_env(
-        use_ccache=False, env_overrides=env_overrides,
-        compiler=compiler, lto=lto,
+        use_ccache=False,
+        env_overrides=env_overrides,
+        compiler=compiler,
+        lto=lto,
     )
     compiler_vars = _compiler_make_vars(compiler)
     steps: list[StepResult] = []
@@ -338,7 +336,9 @@ def prepare(
         lmc_env = dict(env)
         lmc_env["LSMOD"] = lsmod
         # Compose the make argv string: `make CC=clang HOSTCC=clang LSMOD=... localmodconfig`
-        make_argv_str = "make " + " ".join(compiler_vars + [f"LSMOD={lsmod}", "localmodconfig"])
+        make_argv_str = "make " + " ".join(
+            compiler_vars + [f"LSMOD={lsmod}", "localmodconfig"]
+        )
         # `make localmodconfig` prompts for input on every "new" choice
         # — pipe blank stdin to accept Kconfig defaults uniformly.
         # _run_step doesn't take stdin so we run a small shell command.
@@ -349,7 +349,8 @@ def prepare(
                 cwd=source_dir,
                 env=lmc_env,
                 log_dir=log_dir,
-                timeout=olddefconfig_timeout * 4,  # localmodconfig is heavier than olddefconfig
+                timeout=olddefconfig_timeout
+                * 4,  # localmodconfig is heavier than olddefconfig
             )
         )
         # Re-canonicalize after the trim — localmodconfig doesn't run
@@ -457,17 +458,17 @@ def build(
     """
     source_dir = Path(source_dir).resolve()
     if not (source_dir / ".config").exists():
-        raise FileNotFoundError(
-            f"{source_dir} has no .config — run prepare() first."
-        )
+        raise FileNotFoundError(f"{source_dir} has no .config — run prepare() first.")
 
     if jobs is None:
         jobs = os.cpu_count() or 4
 
     log_dir = log_dir or _new_log_dir(snapshot_dir)
     env = _build_env(
-        use_ccache=use_ccache, env_overrides=env_overrides,
-        compiler=compiler, lto=lto,
+        use_ccache=use_ccache,
+        env_overrides=env_overrides,
+        compiler=compiler,
+        lto=lto,
     )
     compiler_vars = _compiler_make_vars(compiler)
 

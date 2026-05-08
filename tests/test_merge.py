@@ -4,10 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 
 from autokernel.merge import (
-    ValidationFinding,
     merge_kfrag,
     validate_load_bearing,
 )
@@ -22,8 +20,7 @@ def test_merge_disables_y_to_not_set(tmp_path: Path):
     base = _write(tmp_path / "base", "CONFIG_FOO=y\nCONFIG_BAR=m\n")
     kfrag = _write(
         tmp_path / "k.kfrag",
-        "# autokernel-kfrag schema=1\n"
-        "# CONFIG_FOO is not set\n",
+        "# autokernel-kfrag schema=1\n# CONFIG_FOO is not set\n",
     )
     merged, report = merge_kfrag(base, kfrag)
     assert "# CONFIG_FOO is not set" in merged
@@ -56,8 +53,7 @@ def test_kfrag_wins_on_conflict(tmp_path: Path):
     base = _write(tmp_path / "b", "CONFIG_FOO=y\nCONFIG_BAR=y\n")
     kfrag = _write(
         tmp_path / "k",
-        "# CONFIG_FOO is not set\n"
-        "CONFIG_BAR=m\n",
+        "# CONFIG_FOO is not set\nCONFIG_BAR=m\n",
     )
     merged, _ = merge_kfrag(base, kfrag)
     assert "# CONFIG_FOO is not set" in merged
@@ -89,7 +85,7 @@ def test_comments_and_blanks_preserved(tmp_path: Path):
 
 def test_string_values_quoted(tmp_path: Path):
     base = _write(tmp_path / "b", 'CONFIG_LOCALVERSION=""\n')
-    kfrag = _write(tmp_path / "k", 'CONFIG_LOCALVERSION=-autokernel\n')
+    kfrag = _write(tmp_path / "k", "CONFIG_LOCALVERSION=-autokernel\n")
     merged, _ = merge_kfrag(base, kfrag)
     assert '"-autokernel"' in merged
 

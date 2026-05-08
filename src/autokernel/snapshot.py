@@ -74,7 +74,9 @@ def _parse_cpuinfo(path: Path) -> CpuInfo:
     flags = fields.get("flags", "").split()
     return CpuInfo(
         vendor_id=fields.get("vendor_id", "unknown"),
-        cpu_family=int(fields["cpu family"]) if fields.get("cpu family", "").isdigit() else None,
+        cpu_family=int(fields["cpu family"])
+        if fields.get("cpu family", "").isdigit()
+        else None,
         model=int(fields["model"]) if fields.get("model", "").isdigit() else None,
         model_name=fields.get("model name"),
         flags=flags,
@@ -178,7 +180,11 @@ def _parse_lsmod(path: Path) -> list[LoadedModule]:
             used_by = int(used_s)
         except ValueError:
             continue
-        out.append(LoadedModule(name=name, size=size, used_by_count=used_by, used_by=used_by_list))
+        out.append(
+            LoadedModule(
+                name=name, size=size, used_by_count=used_by, used_by=used_by_list
+            )
+        )
     return out
 
 
@@ -187,7 +193,11 @@ def _parse_mounts(path: Path) -> list[Mount]:
     for line in _read_lines(path):
         parts = line.split()
         if len(parts) >= 4:
-            out.append(Mount(source=parts[0], target=parts[1], fstype=parts[2], options=parts[3]))
+            out.append(
+                Mount(
+                    source=parts[0], target=parts[1], fstype=parts[2], options=parts[3]
+                )
+            )
     return out
 
 
@@ -312,7 +322,11 @@ def _detect_boot_context(snapdir: Path, mounts: list[Mount]) -> BootContext:
     cmdline = _read(snapdir / "cmdline").strip()
     cmdline_params, blacklisted = _parse_cmdline(cmdline)
 
-    efi_rc = (snapdir / "efi_present.rc").read_text().strip() if (snapdir / "efi_present.rc").exists() else "1"
+    efi_rc = (
+        (snapdir / "efi_present.rc").read_text().strip()
+        if (snapdir / "efi_present.rc").exists()
+        else "1"
+    )
     efi = efi_rc == "0"
 
     sb_text = _read(snapdir / "secureboot")
@@ -330,8 +344,10 @@ def _detect_boot_context(snapdir: Path, mounts: list[Mount]) -> BootContext:
     # cryptsetup wasn't reachable for our scan. /proc/mounts /dev/mapper/*
     # also confirms it.
     crypt_status = _read(snapdir / "crypt_status")
-    luks = bool(crypt_status.strip()) or "cryptdevice" in cmdline_params or any(
-        k.startswith("rd.luks") for k in cmdline_params
+    luks = (
+        bool(crypt_status.strip())
+        or "cryptdevice" in cmdline_params
+        or any(k.startswith("rd.luks") for k in cmdline_params)
     )
 
     return BootContext(
@@ -364,7 +380,11 @@ def load(snapshot_dir: Path | str) -> Snapshot:
     manifest = _parse_manifest(snapdir / "manifest")
     collected_at = manifest.get("collected_at")
     try:
-        ts = datetime.fromisoformat(collected_at.replace("Z", "+00:00")) if collected_at else datetime.now(UTC)
+        ts = (
+            datetime.fromisoformat(collected_at.replace("Z", "+00:00"))
+            if collected_at
+            else datetime.now(UTC)
+        )
     except (ValueError, AttributeError):
         ts = datetime.now(UTC)
 
@@ -379,7 +399,9 @@ def load(snapshot_dir: Path | str) -> Snapshot:
     mounts = _parse_mounts(snapdir / "mounts")
 
     running_cfg = snapdir / "running_config"
-    running_cfg_path = running_cfg if running_cfg.exists() and running_cfg.stat().st_size > 0 else None
+    running_cfg_path = (
+        running_cfg if running_cfg.exists() and running_cfg.stat().st_size > 0 else None
+    )
 
     def _modpath(key: str) -> Path | None:
         p = _read(snapdir / key).strip()

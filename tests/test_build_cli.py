@@ -60,7 +60,12 @@ def test_build_prepare_only_default(tmp_path: Path, captured_runs):
     assert "prepared" in result.output.lower()
     # one call: make olddefconfig
     assert len(captured_runs) == 1
-    assert captured_runs[0]["argv"] == ["make", "CC=clang", "HOSTCC=clang", "olddefconfig"]
+    assert captured_runs[0]["argv"] == [
+        "make",
+        "CC=clang",
+        "HOSTCC=clang",
+        "olddefconfig",
+    ]
     # final.config dropped into source
     assert (src / ".config").exists()
     assert "CONFIG_FOO=y" in (src / ".config").read_text()
@@ -71,26 +76,42 @@ def test_build_execute_runs_make_bindeb_pkg(tmp_path: Path, captured_runs):
     result = runner.invoke(
         app,
         [
-            "build", str(snap), "--kernel-source", str(src),
-            "--execute", "--jobs", "4", "--target", "bindeb-pkg",
+            "build",
+            str(snap),
+            "--kernel-source",
+            str(src),
+            "--execute",
+            "--jobs",
+            "4",
+            "--target",
+            "bindeb-pkg",
         ],
     )
     assert result.exit_code == 0, result.output
     # two calls: olddefconfig, then make -j4 bindeb-pkg
     assert len(captured_runs) == 2
-    assert captured_runs[1]["argv"] == ["make", "-j4", "CC=clang", "HOSTCC=clang", "bindeb-pkg"]
+    assert captured_runs[1]["argv"] == [
+        "make",
+        "-j4",
+        "CC=clang",
+        "HOSTCC=clang",
+        "bindeb-pkg",
+    ]
 
 
-def test_build_auto_target_picks_family_default(tmp_path: Path, captured_runs, monkeypatch):
+def test_build_auto_target_picks_family_default(
+    tmp_path: Path, captured_runs, monkeypatch
+):
     """--target auto should resolve via detect_distro → spec_for → build_target_default.
 
     We mock detect_distro to a known family so the test is host-agnostic.
     """
     from autokernel import cli
-    from autokernel.distro import Family, parse_os_release
+    from autokernel.distro import parse_os_release
 
     monkeypatch.setattr(
-        cli, "detect_distro",
+        cli,
+        "detect_distro",
         lambda: parse_os_release("ID=fedora\n"),
     )
     snap, src = _seed_apply_done(tmp_path)
@@ -100,7 +121,13 @@ def test_build_auto_target_picks_family_default(tmp_path: Path, captured_runs, m
     )
     assert result.exit_code == 0, result.output
     # Fedora's family default is rpm-pkg
-    assert captured_runs[1]["argv"] == ["make", "-j1", "CC=clang", "HOSTCC=clang", "rpm-pkg"]
+    assert captured_runs[1]["argv"] == [
+        "make",
+        "-j1",
+        "CC=clang",
+        "HOSTCC=clang",
+        "rpm-pkg",
+    ]
 
 
 def test_build_refuses_execute_when_dkms_present(tmp_path: Path, captured_runs):
@@ -171,9 +198,7 @@ def test_build_olddefconfig_failure_propagates(tmp_path: Path, monkeypatch):
         return _Result(2)
 
     monkeypatch.setattr(build_mod.subprocess, "run", _fake)
-    result = runner.invoke(
-        app, ["build", str(snap), "--kernel-source", str(src)]
-    )
+    result = runner.invoke(app, ["build", str(snap), "--kernel-source", str(src)])
     assert result.exit_code == 2
     assert "olddefconfig failed" in result.output.lower()
 
@@ -195,4 +220,10 @@ def test_build_target_override(tmp_path: Path, captured_runs):
         ],
     )
     assert result.exit_code == 0, result.output
-    assert captured_runs[1]["argv"] == ["make", "-j2", "CC=clang", "HOSTCC=clang", "deb-pkg"]
+    assert captured_runs[1]["argv"] == [
+        "make",
+        "-j2",
+        "CC=clang",
+        "HOSTCC=clang",
+        "deb-pkg",
+    ]

@@ -9,7 +9,7 @@ from typer.testing import CliRunner
 
 from autokernel import cli, installdeps as id_mod
 from autokernel.cli import app
-from autokernel.distro import Family, parse_os_release
+from autokernel.distro import parse_os_release
 
 runner = CliRunner()
 
@@ -17,8 +17,11 @@ runner = CliRunner()
 @pytest.fixture
 def patched_debian(monkeypatch):
     monkeypatch.setattr(
-        cli, "detect_distro",
-        lambda: parse_os_release("ID=ubuntu\nID_LIKE=debian\nPRETTY_NAME=\"Ubuntu Test\"\n"),
+        cli,
+        "detect_distro",
+        lambda: parse_os_release(
+            'ID=ubuntu\nID_LIKE=debian\nPRETTY_NAME="Ubuntu Test"\n'
+        ),
     )
 
 
@@ -55,7 +58,9 @@ def test_dry_run_renders_apt_command(monkeypatch, patched_debian, captured_runs)
     assert captured_runs == []
 
 
-def test_dry_run_when_nothing_missing_says_so(monkeypatch, patched_debian, captured_runs):
+def test_dry_run_when_nothing_missing_says_so(
+    monkeypatch, patched_debian, captured_runs
+):
     monkeypatch.setattr(id_mod, "_query_installed", lambda f, p: ([], list(p)))
     monkeypatch.setattr(id_mod, "_virtme_installed", lambda: True)
     result = runner.invoke(app, ["install-deps", "--for", "build"])
@@ -63,7 +68,9 @@ def test_dry_run_when_nothing_missing_says_so(monkeypatch, patched_debian, captu
     assert "already up to date" in result.output.lower()
 
 
-def test_boot_test_target_lists_virtme_as_optional_uv_tool(monkeypatch, patched_debian, captured_runs):
+def test_boot_test_target_lists_virtme_as_optional_uv_tool(
+    monkeypatch, patched_debian, captured_runs
+):
     monkeypatch.setattr(id_mod, "_query_installed", lambda f, p: ([], list(p)))
     monkeypatch.setattr(id_mod, "_virtme_installed", lambda: False)
     result = runner.invoke(app, ["install-deps", "--for", "boot-test"])
@@ -107,7 +114,9 @@ def test_execute_uses_uv_tool_for_virtme(monkeypatch, patched_debian, captured_r
     assert virtme_calls[0]["argv"][:3] == ["uv", "tool", "install"]
 
 
-def test_execute_idempotent_when_nothing_missing(monkeypatch, patched_debian, captured_runs):
+def test_execute_idempotent_when_nothing_missing(
+    monkeypatch, patched_debian, captured_runs
+):
     monkeypatch.setattr(id_mod, "_query_installed", lambda f, p: ([], list(p)))
     monkeypatch.setattr(id_mod, "_virtme_installed", lambda: True)
     result = runner.invoke(app, ["install-deps", "--for", "build", "--execute"])
@@ -121,7 +130,8 @@ def test_execute_idempotent_when_nothing_missing(monkeypatch, patched_debian, ca
 
 def test_unknown_distro_exits_2(monkeypatch, captured_runs):
     monkeypatch.setattr(
-        cli, "detect_distro",
+        cli,
+        "detect_distro",
         lambda: parse_os_release("ID=mystery\n"),
     )
     result = runner.invoke(app, ["install-deps"])

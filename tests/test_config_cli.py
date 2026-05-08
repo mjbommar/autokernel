@@ -6,9 +6,7 @@ tests don't touch the network or burn credits.
 
 from __future__ import annotations
 
-from typing import Any
 
-import pytest
 from typer.testing import CliRunner
 
 from autokernel import llm as llm_mod
@@ -23,7 +21,8 @@ runner = CliRunner()
 
 def test_config_show_with_anthropic_key(monkeypatch):
     monkeypatch.setattr(
-        llm_mod.os, "environ",
+        llm_mod.os,
+        "environ",
         {"ANTHROPIC_API_KEY": "sk-ant-test"},
     )
     result = runner.invoke(app, ["config", "show"])
@@ -44,7 +43,8 @@ def test_config_show_with_no_keys_prints_diagnostic(monkeypatch):
 
 def test_config_show_specific_mode(monkeypatch):
     monkeypatch.setattr(
-        llm_mod.os, "environ",
+        llm_mod.os,
+        "environ",
         {"ANTHROPIC_API_KEY": "sk-ant-test"},
     )
     result = runner.invoke(app, ["config", "show", "--mode", "cheap"])
@@ -54,7 +54,8 @@ def test_config_show_specific_mode(monkeypatch):
 
 def test_config_show_lists_all_providers_even_when_unset(monkeypatch):
     monkeypatch.setattr(
-        llm_mod.os, "environ",
+        llm_mod.os,
+        "environ",
         {"ANTHROPIC_API_KEY": "sk-ant-test"},
     )
     result = runner.invoke(app, ["config", "show"])
@@ -83,7 +84,8 @@ def _patch_test_connection(monkeypatch, ok: bool, message: str) -> list:
 
 def test_config_test_success(monkeypatch):
     monkeypatch.setattr(
-        llm_mod.os, "environ",
+        llm_mod.os,
+        "environ",
         {"ANTHROPIC_API_KEY": "sk-ant-test"},
     )
     calls = _patch_test_connection(monkeypatch, ok=True, message="got: 'ok'")
@@ -96,7 +98,8 @@ def test_config_test_success(monkeypatch):
 
 def test_config_test_failure_exits_1(monkeypatch):
     monkeypatch.setattr(
-        llm_mod.os, "environ",
+        llm_mod.os,
+        "environ",
         {"ANTHROPIC_API_KEY": "sk-ant-test"},
     )
     _patch_test_connection(monkeypatch, ok=False, message="401 invalid_api_key")
@@ -115,7 +118,8 @@ def test_config_test_no_provider_exits_1(monkeypatch):
 
 def test_config_test_with_specific_mode(monkeypatch):
     monkeypatch.setattr(
-        llm_mod.os, "environ",
+        llm_mod.os,
+        "environ",
         {"ANTHROPIC_API_KEY": "sk-ant-test"},
     )
     calls = _patch_test_connection(monkeypatch, ok=True, message="got: 'ok'")
@@ -128,7 +132,8 @@ def test_config_test_with_provider_unavailable(monkeypatch):
     """Asking to test 'openai:gpt-5' when only ANTHROPIC_API_KEY is set
     must fail clearly without invoking the LLM."""
     monkeypatch.setattr(
-        llm_mod.os, "environ",
+        llm_mod.os,
+        "environ",
         {"ANTHROPIC_API_KEY": "sk-ant-test"},
     )
     calls = _patch_test_connection(monkeypatch, ok=True, message="should not be called")

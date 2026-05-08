@@ -29,13 +29,13 @@ from pathlib import Path
 
 
 class Family(str, Enum):
-    DEBIAN = "debian"   # Debian, Ubuntu, Mint, Pop!_OS, KDE neon, …
-    FEDORA = "fedora"   # Fedora, RHEL, CentOS Stream, Rocky, AlmaLinux, Oracle Linux
-    ARCH = "arch"       # Arch, Manjaro, EndeavourOS, …
-    SUSE = "suse"       # openSUSE Leap/Tumbleweed, SLES
-    GENTOO = "gentoo"   # Gentoo
-    ALPINE = "alpine"   # Alpine
-    NIXOS = "nixos"     # NixOS (special case — autokernel mostly doesn't apply)
+    DEBIAN = "debian"  # Debian, Ubuntu, Mint, Pop!_OS, KDE neon, …
+    FEDORA = "fedora"  # Fedora, RHEL, CentOS Stream, Rocky, AlmaLinux, Oracle Linux
+    ARCH = "arch"  # Arch, Manjaro, EndeavourOS, …
+    SUSE = "suse"  # openSUSE Leap/Tumbleweed, SLES
+    GENTOO = "gentoo"  # Gentoo
+    ALPINE = "alpine"  # Alpine
+    NIXOS = "nixos"  # NixOS (special case — autokernel mostly doesn't apply)
     UNKNOWN = "unknown"
 
 
@@ -58,8 +58,8 @@ _ID_TO_FAMILY: dict[str, Family] = {
     "centos": Family.FEDORA,
     "rocky": Family.FEDORA,
     "almalinux": Family.FEDORA,
-    "ol": Family.FEDORA,            # Oracle Linux
-    "amzn": Family.FEDORA,          # Amazon Linux
+    "ol": Family.FEDORA,  # Oracle Linux
+    "amzn": Family.FEDORA,  # Amazon Linux
     # Arch family
     "arch": Family.ARCH,
     "manjaro": Family.ARCH,
@@ -217,17 +217,29 @@ _SPECS: dict[Family, DistroSpec] = {
         source_install_cmd=("apt", "install", "-y"),
         apt_get_source_supported=True,
         build_deps=(
-            "build-essential", "flex", "bison", "bc", "libssl-dev",
+            "build-essential",
+            "flex",
+            "bison",
+            "bc",
+            "libssl-dev",
             # libdw-dev provides <dwarf.h> for kernel >= 6.19's gendwarfksyms;
             # libelf-dev is the long-standing requirement for the rest of the build.
-            "libelf-dev", "libdw-dev", "libncurses-dev", "dwarves", "zstd", "kmod",
-            "cpio", "rsync",
+            "libelf-dev",
+            "libdw-dev",
+            "libncurses-dev",
+            "dwarves",
+            "zstd",
+            "kmod",
+            "cpio",
+            "rsync",
             # debhelper + libdw-dev:native are required by `make bindeb-pkg` to
             # build the .deb packages (dpkg-checkbuilddeps enforces them).
             "debhelper",
             # v0.15: clang/lld/llvm — required for the default compiler;
             # also required for CFI_CLANG, LTO_CLANG_*, and KCSAN.
-            "clang", "lld", "llvm",
+            "clang",
+            "lld",
+            "llvm",
         ),
         build_target_default="bindeb-pkg",
         kernel_config_path_pattern="/boot/config-{release}",
@@ -240,13 +252,27 @@ _SPECS: dict[Family, DistroSpec] = {
         install_cmd=("dnf", "install", "-y"),
         source_install_cmd=None,  # Fedora ships kernel-source via SRPM, not a binary pkg
         build_deps=(
-            "gcc", "make", "flex", "bison", "bc", "openssl-devel",
+            "gcc",
+            "make",
+            "flex",
+            "bison",
+            "bc",
+            "openssl-devel",
             # elfutils-devel provides <dwarf.h> (gendwarfksyms on 6.19+);
             # elfutils-libelf-devel is the older libelf header set.
-            "elfutils-libelf-devel", "elfutils-devel", "ncurses-devel",
-            "dwarves", "zstd", "kmod", "cpio", "rsync", "perl",
+            "elfutils-libelf-devel",
+            "elfutils-devel",
+            "ncurses-devel",
+            "dwarves",
+            "zstd",
+            "kmod",
+            "cpio",
+            "rsync",
+            "perl",
             # v0.15: clang as default compiler.
-            "clang", "lld", "llvm",
+            "clang",
+            "lld",
+            "llvm",
         ),
         build_target_default="rpm-pkg",
         kernel_config_path_pattern="/boot/config-{release}",
@@ -260,11 +286,24 @@ _SPECS: dict[Family, DistroSpec] = {
         install_cmd=("pacman", "-S", "--noconfirm"),
         source_install_cmd=None,  # No bundled kernel-source pkg — use kernel.org
         build_deps=(
-            "base-devel", "flex", "bison", "bc", "openssl",
+            "base-devel",
+            "flex",
+            "bison",
+            "bc",
+            "openssl",
             # libelf has libelf.h; libdw has <dwarf.h> for gendwarfksyms (6.19+).
-            "libelf", "libdw", "ncurses", "pahole", "zstd", "kmod", "cpio", "rsync",
+            "libelf",
+            "libdw",
+            "ncurses",
+            "pahole",
+            "zstd",
+            "kmod",
+            "cpio",
+            "rsync",
             # v0.15: clang/lld/llvm.
-            "clang", "lld", "llvm",
+            "clang",
+            "lld",
+            "llvm",
         ),
         build_target_default="tarzst-pkg",  # closest to a "loose tarball" target
         kernel_config_path_pattern="/boot/config-{release}",
@@ -277,11 +316,22 @@ _SPECS: dict[Family, DistroSpec] = {
         install_cmd=("zypper", "install", "-y"),
         source_install_cmd=("zypper", "install", "-y"),
         build_deps=(
-            "gcc", "make", "flex", "bison", "bc", "libopenssl-devel",
+            "gcc",
+            "make",
+            "flex",
+            "bison",
+            "bc",
+            "libopenssl-devel",
             # libdw-devel adds <dwarf.h> for gendwarfksyms (6.19+).
-            "libelf-devel", "libdw-devel", "ncurses-devel", "dwarves", "zstd",
+            "libelf-devel",
+            "libdw-devel",
+            "ncurses-devel",
+            "dwarves",
+            "zstd",
             # v0.15: clang as default compiler.
-            "clang", "lld", "llvm",
+            "clang",
+            "lld",
+            "llvm",
         ),
         build_target_default="rpm-pkg",
         kernel_config_path_pattern="/boot/config-{release}",
@@ -294,13 +344,21 @@ _SPECS: dict[Family, DistroSpec] = {
         install_cmd=("emerge",),
         source_install_cmd=("emerge", "sys-kernel/gentoo-sources"),
         build_deps=(
-            "sys-devel/gcc", "sys-devel/make", "sys-devel/flex",
-            "sys-devel/bison", "sys-devel/bc", "dev-libs/openssl",
+            "sys-devel/gcc",
+            "sys-devel/make",
+            "sys-devel/flex",
+            "sys-devel/bison",
+            "sys-devel/bc",
+            "dev-libs/openssl",
             # dev-libs/elfutils provides <dwarf.h> for gendwarfksyms (6.19+).
-            "virtual/libelf", "dev-libs/elfutils", "sys-libs/ncurses",
+            "virtual/libelf",
+            "dev-libs/elfutils",
+            "sys-libs/ncurses",
             "dev-util/dwarves",
             # v0.15: clang as default compiler.
-            "sys-devel/clang", "sys-devel/lld", "sys-devel/llvm",
+            "sys-devel/clang",
+            "sys-devel/lld",
+            "sys-devel/llvm",
         ),
         build_target_default="targz-pkg",
         kernel_config_path_pattern="/usr/src/linux/.config",
@@ -313,12 +371,20 @@ _SPECS: dict[Family, DistroSpec] = {
         install_cmd=("apk", "add"),
         source_install_cmd=None,
         build_deps=(
-            "build-base", "flex", "bison", "bc", "openssl-dev",
+            "build-base",
+            "flex",
+            "bison",
+            "bc",
+            "openssl-dev",
             # elfutils-dev on Alpine bundles libdw + libelf headers — covers
             # <dwarf.h> for gendwarfksyms (6.19+) without a separate package.
-            "elfutils-dev", "ncurses-dev", "zstd",
+            "elfutils-dev",
+            "ncurses-dev",
+            "zstd",
             # v0.15: clang as default compiler.
-            "clang", "lld", "llvm",
+            "clang",
+            "lld",
+            "llvm",
         ),
         build_target_default="targz-pkg",
         kernel_config_path_pattern="/boot/config-{release}",

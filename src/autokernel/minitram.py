@@ -31,13 +31,11 @@ Output: ``<snapshot_dir>/initramfs.cpio.zst`` plus an
 
 from __future__ import annotations
 
-import hashlib
 import json
-import os
 import shutil
 import subprocess
-import tarfile
-from dataclasses import dataclass, field, asdict
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from autokernel.models import Snapshot
@@ -48,19 +46,19 @@ class MinitramTool:
     """One executable + its dynamic dependencies that needs to land
     inside the initramfs."""
 
-    name: str          # e.g. 'cryptsetup'
-    host_path: Path    # e.g. /sbin/cryptsetup on the host
-    target_path: str   # e.g. '/sbin/cryptsetup' in the initramfs
-    libs: list[str]    # ldd-resolved dependencies
-    rationale: str     # why this is included
+    name: str  # e.g. 'cryptsetup'
+    host_path: Path  # e.g. /sbin/cryptsetup on the host
+    target_path: str  # e.g. '/sbin/cryptsetup' in the initramfs
+    libs: list[str]  # ldd-resolved dependencies
+    rationale: str  # why this is included
 
 
 @dataclass(frozen=True)
 class MinitramModule:
     """One kernel module that needs to load before root mount."""
 
-    name: str         # 'btrfs', 'dm_crypt', 'aes_x86_64', ...
-    host_path: Path   # /lib/modules/<release>/.../<name>.ko[.zst]
+    name: str  # 'btrfs', 'dm_crypt', 'aes_x86_64', ...
+    host_path: Path  # /lib/modules/<release>/.../<name>.ko[.zst]
     target_path: str  # corresponding path inside initramfs
     rationale: str
 
@@ -77,11 +75,11 @@ class MinitramPlan:
     snapshot_dir: Path
 
     # Composition (populated by plan()):
-    busybox: bool = True       # busybox-static for the in-init shell
+    busybox: bool = True  # busybox-static for the in-init shell
     tools: list[MinitramTool] = field(default_factory=list)
     modules: list[MinitramModule] = field(default_factory=list)
-    firmware: list[str] = field(default_factory=list)   # /lib/firmware paths
-    init_script: str = ""        # the /init shell script as a string
+    firmware: list[str] = field(default_factory=list)  # /lib/firmware paths
+    init_script: str = ""  # the /init shell script as a string
 
     def to_summary_dict(self) -> dict:
         """Serializable summary — excludes resolved host_path so the
@@ -94,8 +92,7 @@ class MinitramPlan:
                 for t in self.tools
             ],
             "modules": [
-                {"name": m.name, "rationale": m.rationale}
-                for m in self.modules
+                {"name": m.name, "rationale": m.rationale} for m in self.modules
             ],
             "firmware_count": len(self.firmware),
         }
@@ -123,9 +120,9 @@ def _md_raid_in_chain(s: Snapshot) -> bool:
 
 _TOOL_PREDICATES: list[tuple[str, str, str]] = [
     # (snapshot-predicate name, tool binary on host, rationale)
-    ("_luks_in_chain",  "cryptsetup",  "LUKS in boot chain (decrypt root)"),
-    ("_lvm_in_chain",   "lvm",         "LVM in boot chain (vgchange/lvchange)"),
-    ("_md_raid_in_chain", "mdadm",     "MD RAID in boot chain (assemble)"),
+    ("_luks_in_chain", "cryptsetup", "LUKS in boot chain (decrypt root)"),
+    ("_lvm_in_chain", "lvm", "LVM in boot chain (vgchange/lvchange)"),
+    ("_md_raid_in_chain", "mdadm", "MD RAID in boot chain (assemble)"),
 ]
 
 
@@ -134,17 +131,17 @@ _TOOL_PREDICATES: list[tuple[str, str, str]] = [
 # from the Snapshot's modules.dep + the running kernel release.
 _BOOT_MODULES_BY_FEATURE: dict[str, list[str]] = {
     "luks": ["dm_crypt", "aes_generic", "aes_x86_64", "xts", "sha256"],
-    "lvm":  ["dm_mod"],
+    "lvm": ["dm_mod"],
     "raid": ["raid0", "raid1", "raid10", "raid456", "md_mod"],
 }
 
 # Per-fstype modules required to mount root.
 _FS_MODULES: dict[str, list[str]] = {
-    "ext4":  ["ext4"],
+    "ext4": ["ext4"],
     "btrfs": ["btrfs", "crc32c", "xxhash"],
-    "xfs":   ["xfs"],
-    "f2fs":  ["f2fs"],
-    "zfs":   ["zfs"],   # OOT but still — DKMS will produce a .ko on this host
+    "xfs": ["xfs"],
+    "f2fs": ["f2fs"],
+    "zfs": ["zfs"],  # OOT but still — DKMS will produce a .ko on this host
 }
 
 
@@ -159,7 +156,10 @@ def _resolve_libs(elf: Path) -> list[str]:
     try:
         out = subprocess.run(
             ["ldd", str(elf)],
-            check=False, capture_output=True, text=True, timeout=10,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
         )
     except (subprocess.TimeoutExpired, OSError):
         return []
@@ -214,7 +214,7 @@ def plan(
     )
 
     # 1. Boot-chain tools.
-    pred_table: dict[str, callable] = {
+    pred_table: dict[str, Callable[[Snapshot], bool]] = {
         "_luks_in_chain": _luks_in_chain,
         "_lvm_in_chain": _lvm_in_chain,
         "_md_raid_in_chain": _md_raid_in_chain,
@@ -228,26 +228,30 @@ def plan(
             # log it via plan but don't fail; let build() warn.
             continue
         libs = _resolve_libs(host_path)
-        p.tools.append(MinitramTool(
-            name=tool_name,
-            host_path=host_path,
-            target_path=f"/sbin/{tool_name}",
-            libs=libs,
-            rationale=rationale,
-        ))
+        p.tools.append(
+            MinitramTool(
+                name=tool_name,
+                host_path=host_path,
+                target_path=f"/sbin/{tool_name}",
+                libs=libs,
+                rationale=rationale,
+            )
+        )
 
     # 2. Optional dropbear for rescue.
     if include_dropbear:
         host_path = _which_or_none("dropbear")
         if host_path is not None:
             libs = _resolve_libs(host_path)
-            p.tools.append(MinitramTool(
-                name="dropbear",
-                host_path=host_path,
-                target_path="/sbin/dropbear",
-                libs=libs,
-                rationale="optional headless rescue SSH",
-            ))
+            p.tools.append(
+                MinitramTool(
+                    name="dropbear",
+                    host_path=host_path,
+                    target_path="/sbin/dropbear",
+                    libs=libs,
+                    rationale="optional headless rescue SSH",
+                )
+            )
 
     # 3. Kernel modules — features + filesystem.
     needed_module_names: list[tuple[str, str]] = []  # (name, rationale)
@@ -283,12 +287,14 @@ def plan(
         # Construct target path mirroring host layout but rooted at /
         rel = host_path.relative_to(modules_root)
         target_path = f"/lib/modules/{rel}"
-        p.modules.append(MinitramModule(
-            name=name,
-            host_path=host_path,
-            target_path=target_path,
-            rationale=rationale,
-        ))
+        p.modules.append(
+            MinitramModule(
+                name=name,
+                host_path=host_path,
+                target_path=target_path,
+                rationale=rationale,
+            )
+        )
 
     # 5. /init script. Tiny shell that mounts proc/sys, loads the
     # boot-path modules in dependency order, opens any LUKS volumes,
@@ -322,37 +328,45 @@ def _compose_init_script(snap: Snapshot, p: MinitramPlan) -> str:
     lines.append("")
 
     if _luks_in_chain(snap):
-        lines.extend([
-            "# Open LUKS — operator must enter passphrase.",
-            "# Snapshot.boot.cmdline_params['cryptdevice'] tells us which device.",
-            "if [ -n \"$cryptdevice\" ]; then",
-            "    cryptsetup luksOpen $cryptdevice luksdev",
-            "fi",
-            "",
-        ])
+        lines.extend(
+            [
+                "# Open LUKS — operator must enter passphrase.",
+                "# Snapshot.boot.cmdline_params['cryptdevice'] tells us which device.",
+                'if [ -n "$cryptdevice" ]; then',
+                "    cryptsetup luksOpen $cryptdevice luksdev",
+                "fi",
+                "",
+            ]
+        )
 
     if _lvm_in_chain(snap):
-        lines.extend([
-            "# Activate LVM volumes.",
-            "lvm vgchange -ay 2>/dev/null || true",
-            "",
-        ])
+        lines.extend(
+            [
+                "# Activate LVM volumes.",
+                "lvm vgchange -ay 2>/dev/null || true",
+                "",
+            ]
+        )
 
     if _md_raid_in_chain(snap):
-        lines.extend([
-            "# Assemble MD/RAID arrays.",
-            "mdadm --assemble --scan 2>/dev/null || true",
-            "",
-        ])
+        lines.extend(
+            [
+                "# Assemble MD/RAID arrays.",
+                "mdadm --assemble --scan 2>/dev/null || true",
+                "",
+            ]
+        )
 
-    lines.extend([
-        "# Mount root from kernel cmdline (Snapshot.boot.cmdline_params['root']).",
-        "ROOT=$(cat /proc/cmdline | sed -n 's/.*root=\\([^ ]*\\).*/\\1/p')",
-        "mount $ROOT /newroot",
-        "",
-        "# Pivot.",
-        "exec switch_root /newroot /sbin/init",
-    ])
+    lines.extend(
+        [
+            "# Mount root from kernel cmdline (Snapshot.boot.cmdline_params['root']).",
+            "ROOT=$(cat /proc/cmdline | sed -n 's/.*root=\\([^ ]*\\).*/\\1/p')",
+            "mount $ROOT /newroot",
+            "",
+            "# Pivot.",
+            "exec switch_root /newroot /sbin/init",
+        ]
+    )
 
     return "\n".join(lines) + "\n"
 
@@ -371,7 +385,9 @@ class MinitramBuildResult:
     n_tools: int
 
 
-def build(plan_obj: MinitramPlan, *, out_path: Path | None = None) -> MinitramBuildResult:
+def build(
+    plan_obj: MinitramPlan, *, out_path: Path | None = None
+) -> MinitramBuildResult:
     """Stage the plan into a temp dir + pack as cpio.zst.
 
     ``out_path`` defaults to ``<snap>/initramfs.cpio.zst``. The plan
@@ -388,9 +404,18 @@ def build(plan_obj: MinitramPlan, *, out_path: Path | None = None) -> MinitramBu
     stage.mkdir(parents=True)
 
     # Standard layout.
-    for d in ("proc", "sys", "dev", "newroot",
-              "bin", "sbin", "lib", "lib64",
-              "lib/modules", "etc"):
+    for d in (
+        "proc",
+        "sys",
+        "dev",
+        "newroot",
+        "bin",
+        "sbin",
+        "lib",
+        "lib64",
+        "lib/modules",
+        "etc",
+    ):
         (stage / d).mkdir(parents=True, exist_ok=True)
 
     # Drop /init.
@@ -413,8 +438,7 @@ def build(plan_obj: MinitramPlan, *, out_path: Path | None = None) -> MinitramBu
 
     # Always include /lib64/ld-linux-x86-64.so.2 (or arch equivalent)
     # if we have any non-static binaries. Detected from the libs list.
-    for ld in (Path("/lib64/ld-linux-x86-64.so.2"),
-               Path("/lib/ld-linux-aarch64.so.1")):
+    for ld in (Path("/lib64/ld-linux-x86-64.so.2"), Path("/lib/ld-linux-aarch64.so.1")):
         if ld.exists():
             (stage / ld.relative_to("/")).parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(ld, stage / ld.relative_to("/"))
@@ -434,9 +458,22 @@ def build(plan_obj: MinitramPlan, *, out_path: Path | None = None) -> MinitramBu
             # Symlink the standard names. busybox responds to whichever
             # of its built-in applets is invoked via argv[0].
             for applet in (
-                "sh", "mount", "modprobe", "switch_root", "cat", "sed",
-                "ls", "cp", "mv", "mkdir", "rm", "test", "[",
-                "echo", "sleep", "ash",
+                "sh",
+                "mount",
+                "modprobe",
+                "switch_root",
+                "cat",
+                "sed",
+                "ls",
+                "cp",
+                "mv",
+                "mkdir",
+                "rm",
+                "test",
+                "[",
+                "echo",
+                "sleep",
+                "ash",
             ):
                 lnk = stage / "bin" / applet
                 if not lnk.exists():
@@ -451,7 +488,9 @@ def build(plan_obj: MinitramPlan, *, out_path: Path | None = None) -> MinitramBu
     ).format(stage=stage, out=out_path)
     rc = subprocess.run(
         ["sh", "-c", cpio_argv],
-        capture_output=True, text=True, timeout=120,
+        capture_output=True,
+        text=True,
+        timeout=120,
     )
     if rc.returncode != 0:
         raise RuntimeError(f"cpio/zstd failed: {rc.stderr}")

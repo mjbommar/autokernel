@@ -5,7 +5,6 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 
-import pytest
 from typer.testing import CliRunner
 
 from autokernel.cli import app
@@ -43,8 +42,7 @@ def test_apply_blocks_load_bearing_disable(tmp_path: Path):
     """Disabling CONFIG_DRM_I915 (the active GPU driver) must be refused."""
     snap = _seed(
         tmp_path,
-        "# autokernel-kfrag schema=1\n"
-        "# CONFIG_DRM_I915 is not set\n",
+        "# autokernel-kfrag schema=1\n# CONFIG_DRM_I915 is not set\n",
     )
     result = runner.invoke(app, ["apply", str(snap)])
     # Validation should have caught it
@@ -56,8 +54,7 @@ def test_apply_no_validate_overrides(tmp_path: Path):
     """--no-validate writes the file even with load-bearing violations."""
     snap = _seed(
         tmp_path,
-        "# autokernel-kfrag schema=1\n"
-        "# CONFIG_DRM_I915 is not set\n",
+        "# autokernel-kfrag schema=1\n# CONFIG_DRM_I915 is not set\n",
     )
     result = runner.invoke(app, ["apply", str(snap), "--no-validate"])
     assert result.exit_code == 0, result.output
@@ -83,8 +80,7 @@ def test_apply_demote_y_to_m(tmp_path: Path):
     )
     # Override the kfrag with a real y→m demote
     (snap / "auto.kfrag").write_text(
-        "# autokernel-kfrag schema=1\n"
-        "CONFIG_DRM_I915_GVT=m\n",  # base has =y
+        "# autokernel-kfrag schema=1\nCONFIG_DRM_I915_GVT=m\n",  # base has =y
     )
     result = runner.invoke(app, ["apply", str(snap)])
     assert result.exit_code == 0, result.output

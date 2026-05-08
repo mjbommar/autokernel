@@ -94,7 +94,9 @@ class WorkingState:
             item
             for item in self.items
             if self.decision_view.matches(item.decision)
-            and (self.subsystem_filter is None or item.subsystem == self.subsystem_filter)
+            and (
+                self.subsystem_filter is None or item.subsystem == self.subsystem_filter
+            )
         ]
 
     def all_subsystems(self) -> list[str]:

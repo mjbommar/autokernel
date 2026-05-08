@@ -23,8 +23,24 @@ verb).
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
+from typing import Literal, cast, get_args
+
+
+ServiceTier = Literal["auto", "default", "flex", "priority"]
+_SERVICE_TIERS = set(get_args(ServiceTier))
+
+
+def normalize_service_tier(value: str | None) -> ServiceTier | None:
+    """Validate/cast an optional pydantic-ai service tier string."""
+    if not value:
+        return None
+    if value not in _SERVICE_TIERS:
+        raise ValueError(
+            f"unknown service tier {value!r}; valid: {sorted(_SERVICE_TIERS)}"
+        )
+    return cast(ServiceTier, value)
 
 
 # ── providers + models ─────────────────────────────────────────────────────
@@ -40,7 +56,7 @@ class Provider(str, Enum):
 
     ANTHROPIC = "anthropic"
     OPENAI = "openai"
-    GOOGLE = "google-gla"      # gemini API key (the older "google generative ai" one)
+    GOOGLE = "google-gla"  # gemini API key (the older "google generative ai" one)
     GROQ = "groq"
     MISTRAL = "mistral"
     DEEPSEEK = "deepseek"
@@ -175,9 +191,7 @@ class ProviderNotAvailable(Exception):
 # ── detection ──────────────────────────────────────────────────────────────
 
 
-def detect_available_providers(
-    *, env: dict[str, str] | None = None
-) -> list[Provider]:
+def detect_available_providers(*, env: dict[str, str] | None = None) -> list[Provider]:
     """Return providers that have credentials in ``env`` (defaults to
     :data:`os.environ`), ordered by :data:`_PROVIDER_PREFERENCE`.
 
@@ -186,7 +200,7 @@ def detect_available_providers(
     a placeholder ``ANTHROPIC_API_KEY=`` in ``.env`` doesn't claim the
     provider is configured.
     """
-    e = env if env is not None else os.environ
+    e = dict(env if env is not None else os.environ)
     out: list[Provider] = []
     for provider in _PROVIDER_PREFERENCE:
         for var in _API_KEY_VARS[provider]:
@@ -208,7 +222,7 @@ class LLMConfig:
     model: str
     """Pydantic-ai model id, e.g. ``'anthropic:claude-sonnet-4-6'``."""
 
-    service_tier: str | None = None
+    service_tier: ServiceTier | None = None
     batch_size: int = 60
     mode: LLMMode | None = None
     """The mode preset that resolved to this config (when applicable)."""
@@ -249,7 +263,8 @@ def resolve(
     Raises :class:`NoProviderConfigured` when no provider is detected
     and the spec was a preset (rather than a literal).
     """
-    e = env if env is not None else os.environ
+    e = dict(env if env is not None else os.environ)
+    normalized_service_tier = normalize_service_tier(service_tier)
     avail = available if available is not None else detect_available_providers(env=e)
 
     # Literal model id → validate the provider has credentials.
@@ -267,7 +282,7 @@ def resolve(
         return LLMConfig(
             provider=provider,
             model=spec,
-            service_tier=service_tier,
+            service_tier=normalized_service_tier,
             batch_size=batch_size,
             api_key_var=_first_set_env(provider, e),
         )
@@ -294,7 +309,7 @@ def resolve(
     return LLMConfig(
         provider=provider,
         model=f"{provider.value}:{model_suffix}",
-        service_tier=service_tier,
+        service_tier=normalized_service_tier,
         batch_size=batch_size,
         mode=mode,
         api_key_var=_first_set_env(provider, e),
@@ -322,17 +337,19 @@ class ProviderStatus:
 
 def status_report(*, env: dict[str, str] | None = None) -> list[ProviderStatus]:
     """Per-provider availability snapshot for ``config show`` rendering."""
-    e = env if env is not None else os.environ
+    e = dict(env if env is not None else os.environ)
     out: list[ProviderStatus] = []
     for provider in _PROVIDER_PREFERENCE:
         env_vars = _API_KEY_VARS[provider]
         which = _first_set_env(provider, e)
-        out.append(ProviderStatus(
-            provider=provider,
-            available=bool(which),
-            api_key_var=which,
-            env_vars=env_vars,
-        ))
+        out.append(
+            ProviderStatus(
+                provider=provider,
+                available=bool(which),
+                api_key_var=which,
+                env_vars=env_vars,
+            )
+        )
     return out
 
 

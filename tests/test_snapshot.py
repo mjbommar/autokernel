@@ -48,7 +48,11 @@ def test_pci_class_and_driver_parsing(intel_laptop: Snapshot):
 
 
 def test_amd_desktop_pci_has_nvidia_dgpu(amd_desktop: Snapshot):
-    nvidia = next(p for p in amd_desktop.pci if p.vendor_id == "10de" and (p.class_id or "").startswith("03"))
+    nvidia = next(
+        p
+        for p in amd_desktop.pci
+        if p.vendor_id == "10de" and (p.class_id or "").startswith("03")
+    )
     assert nvidia.driver == "nvidia"
 
 

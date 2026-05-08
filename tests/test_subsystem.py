@@ -121,7 +121,9 @@ from autokernel.subsystem import classify, group_by_subsystem
     ],
 )
 def test_classify_known_symbols(symbol: str, expected: str):
-    assert classify(symbol) == expected, f"{symbol} → expected {expected}, got {classify(symbol)}"
+    assert classify(symbol) == expected, (
+        f"{symbol} → expected {expected}, got {classify(symbol)}"
+    )
 
 
 def test_classify_accepts_bare_name():
@@ -147,5 +149,11 @@ def test_group_by_subsystem_basic():
 
 def test_group_preserves_input_order_within_bucket():
     """Ordering within each bucket is the input order — not sorted."""
-    grouped = group_by_subsystem(["CONFIG_DRM_NOUVEAU", "CONFIG_DRM_I915", "CONFIG_DRM_AMDGPU"])
-    assert grouped["gpu"] == ["CONFIG_DRM_NOUVEAU", "CONFIG_DRM_I915", "CONFIG_DRM_AMDGPU"]
+    grouped = group_by_subsystem(
+        ["CONFIG_DRM_NOUVEAU", "CONFIG_DRM_I915", "CONFIG_DRM_AMDGPU"]
+    )
+    assert grouped["gpu"] == [
+        "CONFIG_DRM_NOUVEAU",
+        "CONFIG_DRM_I915",
+        "CONFIG_DRM_AMDGPU",
+    ]

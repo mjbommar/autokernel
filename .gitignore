@@ -30,3 +30,4 @@ loadable_modinfo_cache
 .vscode/
 .idea/
 .DS_Store
+get-docker.sh

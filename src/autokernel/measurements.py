@@ -37,7 +37,9 @@ class BuildMeasurements:
 
     boot_test_passed: bool | None = None
     boot_test_seconds: float | None = None
-    boot_failure_mode: str | None = None  # 'early-panic' | 'vfs-panic' | 'init-panic' | None
+    boot_failure_mode: str | None = (
+        None  # 'early-panic' | 'vfs-panic' | 'init-panic' | None
+    )
 
     proposed_count: int | None = None
     actually_landed_count: int | None = None
@@ -102,8 +104,11 @@ def count_modules_in_config(config_path: Path) -> int:
     reports leftovers)."""
     if not config_path.exists():
         return 0
-    return sum(1 for line in config_path.read_text().splitlines()
-               if re.match(r"^CONFIG_[A-Z0-9_]+=m\s*$", line))
+    return sum(
+        1
+        for line in config_path.read_text().splitlines()
+        if re.match(r"^CONFIG_[A-Z0-9_]+=m\s*$", line)
+    )
 
 
 def parse_compile_seconds_from_log(build_log: str) -> float | None:
@@ -115,7 +120,9 @@ def parse_compile_seconds_from_log(build_log: str) -> float | None:
     # Pattern: rich Table cells separated by │. Look for the "make-..." step
     # row; column 3 is the duration in seconds.
     for line in build_log.splitlines():
-        m = re.search(r"\b(make-\w+|build|olddefconfig)\b.*?│\s*0\s*│\s*([\d.]+)\s*│", line)
+        m = re.search(
+            r"\b(make-\w+|build|olddefconfig)\b.*?│\s*0\s*│\s*([\d.]+)\s*│", line
+        )
         if m and "make-" in line.lower():  # prefer the actual build step
             try:
                 return float(m.group(2))
@@ -207,10 +214,7 @@ def measure(
     if boot_test is not None:
         bt_passed = bool(boot_test.get("verdict_ok"))
         bt_seconds = boot_test.get("duration_seconds")
-        bt_failure = (
-            None if bt_passed
-            else boot_test.get("verdict_reason") or "unknown"
-        )
+        bt_failure = None if bt_passed else boot_test.get("verdict_reason") or "unknown"
     else:
         bt_passed = None
         bt_seconds = None

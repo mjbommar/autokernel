@@ -25,7 +25,8 @@ this deterministic engine.
 from __future__ import annotations
 
 import fnmatch
-from dataclasses import dataclass, field
+from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 from autokernel.models import (
@@ -66,7 +67,9 @@ class _RuleBase:
             return False
         if self.subsystems is not None and classify(p.config) not in self.subsystems:
             return False
-        if self.name_globs and not any(fnmatch.fnmatchcase(p.config, g) for g in self.name_globs):
+        if self.name_globs and not any(
+            fnmatch.fnmatchcase(p.config, g) for g in self.name_globs
+        ):
             return False
         if self.min_confidence is not None and p.confidence < self.min_confidence:
             return False
@@ -95,7 +98,7 @@ class DeferRule(_RuleBase):
 
 def apply_rules(
     proposals: list[RemovalProposal],
-    rules: list[AcceptRule | RejectRule | DeferRule],
+    rules: Sequence[AcceptRule | RejectRule | DeferRule],
     *,
     base_diff_path: Path,
     reviewer: Reviewer = Reviewer.POLICY,

@@ -1,6 +1,11 @@
 """autokernel — LLM-assisted minimal Linux kernel builder."""
 
-__version__ = "0.1.0"
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("autokernel")
+except PackageNotFoundError:
+    __version__ = "0.15.0"
 
 
 def main() -> None:

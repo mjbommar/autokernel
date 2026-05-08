@@ -44,8 +44,18 @@ def _seed_snapshot(tmp_path: Path) -> Path:
         )
 
     proposals = [
-        _p("CONFIG_DRM_NOUVEAU", risk=RiskLevel.LOW, source=ProposalSource.DETERMINISTIC, conf=0.95),
-        _p("CONFIG_DRM_RADEON", risk=RiskLevel.LOW, source=ProposalSource.DETERMINISTIC, conf=0.95),
+        _p(
+            "CONFIG_DRM_NOUVEAU",
+            risk=RiskLevel.LOW,
+            source=ProposalSource.DETERMINISTIC,
+            conf=0.95,
+        ),
+        _p(
+            "CONFIG_DRM_RADEON",
+            risk=RiskLevel.LOW,
+            source=ProposalSource.DETERMINISTIC,
+            conf=0.95,
+        ),
         _p("CONFIG_104_QUAD_8", risk=RiskLevel.LOW, conf=0.85),
         _p("CONFIG_DEBUG_KERNEL", risk=RiskLevel.HIGH, conf=0.7),
         _p("CONFIG_CRYPTO_AES_GENERIC", risk=RiskLevel.LOW, conf=0.6),
@@ -101,7 +111,8 @@ def test_review_reject_subsystem_then_accept(tmp_path: Path):
         [
             "review",
             str(snap),
-            "--reject-subsystem", "crypto",
+            "--reject-subsystem",
+            "crypto",
             "--accept-recommended",
         ],
     )
@@ -141,7 +152,8 @@ def test_review_pattern_filter(tmp_path: Path):
         [
             "review",
             str(snap),
-            "--reject-pattern", "CONFIG_DRM_*",
+            "--reject-pattern",
+            "CONFIG_DRM_*",
             "--accept-recommended",
         ],
     )

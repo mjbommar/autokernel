@@ -4,12 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 
 from autokernel.models import (
     ProposalSource,
     RemovalProposal,
-    ReviewDecision,
     Reviewer,
     RiskLevel,
 )
@@ -184,7 +182,10 @@ def test_reject_pattern_helper():
     ]
     rules = [reject_pattern_rule(["CONFIG_DRM_*"]), AcceptRule(label="rest")]
     rs = apply_rules(proposals, rules, base_diff_path=_BASE)
-    assert {r.proposal.config for r in rs.rejected} == {"CONFIG_DRM_FOO", "CONFIG_DRM_BAR"}
+    assert {r.proposal.config for r in rs.rejected} == {
+        "CONFIG_DRM_FOO",
+        "CONFIG_DRM_BAR",
+    }
     assert {r.proposal.config for r in rs.accepted} == {"CONFIG_USB_BAZ"}
 
 

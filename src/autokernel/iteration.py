@@ -20,7 +20,7 @@ Two consumers:
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 from autokernel.measurements import BuildMeasurements
@@ -148,7 +148,9 @@ def summarize_history_for_prompt(
         return ""
 
     out: list[str] = []
-    out.append(f"# iteration history (last {budget_recent} of {len(history)}) — target={target}:")
+    out.append(
+        f"# iteration history (last {budget_recent} of {len(history)}) — target={target}:"
+    )
 
     # Pick which records to render.
     rendered: list[IterationRecord] = []
@@ -163,9 +165,14 @@ def summarize_history_for_prompt(
     for r in rendered:
         m = r.measurements
         bz = f"{m.bzimage_bytes / (1024 * 1024):.1f}MB" if m.bzimage_bytes else "?"
-        boot = "PASS" if m.boot_test_passed else (
-            f"FAIL ({m.boot_failure_mode or '?'})" if m.boot_test_passed is False
-            else "skipped"
+        boot = (
+            "PASS"
+            if m.boot_test_passed
+            else (
+                f"FAIL ({m.boot_failure_mode or '?'})"
+                if m.boot_test_passed is False
+                else "skipped"
+            )
         )
         landed_frac = (
             f"{m.actually_landed_count}/{m.proposed_count}"
@@ -266,19 +273,33 @@ def _fitness_guidance(history: list[IterationRecord], target: str) -> list[str]:
     out: list[str] = []
     if target == "size":
         if pct_delta > 1.0:
-            out.append("Kernel has GROWN — please favor proposals that reduce binary size:")
-            out.append("trim more drivers (=m → =n), drop optional features, prefer smaller")
-            out.append("choice options. Do NOT re-enable symbols that were already trimmed.")
+            out.append(
+                "Kernel has GROWN — please favor proposals that reduce binary size:"
+            )
+            out.append(
+                "trim more drivers (=m → =n), drop optional features, prefer smaller"
+            )
+            out.append(
+                "choice options. Do NOT re-enable symbols that were already trimmed."
+            )
         elif pct_delta < -1.0:
-            out.append("Kernel is shrinking — keep going. Look for additional trims that")
+            out.append(
+                "Kernel is shrinking — keep going. Look for additional trims that"
+            )
             out.append("haven't been considered yet.")
         else:
-            out.append("Kernel size is stable. Convergence near. Consider whether further")
+            out.append(
+                "Kernel size is stable. Convergence near. Consider whether further"
+            )
             out.append("trims are safe; otherwise stop proposing changes.")
     elif target == "boot-time":
         if pct_delta > 5.0:
-            out.append("Boot time has INCREASED. Favor =y over =m for boot-path drivers,")
-            out.append("drop initramfs-only modules, prefer faster compression algorithms.")
+            out.append(
+                "Boot time has INCREASED. Favor =y over =m for boot-path drivers,"
+            )
+            out.append(
+                "drop initramfs-only modules, prefer faster compression algorithms."
+            )
         elif pct_delta < -5.0:
             out.append("Boot time is improving — keep going.")
     elif target == "surface":
@@ -320,9 +341,10 @@ def has_converged(
     """
     if len(history) < window + 1:
         return False
-    sizes = [r.measurements.bzimage_bytes for r in history[-(window + 1):]]
-    if any(s is None for s in sizes):
+    maybe_sizes = [r.measurements.bzimage_bytes for r in history[-(window + 1) :]]
+    if any(size is None for size in maybe_sizes):
         return False
+    sizes = [size for size in maybe_sizes if size is not None]
     for prev, cur in zip(sizes, sizes[1:]):
         if prev == 0:
             return False

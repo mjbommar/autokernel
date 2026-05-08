@@ -36,7 +36,12 @@ class DecisionView(str, Enum):
         return cls.DEFERRED
 
     def cycle(self) -> "DecisionView":
-        order = [self.DEFERRED, self.ALL, self.ACCEPTED, self.REJECTED]
+        order = [
+            DecisionView.DEFERRED,
+            DecisionView.ALL,
+            DecisionView.ACCEPTED,
+            DecisionView.REJECTED,
+        ]
         return order[(order.index(self) + 1) % len(order)]
 
     def matches(self, decision: ReviewDecision) -> bool:

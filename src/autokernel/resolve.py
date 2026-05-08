@@ -267,7 +267,7 @@ def resolve(snap: Snapshot) -> ResolutionResult:
         canonical = mod.replace("-", "_")
         result.required_modules.discard(canonical)
         result.evidence.setdefault(canonical, []).append(
-            f"cmdline module_blacklist (NOT required)"
+            "cmdline module_blacklist (NOT required)"
         )
 
     # 10. Translate every required module to a CONFIG_ symbol via the
@@ -275,7 +275,9 @@ def resolve(snap: Snapshot) -> ResolutionResult:
     # as load-bearing for safety.
     running = _running_config_symbols(snap.running_config_path)
 
-    cache_path = snap.snapshot_dir / "loadable_modinfo_cache" if snap.snapshot_dir else None
+    cache_path = (
+        snap.snapshot_dir / "loadable_modinfo_cache" if snap.snapshot_dir else None
+    )
     module_info_map = collect_module_info(
         sorted(result.required_modules),
         snap.modules_builtin_modinfo_path,

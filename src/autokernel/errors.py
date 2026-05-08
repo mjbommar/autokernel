@@ -180,7 +180,7 @@ def hint_unsupported_bootloader(bl_kind: str) -> "typer.Exit":
 def hint_not_root(operation: str) -> "typer.Exit":
     return fail(
         f"{operation} requires root",
-        fix=f"rerun with `sudo`, or omit `--execute` to dry-run instead",
+        fix="rerun with `sudo`, or omit `--execute` to dry-run instead",
         exit_code=5,
     )
 

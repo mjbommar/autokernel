@@ -33,13 +33,12 @@ caller's escape hatch.
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from autokernel.bootloader import Bootloader, BootloaderKind
+from autokernel.bootloader import Bootloader
 from autokernel.distro import DistroInfo, DistroSpec, Family
 
 
@@ -106,7 +105,9 @@ class InstallResult:
 # ── plan builders ──────────────────────────────────────────────────────────
 
 
-def _per_distro_install_argv(distro: DistroInfo, package_paths: list[Path]) -> list[str] | None:
+def _per_distro_install_argv(
+    distro: DistroInfo, package_paths: list[Path]
+) -> list[str] | None:
     """Build the install command for the user's package manager.
 
     Debian: ``apt install -y ./pkg.deb`` (apt resolves dependencies).
@@ -139,8 +140,8 @@ def _backup_step(snapshot_dir: Path, bootloader: Bootloader) -> InstallStep:
         name="capture_grub_state",
         argv=[grubenv_tool, "list"],
         description=(
-            f"Backup the current bootloader state (default kernel + grub.cfg) so "
-            f"`autokernel rollback` can undo this install."
+            "Backup the current bootloader state (default kernel + grub.cfg) so "
+            "`autokernel rollback` can undo this install."
         ),
         needs_root=False,
         timeout=15.0,
@@ -180,7 +181,9 @@ def _regenerate_step(bootloader: Bootloader) -> InstallStep | None:
     )
 
 
-def _arm_probation_step(bootloader: Bootloader, kernel_entry: str) -> InstallStep | None:
+def _arm_probation_step(
+    bootloader: Bootloader, kernel_entry: str
+) -> InstallStep | None:
     argv = bootloader.one_shot_argv(kernel_entry)
     if argv is None:
         return None

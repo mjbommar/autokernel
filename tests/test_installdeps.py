@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import subprocess
 from typing import Any
 
 import pytest
@@ -10,20 +9,21 @@ import pytest
 from autokernel import installdeps as id_mod
 from autokernel.distro import DistroInfo, Family, parse_os_release, spec_for
 from autokernel.installdeps import (
-    InstallDepsPlan,
     Target,
     plan,
 )
 
 
 def _info(family: Family) -> DistroInfo:
-    return parse_os_release({
-        Family.DEBIAN: "ID=ubuntu\nID_LIKE=debian\n",
-        Family.FEDORA: "ID=fedora\n",
-        Family.ARCH: "ID=arch\n",
-        Family.SUSE: "ID=opensuse-tumbleweed\n",
-        Family.UNKNOWN: "ID=mystery\n",
-    }[family])
+    return parse_os_release(
+        {
+            Family.DEBIAN: "ID=ubuntu\nID_LIKE=debian\n",
+            Family.FEDORA: "ID=fedora\n",
+            Family.ARCH: "ID=arch\n",
+            Family.SUSE: "ID=opensuse-tumbleweed\n",
+            Family.UNKNOWN: "ID=mystery\n",
+        }[family]
+    )
 
 
 # ── per-family install command construction ───────────────────────────────
@@ -33,7 +33,8 @@ def test_debian_plan_uses_apt_install_y(monkeypatch):
     info = _info(Family.DEBIAN)
     # Probe says nothing's installed
     monkeypatch.setattr(
-        id_mod, "_query_installed",
+        id_mod,
+        "_query_installed",
         lambda fam, pkgs: (pkgs, []),
     )
     p = plan(distro=info, spec=spec_for(info), target=Target.BUILD)
@@ -62,6 +63,7 @@ def test_unknown_family_returns_rejected(monkeypatch):
     info = _info(Family.UNKNOWN)
     p = plan(distro=info, spec=spec_for(info), target=Target.BUILD)
     assert not p.is_valid
+    assert p.rejected_reason is not None
     assert "UNKNOWN" in p.rejected_reason
 
 
@@ -117,8 +119,10 @@ def test_no_virtme_omits_optional(monkeypatch):
     info = _info(Family.DEBIAN)
     monkeypatch.setattr(id_mod, "_query_installed", lambda fam, pkgs: (pkgs, []))
     p = plan(
-        distro=info, spec=spec_for(info),
-        target=Target.BOOT_TEST, include_virtme=False,
+        distro=info,
+        spec=spec_for(info),
+        target=Target.BOOT_TEST,
+        include_virtme=False,
     )
     assert p.optional_python_pkgs == []
 
@@ -136,6 +140,7 @@ def test_virtme_already_installed_omits_optional(monkeypatch):
 
 def test_query_installed_debian_dpkg(monkeypatch):
     """dpkg-query returns 'name install ok installed' for installed packages."""
+
     def _fake_run(cmd, **kwargs):
         class R:
             returncode = 0
@@ -144,9 +149,13 @@ def test_query_installed_debian_dpkg(monkeypatch):
                 "bison install ok installed\n"
                 "libssl-dev unknown ok not-installed\n"
             )
+
         return R()
+
     monkeypatch.setattr(id_mod.subprocess, "run", _fake_run)
-    missing, installed = id_mod._query_installed(Family.DEBIAN, ["flex", "bison", "libssl-dev"])
+    missing, installed = id_mod._query_installed(
+        Family.DEBIAN, ["flex", "bison", "libssl-dev"]
+    )
     assert installed == ["flex", "bison"]
     assert missing == ["libssl-dev"]
 
@@ -156,9 +165,13 @@ def test_query_installed_arch_pacman(monkeypatch):
         class R:
             returncode = 0
             stdout = "base-devel\nflex\nopenssl\n"
+
         return R()
+
     monkeypatch.setattr(id_mod.subprocess, "run", _fake_run)
-    missing, installed = id_mod._query_installed(Family.ARCH, ["base-devel", "flex", "ncurses"])
+    missing, installed = id_mod._query_installed(
+        Family.ARCH, ["base-devel", "flex", "ncurses"]
+    )
     assert "base-devel" in installed
     assert "flex" in installed
     assert "ncurses" in missing
@@ -168,8 +181,10 @@ def test_query_installed_falls_back_to_all_missing_on_query_failure(monkeypatch)
     """If dpkg-query is unavailable (or fails), behave conservatively:
     treat everything as missing. apt itself is no-op when a package is
     already installed, so this is safe."""
+
     def _fake_run(cmd, **kwargs):
         raise FileNotFoundError("no dpkg-query")
+
     monkeypatch.setattr(id_mod.subprocess, "run", _fake_run)
     missing, installed = id_mod._query_installed(Family.DEBIAN, ["flex", "bison"])
     assert missing == ["flex", "bison"]
@@ -258,7 +273,9 @@ def test_execute_runs_install_command(monkeypatch, captured_runs, tmp_path):
     assert "apt" in captured_runs[0]["argv"]
 
 
-def test_execute_uses_uv_tool_install_for_optional_pkgs(monkeypatch, captured_runs, tmp_path):
+def test_execute_uses_uv_tool_install_for_optional_pkgs(
+    monkeypatch, captured_runs, tmp_path
+):
     """Optional Python tools install via `uv tool install`, not pip --user."""
     info = _info(Family.DEBIAN)
     monkeypatch.setattr(id_mod, "_query_installed", lambda f, p: ([], list(p)))

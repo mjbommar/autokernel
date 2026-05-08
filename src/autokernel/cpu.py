@@ -41,8 +41,8 @@ class Microarch(str, Enum):
     GENERIC = "GENERIC"
 
     # ── AMD ────────────────────────────────────────────────────────────
-    K8 = "K8"            # Athlon 64 / Opteron (family 15)
-    K10 = "K10"          # Phenom / Athlon II (family 16)
+    K8 = "K8"  # Athlon 64 / Opteron (family 15)
+    K10 = "K10"  # Phenom / Athlon II (family 16)
     BARCELONA = "BARCELONA"
     BOBCAT = "BOBCAT"
     JAGUAR = "JAGUAR"
@@ -50,11 +50,11 @@ class Microarch(str, Enum):
     PILEDRIVER = "PILEDRIVER"
     STEAMROLLER = "STEAMROLLER"
     EXCAVATOR = "EXCAVATOR"
-    ZEN = "ZEN"          # family 23 model 0x00-0x0F
-    ZEN2 = "ZEN2"        # family 23 model 0x30+
-    ZEN3 = "ZEN3"        # family 25 model 0x00-0x4F (Vermeer, Cezanne, …)
-    ZEN4 = "ZEN4"        # family 25 model 0x60+ (Raphael, Phoenix, Genoa)
-    ZEN5 = "ZEN5"        # family 26 (Strix Point, Granite Ridge)
+    ZEN = "ZEN"  # family 23 model 0x00-0x0F
+    ZEN2 = "ZEN2"  # family 23 model 0x30+
+    ZEN3 = "ZEN3"  # family 25 model 0x00-0x4F (Vermeer, Cezanne, …)
+    ZEN4 = "ZEN4"  # family 25 model 0x60+ (Raphael, Phoenix, Genoa)
+    ZEN5 = "ZEN5"  # family 26 (Strix Point, Granite Ridge)
 
     # ── Intel — Core / server ──────────────────────────────────────────
     NEHALEM = "NEHALEM"
@@ -64,7 +64,7 @@ class Microarch(str, Enum):
     HASWELL = "HASWELL"
     BROADWELL = "BROADWELL"
     SKYLAKE = "SKYLAKE"
-    SKYLAKEX = "SKYLAKEX"        # Skylake-X / Cascade Lake server
+    SKYLAKEX = "SKYLAKEX"  # Skylake-X / Cascade Lake server
     CANNONLAKE = "CANNONLAKE"
     ICELAKE = "ICELAKE"
     CASCADELAKE = "CASCADELAKE"
@@ -96,33 +96,51 @@ class Microarch(str, Enum):
 # Intel ARK, Wikichip.
 _INTEL_FAM6: dict[int, Microarch] = {
     # Nehalem / Westmere
-    26: Microarch.NEHALEM, 30: Microarch.NEHALEM, 46: Microarch.NEHALEM,
-    37: Microarch.WESTMERE, 44: Microarch.WESTMERE, 47: Microarch.WESTMERE,
+    26: Microarch.NEHALEM,
+    30: Microarch.NEHALEM,
+    46: Microarch.NEHALEM,
+    37: Microarch.WESTMERE,
+    44: Microarch.WESTMERE,
+    47: Microarch.WESTMERE,
     # Sandy Bridge / Ivy Bridge
-    42: Microarch.SANDYBRIDGE, 45: Microarch.SANDYBRIDGE,
-    58: Microarch.IVYBRIDGE, 62: Microarch.IVYBRIDGE,
+    42: Microarch.SANDYBRIDGE,
+    45: Microarch.SANDYBRIDGE,
+    58: Microarch.IVYBRIDGE,
+    62: Microarch.IVYBRIDGE,
     # Haswell / Broadwell
-    60: Microarch.HASWELL, 63: Microarch.HASWELL, 69: Microarch.HASWELL,
-    70: Microarch.HASWELL, 71: Microarch.HASWELL,
-    61: Microarch.BROADWELL, 79: Microarch.BROADWELL, 86: Microarch.BROADWELL,
+    60: Microarch.HASWELL,
+    63: Microarch.HASWELL,
+    69: Microarch.HASWELL,
+    70: Microarch.HASWELL,
+    71: Microarch.HASWELL,
+    61: Microarch.BROADWELL,
+    79: Microarch.BROADWELL,
+    86: Microarch.BROADWELL,
     87: Microarch.BROADWELL,
     # Skylake / Kaby / Coffee / Comet (all called Skylake by Kconfig)
-    78: Microarch.SKYLAKE, 94: Microarch.SKYLAKE,
-    142: Microarch.SKYLAKE, 158: Microarch.SKYLAKE, 165: Microarch.SKYLAKE,
+    78: Microarch.SKYLAKE,
+    94: Microarch.SKYLAKE,
+    142: Microarch.SKYLAKE,
+    158: Microarch.SKYLAKE,
+    165: Microarch.SKYLAKE,
     166: Microarch.SKYLAKE,
     # Skylake-X / Cascade Lake-X
     85: Microarch.SKYLAKEX,
     # Cannon Lake (rare)
     102: Microarch.CANNONLAKE,
     # Ice Lake (client + server)
-    125: Microarch.ICELAKE, 126: Microarch.ICELAKE,
-    106: Microarch.ICELAKE, 108: Microarch.ICELAKE,
+    125: Microarch.ICELAKE,
+    126: Microarch.ICELAKE,
+    106: Microarch.ICELAKE,
+    108: Microarch.ICELAKE,
     # Tiger Lake
-    140: Microarch.TIGERLAKE, 141: Microarch.TIGERLAKE,
+    140: Microarch.TIGERLAKE,
+    141: Microarch.TIGERLAKE,
     # Rocket Lake
     167: Microarch.ROCKETLAKE,
     # Alder Lake (model 151 desktop, 154 mobile)
-    151: Microarch.ALDERLAKE, 154: Microarch.ALDERLAKE,
+    151: Microarch.ALDERLAKE,
+    154: Microarch.ALDERLAKE,
     # Raptor Lake (refresh of Alder Lake)
     183: Microarch.RAPTORLAKE,
     # Sapphire Rapids / Emerald Rapids server
@@ -131,18 +149,27 @@ _INTEL_FAM6: dict[int, Microarch] = {
     # Granite Rapids
     173: Microarch.GRANITERAPIDS,
     # Meteor Lake (host CPU at 170/171/172)
-    170: Microarch.METEORLAKE, 171: Microarch.METEORLAKE,
+    170: Microarch.METEORLAKE,
+    171: Microarch.METEORLAKE,
     172: Microarch.METEORLAKE,
     # Arrow Lake / Lunar Lake (newest as of mid-2025)
-    197: Microarch.ARROWLAKE, 198: Microarch.ARROWLAKE,
-    188: Microarch.LUNARLAKE, 189: Microarch.LUNARLAKE,
-
+    197: Microarch.ARROWLAKE,
+    198: Microarch.ARROWLAKE,
+    188: Microarch.LUNARLAKE,
+    189: Microarch.LUNARLAKE,
     # Atom-line — small cores
-    55: Microarch.SILVERMONT, 76: Microarch.SILVERMONT, 77: Microarch.SILVERMONT,
-    74: Microarch.SILVERMONT, 90: Microarch.SILVERMONT, 93: Microarch.SILVERMONT,
-    92: Microarch.GOLDMONT, 95: Microarch.GOLDMONT,
+    55: Microarch.SILVERMONT,
+    76: Microarch.SILVERMONT,
+    77: Microarch.SILVERMONT,
+    74: Microarch.SILVERMONT,
+    90: Microarch.SILVERMONT,
+    93: Microarch.SILVERMONT,
+    92: Microarch.GOLDMONT,
+    95: Microarch.GOLDMONT,
     122: Microarch.GOLDMONTPLUS,
-    134: Microarch.TREMONT, 138: Microarch.TREMONT, 150: Microarch.TREMONT,
+    134: Microarch.TREMONT,
+    138: Microarch.TREMONT,
+    150: Microarch.TREMONT,
     156: Microarch.TREMONT,
     190: Microarch.GRACEMONT,
 }
@@ -227,12 +254,23 @@ def detect_microarch(cpu: CpuInfo) -> Microarch:
     combination isn't recognized — better to leave ``GENERIC_CPU=y``
     than guess wrong.
     """
-    if cpu.vendor_id == "GenuineIntel" and cpu.cpu_family == 6 and cpu.model is not None:
+    if (
+        cpu.vendor_id == "GenuineIntel"
+        and cpu.cpu_family == 6
+        and cpu.model is not None
+    ):
         return _INTEL_FAM6.get(cpu.model, Microarch.GENERIC)
 
-    if cpu.vendor_id == "AuthenticAMD" and cpu.cpu_family is not None and cpu.model is not None:
+    if (
+        cpu.vendor_id == "AuthenticAMD"
+        and cpu.cpu_family is not None
+        and cpu.model is not None
+    ):
         for rule in _AMD_RULES:
-            if rule.family == cpu.cpu_family and rule.model_min <= cpu.model <= rule.model_max:
+            if (
+                rule.family == cpu.cpu_family
+                and rule.model_min <= cpu.model <= rule.model_max
+            ):
                 return rule.arch
         # AMD family 15 — pre-Bulldozer K8 era
         if cpu.cpu_family == 15:

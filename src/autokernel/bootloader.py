@@ -29,7 +29,7 @@ from pathlib import Path
 
 
 class BootloaderKind(str, Enum):
-    GRUB2 = "grub2"           # Debian/Ubuntu, Fedora/RHEL, Arch (most common)
+    GRUB2 = "grub2"  # Debian/Ubuntu, Fedora/RHEL, Arch (most common)
     GRUB_LEGACY = "grub-legacy"  # very rare today
     SYSTEMD_BOOT = "systemd-boot"
     REFIND = "refind"
@@ -189,7 +189,9 @@ def detect_with_root(root: Path) -> Bootloader:
             path=root / probe.path.relative_to("/"),
             kind=probe.kind,
             grub_tool_prefix=probe.grub_tool_prefix,
-            config_dir=(root / probe.config_dir.relative_to("/")) if probe.config_dir else None,
+            config_dir=(root / probe.config_dir.relative_to("/"))
+            if probe.config_dir
+            else None,
         )
         for probe in _default_probes()
     ]

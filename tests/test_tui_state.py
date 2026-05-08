@@ -6,9 +6,9 @@ of the data layer. Pilot-driven end-to-end tests live in test_tui.py.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from pathlib import Path
 
-import pytest
 
 from autokernel.models import (
     ProposalSource,
@@ -27,7 +27,9 @@ from autokernel.tui.widgets import _render_evidence
 # ── helpers ─────────────────────────────────────────────────────────────────
 
 
-def _proposal(config: str, *, risk: RiskLevel = RiskLevel.LOW, conf: float = 0.9) -> RemovalProposal:
+def _proposal(
+    config: str, *, risk: RiskLevel = RiskLevel.LOW, conf: float = 0.9
+) -> RemovalProposal:
     return RemovalProposal(
         config=config,
         current_value="m",
@@ -40,7 +42,9 @@ def _proposal(config: str, *, risk: RiskLevel = RiskLevel.LOW, conf: float = 0.9
     )
 
 
-def _rp(config: str, decision: ReviewDecision, rule: str = "policy") -> ReviewedProposal:
+def _rp(
+    config: str, decision: ReviewDecision, rule: str = "policy"
+) -> ReviewedProposal:
     return ReviewedProposal(
         proposal=_proposal(config),
         decision=decision,
@@ -50,9 +54,9 @@ def _rp(config: str, decision: ReviewDecision, rule: str = "policy") -> Reviewed
 
 
 def _build_review_set(
-    accepted: list[str] = (),
-    rejected: list[str] = (),
-    deferred: list[str] = (),
+    accepted: Sequence[str] = (),
+    rejected: Sequence[str] = (),
+    deferred: Sequence[str] = (),
     base_diff_path: Path = Path("/tmp/p.json"),
 ) -> ReviewSet:
     return ReviewSet(
@@ -176,7 +180,9 @@ def test_visible_view_all_shows_everything():
 
 
 def test_visible_subsystem_filter_intersects_with_decision_view():
-    rs = _build_review_set(deferred=["CONFIG_DRM_FOO", "CONFIG_USB_BAR", "CONFIG_DRM_BAZ"])
+    rs = _build_review_set(
+        deferred=["CONFIG_DRM_FOO", "CONFIG_USB_BAR", "CONFIG_DRM_BAZ"]
+    )
     state = WorkingState.from_review_set(rs)
     state.subsystem_filter = "gpu"  # DRM_* classifies as gpu
     visible = [i.proposal.config for i in state.visible()]
@@ -187,9 +193,7 @@ def test_visible_subsystem_filter_intersects_with_decision_view():
 
 
 def test_all_subsystems_preserves_first_appearance_order():
-    rs = _build_review_set(
-        deferred=["CONFIG_DRM_X", "CONFIG_USB_Y", "CONFIG_DRM_Z"]
-    )
+    rs = _build_review_set(deferred=["CONFIG_DRM_X", "CONFIG_USB_Y", "CONFIG_DRM_Z"])
     state = WorkingState.from_review_set(rs)
     assert state.all_subsystems() == ["gpu", "usb"]
 
@@ -198,9 +202,12 @@ def test_cycle_subsystem_walks_through_buckets_then_resets():
     rs = _build_review_set(deferred=["CONFIG_DRM_X", "CONFIG_USB_Y"])
     state = WorkingState.from_review_set(rs)
     assert state.subsystem_filter is None
-    state.cycle_subsystem(); assert state.subsystem_filter == "gpu"
-    state.cycle_subsystem(); assert state.subsystem_filter == "usb"
-    state.cycle_subsystem(); assert state.subsystem_filter is None
+    state.cycle_subsystem()
+    assert state.subsystem_filter == "gpu"
+    state.cycle_subsystem()
+    assert state.subsystem_filter == "usb"
+    state.cycle_subsystem()
+    assert state.subsystem_filter is None
 
 
 def test_cycle_subsystem_resets_cursor_to_zero():
@@ -243,8 +250,10 @@ def test_move_cursor_clamps_to_visible_range():
 def test_cursor_first_and_last():
     rs = _build_review_set(deferred=["A", "B", "C"])
     state = WorkingState.from_review_set(rs)
-    state.cursor_last(); assert state.cursor == 2
-    state.cursor_first(); assert state.cursor == 0
+    state.cursor_last()
+    assert state.cursor == 2
+    state.cursor_first()
+    assert state.cursor == 0
 
 
 def test_move_cursor_on_empty_visible_is_safe():
@@ -325,6 +334,7 @@ def test_render_evidence_includes_key_fields():
     rs = _build_review_set(deferred=["CONFIG_DRM_NOUVEAU"])
     state = WorkingState.from_review_set(rs)
     item = state.current()
+    assert item is not None
     rendered = _render_evidence(item)
     assert "CONFIG_DRM_NOUVEAU" in rendered
     assert "reason for CONFIG_DRM_NOUVEAU" in rendered
@@ -338,19 +348,28 @@ def test_render_evidence_includes_key_fields():
 def test_render_evidence_lists_evidence_block_when_present():
     p = RemovalProposal(
         config="CONFIG_X",
-        current_value="m", proposed_value="n",
-        reason="r", risk=RiskLevel.LOW, confidence=0.9,
+        current_value="m",
+        proposed_value="n",
+        reason="r",
+        risk=RiskLevel.LOW,
+        confidence=0.9,
         source=ProposalSource.LLM,
         evidence=["pci.vendor_id=8086", "lspci slot 00:02.0"],
     )
     rs = ReviewSet(
         base_diff_path=Path("/x"),
-        deferred=[ReviewedProposal(
-            proposal=p, decision=ReviewDecision.DEFER,
-            reviewer=Reviewer.POLICY, rule="t",
-        )],
+        deferred=[
+            ReviewedProposal(
+                proposal=p,
+                decision=ReviewDecision.DEFER,
+                reviewer=Reviewer.POLICY,
+                rule="t",
+            )
+        ],
     )
     state = WorkingState.from_review_set(rs)
-    rendered = _render_evidence(state.current())
+    item = state.current()
+    assert item is not None
+    rendered = _render_evidence(item)
     assert "pci.vendor_id=8086" in rendered
     assert "lspci slot 00:02.0" in rendered

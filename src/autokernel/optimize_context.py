@@ -174,91 +174,119 @@ class Preset:
 
 
 PRESETS: dict[str, Preset] = {
-    p.name: p for p in (
+    p.name: p
+    for p in (
         Preset(
-            "desktop", "General desktop, KSPP-balanced, distro composition.",
-            WorkloadProfile.DESKTOP, ThreatModel.BALANCED,
-            ModuleStrategy.DISTRO, Aggression.BALANCED,
+            "desktop",
+            "General desktop, KSPP-balanced, distro composition.",
+            WorkloadProfile.DESKTOP,
+            ThreatModel.BALANCED,
+            ModuleStrategy.DISTRO,
+            Aggression.BALANCED,
         ),
         Preset(
             "gaming-desktop",
             "Performance-first desktop. Mitigations relaxed for max perf, "
             "monolithic to skip initramfs, aggressive proposals.",
-            WorkloadProfile.DESKTOP, ThreatModel.PERMISSIVE,
-            ModuleStrategy.MONOLITHIC, Aggression.AGGRESSIVE,
+            WorkloadProfile.DESKTOP,
+            ThreatModel.PERMISSIVE,
+            ModuleStrategy.MONOLITHIC,
+            Aggression.AGGRESSIVE,
         ),
         Preset(
             "paranoid-desktop",
             "Hardened desktop: KSPP+ mitigations, distro modules for "
             "vendor compat, balanced aggression.",
-            WorkloadProfile.DESKTOP, ThreatModel.PARANOID,
-            ModuleStrategy.DISTRO, Aggression.BALANCED,
+            WorkloadProfile.DESKTOP,
+            ThreatModel.PARANOID,
+            ModuleStrategy.DISTRO,
+            Aggression.BALANCED,
         ),
         Preset(
             "laptop",
             "Battery-aware laptop. KSPP-balanced, distro modules.",
-            WorkloadProfile.LAPTOP, ThreatModel.BALANCED,
-            ModuleStrategy.DISTRO, Aggression.BALANCED,
+            WorkloadProfile.LAPTOP,
+            ThreatModel.BALANCED,
+            ModuleStrategy.DISTRO,
+            Aggression.BALANCED,
         ),
         Preset(
             "paranoid-laptop",
             "Travel laptop: lockdown=confidentiality, MODULE_SIG_FORCE, "
             "USERFAULTFD off, etc.",
-            WorkloadProfile.LAPTOP, ThreatModel.PARANOID,
-            ModuleStrategy.DISTRO, Aggression.BALANCED,
+            WorkloadProfile.LAPTOP,
+            ThreatModel.PARANOID,
+            ModuleStrategy.DISTRO,
+            Aggression.BALANCED,
         ),
         Preset(
             "server",
             "Datacenter server: throughput-first, KSPP-balanced, distro modules.",
-            WorkloadProfile.SERVER, ThreatModel.BALANCED,
-            ModuleStrategy.DISTRO, Aggression.BALANCED,
+            WorkloadProfile.SERVER,
+            ThreatModel.BALANCED,
+            ModuleStrategy.DISTRO,
+            Aggression.BALANCED,
         ),
         Preset(
             "hardened-server",
             "Server with KSPP+ hardening, monolithic for tight surface.",
-            WorkloadProfile.SERVER, ThreatModel.PARANOID,
-            ModuleStrategy.MONOLITHIC, Aggression.BALANCED,
+            WorkloadProfile.SERVER,
+            ThreatModel.PARANOID,
+            ModuleStrategy.MONOLITHIC,
+            Aggression.BALANCED,
         ),
         Preset(
             "cloud-vm",
             "Cloud VM guest. virtio-everything, no thermal/power, monolithic, "
             "aggressive trims.",
-            WorkloadProfile.VM_GUEST, ThreatModel.BALANCED,
-            ModuleStrategy.MONOLITHIC, Aggression.AGGRESSIVE,
+            WorkloadProfile.VM_GUEST,
+            ThreatModel.BALANCED,
+            ModuleStrategy.MONOLITHIC,
+            Aggression.AGGRESSIVE,
         ),
         Preset(
             "realtime",
             "PREEMPT_RT, no_hz_full, no debug, performance governor.",
-            WorkloadProfile.REALTIME, ThreatModel.BALANCED,
-            ModuleStrategy.MONOLITHIC, Aggression.BALANCED,
+            WorkloadProfile.REALTIME,
+            ThreatModel.BALANCED,
+            ModuleStrategy.MONOLITHIC,
+            Aggression.BALANCED,
         ),
         Preset(
             "embedded",
             "Smallest kernel, monolithic, fixed hardware. squashfs/UBI root.",
-            WorkloadProfile.EMBEDDED, ThreatModel.BALANCED,
-            ModuleStrategy.MONOLITHIC, Aggression.AGGRESSIVE,
+            WorkloadProfile.EMBEDDED,
+            ThreatModel.BALANCED,
+            ModuleStrategy.MONOLITHIC,
+            Aggression.AGGRESSIVE,
         ),
         Preset(
             "lean-static",
             "Workload-agnostic monolithic build. KSPP-balanced, aggressive "
             "trims. Pair with --workload to set the perf axis.",
-            WorkloadProfile.DESKTOP, ThreatModel.BALANCED,
-            ModuleStrategy.MONOLITHIC, Aggression.AGGRESSIVE,
+            WorkloadProfile.DESKTOP,
+            ThreatModel.BALANCED,
+            ModuleStrategy.MONOLITHIC,
+            Aggression.AGGRESSIVE,
         ),
         Preset(
             "lean-module",
             "Workload-agnostic modular build. Smallest kernel image; "
             "biggest initramfs. Good for net-boot or squashfs root.",
-            WorkloadProfile.DESKTOP, ThreatModel.BALANCED,
-            ModuleStrategy.MODULAR, Aggression.AGGRESSIVE,
+            WorkloadProfile.DESKTOP,
+            ThreatModel.BALANCED,
+            ModuleStrategy.MODULAR,
+            Aggression.AGGRESSIVE,
         ),
         Preset(
             "hyperoptimize",
             "Permissive + monolithic + aggressive desktop. The 'I know "
             "what I'm doing' preset — every defensible perf change "
             "applied, no security headroom.",
-            WorkloadProfile.DESKTOP, ThreatModel.PERMISSIVE,
-            ModuleStrategy.MONOLITHIC, Aggression.AGGRESSIVE,
+            WorkloadProfile.DESKTOP,
+            ThreatModel.PERMISSIVE,
+            ModuleStrategy.MONOLITHIC,
+            Aggression.AGGRESSIVE,
         ),
     )
 }
@@ -292,7 +320,8 @@ def context_from_flags(
     surface a list of valid names.
     """
     base = (
-        from_preset(preset) if preset is not None
+        from_preset(preset)
+        if preset is not None
         else OptimizationContext(
             workload=detected_workload or WorkloadProfile.DESKTOP,
         )

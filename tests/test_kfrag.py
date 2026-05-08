@@ -29,7 +29,9 @@ def _proposal(config: str, proposed: str = "n") -> RemovalProposal:
     )
 
 
-def _accepted(config: str, proposed: str = "n", *, rule: str = "test") -> ReviewedProposal:
+def _accepted(
+    config: str, proposed: str = "n", *, rule: str = "test"
+) -> ReviewedProposal:
     return ReviewedProposal(
         proposal=_proposal(config, proposed),
         decision=ReviewDecision.ACCEPT,
@@ -103,8 +105,12 @@ def test_write_kfrag_includes_provenance(tmp_path: Path):
     rs = ReviewSet(base_diff_path=tmp_path / "p.json", accepted=[_accepted("CONFIG_X")])
     out = tmp_path / "k"
     write_kfrag(
-        out, rs, snapshot_dir=tmp_path, autonomy="auto-safe",
-        model="anthropic:claude-sonnet-4-6", service_tier="flex",
+        out,
+        rs,
+        snapshot_dir=tmp_path,
+        autonomy="auto-safe",
+        model="anthropic:claude-sonnet-4-6",
+        service_tier="flex",
     )
     text = out.read_text()
     assert "anthropic:claude-sonnet-4-6" in text

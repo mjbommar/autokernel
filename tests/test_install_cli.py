@@ -18,7 +18,7 @@ from typer.testing import CliRunner
 from autokernel import cli, install as install_mod
 from autokernel.bootloader import Bootloader, BootloaderKind
 from autokernel.cli import app
-from autokernel.distro import Family, parse_os_release
+from autokernel.distro import parse_os_release
 
 runner = CliRunner()
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -36,8 +36,11 @@ _DEB_GRUB = Bootloader(
 def patched_env(monkeypatch):
     """Pin distro=Ubuntu and bootloader=GRUB2 (Debian-flavoured)."""
     monkeypatch.setattr(
-        cli, "detect_distro",
-        lambda: parse_os_release("ID=ubuntu\nID_LIKE=debian\nPRETTY_NAME=\"Ubuntu Test\"\n"),
+        cli,
+        "detect_distro",
+        lambda: parse_os_release(
+            'ID=ubuntu\nID_LIKE=debian\nPRETTY_NAME="Ubuntu Test"\n'
+        ),
     )
     monkeypatch.setattr(cli.bootloader_mod, "detect", lambda: _DEB_GRUB)
 
@@ -110,18 +113,19 @@ def test_install_no_package_and_none_found_exits_2(tmp_path: Path, patched_env):
     assert "autokernel build" in result.output  # the fix hint
 
 
-def test_install_unsupported_bootloader_emits_clear_error(
-    tmp_path: Path, monkeypatch
-):
+def test_install_unsupported_bootloader_emits_clear_error(tmp_path: Path, monkeypatch):
     snap, deb = _seed_snapshot_with_deb(tmp_path)
     monkeypatch.setattr(
-        cli, "detect_distro",
+        cli,
+        "detect_distro",
         lambda: parse_os_release("ID=ubuntu\nID_LIKE=debian\n"),
     )
     monkeypatch.setattr(
         cli.bootloader_mod,
         "detect",
-        lambda: Bootloader(kind=BootloaderKind.SYSTEMD_BOOT, detected_via="/boot/loader"),
+        lambda: Bootloader(
+            kind=BootloaderKind.SYSTEMD_BOOT, detected_via="/boot/loader"
+        ),
     )
     result = runner.invoke(
         app,
@@ -141,8 +145,10 @@ def test_install_execute_without_root_exits_5(
     result = runner.invoke(
         app,
         [
-            "install", str(snap),
-            "--package", str(deb),
+            "install",
+            str(snap),
+            "--package",
+            str(deb),
             "--skip-preflight",
             "--skip-boot-test",
             "--execute",
@@ -162,12 +168,15 @@ def test_install_execute_as_root_runs_steps(
     result = runner.invoke(
         app,
         [
-            "install", str(snap),
-            "--package", str(deb),
+            "install",
+            str(snap),
+            "--package",
+            str(deb),
             "--skip-preflight",
             "--skip-boot-test",
             "--execute",
-            "--kernel-entry", "Linux 6.13.5",
+            "--kernel-entry",
+            "Linux 6.13.5",
         ],
     )
     assert result.exit_code == 0, result.output
@@ -188,8 +197,10 @@ def test_install_execute_blocks_without_boot_test_record(
     result = runner.invoke(
         app,
         [
-            "install", str(snap),
-            "--package", str(deb),
+            "install",
+            str(snap),
+            "--package",
+            str(deb),
             "--skip-preflight",  # but NOT skip-boot-test
             "--execute",
         ],
@@ -207,23 +218,31 @@ def test_install_execute_passes_with_passing_boot_test_record(
     snap, deb = _seed_snapshot_with_deb(tmp_path)
     # Synthesize a passing boot-test record.
     import json
-    (snap / "boot-test.json").write_text(json.dumps({
-        "schema": 1,
-        "verdict_ok": True,
-        "verdict_reason": "passed",
-        "kernel_release": "6.13.5",
-        "method": "qemu",
-        "timestamp": "2026-05-08T12:00:00+00:00",
-    }))
+
+    (snap / "boot-test.json").write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "verdict_ok": True,
+                "verdict_reason": "passed",
+                "kernel_release": "6.13.5",
+                "method": "qemu",
+                "timestamp": "2026-05-08T12:00:00+00:00",
+            }
+        )
+    )
     monkeypatch.setattr("os.geteuid", lambda: 0)
     result = runner.invoke(
         app,
         [
-            "install", str(snap),
-            "--package", str(deb),
+            "install",
+            str(snap),
+            "--package",
+            str(deb),
             "--skip-preflight",
             "--execute",
-            "--kernel-entry", "Linux 6.13.5",
+            "--kernel-entry",
+            "Linux 6.13.5",
         ],
     )
     assert result.exit_code == 0, result.output
@@ -237,17 +256,24 @@ def test_install_execute_refuses_with_failing_boot_test_record(
     """A FAILED boot-test record blocks install --execute."""
     snap, deb = _seed_snapshot_with_deb(tmp_path)
     import json
-    (snap / "boot-test.json").write_text(json.dumps({
-        "schema": 1,
-        "verdict_ok": False,
-        "verdict_reason": "kernel panic before VFS stage",
-    }))
+
+    (snap / "boot-test.json").write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "verdict_ok": False,
+                "verdict_reason": "kernel panic before VFS stage",
+            }
+        )
+    )
     monkeypatch.setattr("os.geteuid", lambda: 0)
     result = runner.invoke(
         app,
         [
-            "install", str(snap),
-            "--package", str(deb),
+            "install",
+            str(snap),
+            "--package",
+            str(deb),
             "--skip-preflight",
             "--execute",
         ],
@@ -278,7 +304,14 @@ def test_install_commit_execute_requires_root(
     monkeypatch.setattr("os.geteuid", lambda: 1000)
     result = runner.invoke(
         app,
-        ["install", str(snap), "--commit", "--execute", "--kernel-entry", "Linux 6.13.5"],
+        [
+            "install",
+            str(snap),
+            "--commit",
+            "--execute",
+            "--kernel-entry",
+            "Linux 6.13.5",
+        ],
     )
     assert result.exit_code == 5
 
@@ -286,25 +319,29 @@ def test_install_commit_execute_requires_root(
 # ── rollback ───────────────────────────────────────────────────────────────
 
 
-def _seed_install_record(snap: Path, deb_name: str = "linux-image-6.13.5_amd64.deb") -> Path:
+def _seed_install_record(
+    snap: Path, deb_name: str = "linux-image-6.13.5_amd64.deb"
+) -> Path:
     log_dir = snap / "install" / "20260508T120000Z"
     log_dir.mkdir(parents=True)
     record_path = log_dir / "record.json"
-    record_path.write_text(json.dumps({
-        "schema": 1,
-        "timestamp": "20260508T120000Z",
-        "distro_id": "ubuntu",
-        "bootloader_kind": "grub2",
-        "package_paths": [str(snap / deb_name)],
-        "steps": [],
-        "ok": True,
-    }))
+    record_path.write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "timestamp": "20260508T120000Z",
+                "distro_id": "ubuntu",
+                "bootloader_kind": "grub2",
+                "package_paths": [str(snap / deb_name)],
+                "steps": [],
+                "ok": True,
+            }
+        )
+    )
     return record_path
 
 
-def test_rollback_dry_run_renders_plan(
-    tmp_path: Path, patched_env, captured_runs
-):
+def test_rollback_dry_run_renders_plan(tmp_path: Path, patched_env, captured_runs):
     snap, _ = _seed_snapshot_with_deb(tmp_path)
     _seed_install_record(snap)
     result = runner.invoke(app, ["rollback", str(snap)])
@@ -313,9 +350,7 @@ def test_rollback_dry_run_renders_plan(
     assert captured_runs == []
 
 
-def test_rollback_no_install_record_exits_2(
-    tmp_path: Path, patched_env, captured_runs
-):
+def test_rollback_no_install_record_exits_2(tmp_path: Path, patched_env, captured_runs):
     snap, _ = _seed_snapshot_with_deb(tmp_path)
     result = runner.invoke(app, ["rollback", str(snap)])
     assert result.exit_code == 2

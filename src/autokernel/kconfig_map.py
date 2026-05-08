@@ -26,183 +26,174 @@ from collections.abc import Iterable
 # A bare prefix string means ``CONFIG_<PREFIX>_{name}``.
 _PATH_TABLE: list[tuple[str, list[str]]] = [
     # ── sound subsystems (more specific than generic 'sound/') ───────────
-    ("sound/soc/sof/intel/", ["SND_SOC_SOF_INTEL_{name}", "SND_SOC_SOF_{name}", "SND_SOC_{name}"]),
-    ("sound/soc/sof/amd/",   ["SND_SOC_SOF_AMD_{name}", "SND_SOC_SOF_{name}"]),
-    ("sound/soc/sof/",       ["SND_SOC_SOF_{name}", "SND_SOC_{name}"]),
-    ("sound/soc/intel/",     ["SND_SOC_INTEL_{name}", "SND_SOC_{name}"]),
-    ("sound/soc/",           ["SND_SOC_{name}"]),
-    ("sound/pci/hda/",       ["SND_HDA_{name}", "SND_HDA_CODEC_{name}", "SND_{name}"]),
-    ("sound/pci/",           ["SND_{name}"]),
-    ("sound/usb/",           ["SND_USB_{name}", "SND_{name}"]),
-    ("sound/",               ["SND_{name}"]),
-
+    (
+        "sound/soc/sof/intel/",
+        ["SND_SOC_SOF_INTEL_{name}", "SND_SOC_SOF_{name}", "SND_SOC_{name}"],
+    ),
+    ("sound/soc/sof/amd/", ["SND_SOC_SOF_AMD_{name}", "SND_SOC_SOF_{name}"]),
+    ("sound/soc/sof/", ["SND_SOC_SOF_{name}", "SND_SOC_{name}"]),
+    ("sound/soc/intel/", ["SND_SOC_INTEL_{name}", "SND_SOC_{name}"]),
+    ("sound/soc/", ["SND_SOC_{name}"]),
+    ("sound/pci/hda/", ["SND_HDA_{name}", "SND_HDA_CODEC_{name}", "SND_{name}"]),
+    ("sound/pci/", ["SND_{name}"]),
+    ("sound/usb/", ["SND_USB_{name}", "SND_{name}"]),
+    ("sound/", ["SND_{name}"]),
     # ── drivers/gpu/drm: names like 'drivers/gpu/drm/i915/i915' ──────────
-    ("drivers/gpu/drm/",     ["DRM_{name}"]),
-
+    ("drivers/gpu/drm/", ["DRM_{name}"]),
     # ── drivers/usb subsystems ───────────────────────────────────────────
     ("drivers/usb/storage/", ["USB_{name}", "USB_STORAGE_{name}", "USB_STORAGE"]),
-    ("drivers/usb/serial/",  ["USB_SERIAL_{name}", "USB_SERIAL"]),
-    ("drivers/usb/host/",    ["USB_{name}"]),
-    ("drivers/usb/gadget/",  ["USB_GADGET_{name}", "USB_GADGET"]),
-    ("drivers/usb/musb/",    ["USB_MUSB_{name}", "USB_MUSB_HDRC"]),
-    ("drivers/usb/dwc2/",    ["USB_DWC2"]),
-    ("drivers/usb/dwc3/",    ["USB_DWC3"]),
-    ("drivers/usb/core/",    ["USB"]),
-    ("drivers/usb/",         ["USB_{name}"]),
-
+    ("drivers/usb/serial/", ["USB_SERIAL_{name}", "USB_SERIAL"]),
+    ("drivers/usb/host/", ["USB_{name}"]),
+    ("drivers/usb/gadget/", ["USB_GADGET_{name}", "USB_GADGET"]),
+    ("drivers/usb/musb/", ["USB_MUSB_{name}", "USB_MUSB_HDRC"]),
+    ("drivers/usb/dwc2/", ["USB_DWC2"]),
+    ("drivers/usb/dwc3/", ["USB_DWC3"]),
+    ("drivers/usb/core/", ["USB"]),
+    ("drivers/usb/", ["USB_{name}"]),
     # ── drivers/net subsystems ───────────────────────────────────────────
-    ("drivers/net/wireless/", ["{name}"]),  # most are direct: CONFIG_IWLWIFI, CONFIG_ATH10K_PCI
+    (
+        "drivers/net/wireless/",
+        ["{name}"],
+    ),  # most are direct: CONFIG_IWLWIFI, CONFIG_ATH10K_PCI
     ("drivers/net/ethernet/", ["{name}"]),  # most direct: CONFIG_R8169, CONFIG_E1000E
-    ("drivers/net/usb/",      ["USB_{name}"]),
-    ("drivers/net/dsa/",      ["NET_DSA_{name}"]),
-    ("drivers/net/can/",      ["CAN_{name}"]),
-    ("drivers/net/ipa/",      ["IPA"]),
-    ("drivers/net/phy/",      ["{name}_PHY", "{name}", "PHYLIB"]),
-    ("drivers/net/mdio/",     ["MDIO_{name}"]),
-    ("drivers/net/",          ["{name}"]),
-
+    ("drivers/net/usb/", ["USB_{name}"]),
+    ("drivers/net/dsa/", ["NET_DSA_{name}"]),
+    ("drivers/net/can/", ["CAN_{name}"]),
+    ("drivers/net/ipa/", ["IPA"]),
+    ("drivers/net/phy/", ["{name}_PHY", "{name}", "PHYLIB"]),
+    ("drivers/net/mdio/", ["MDIO_{name}"]),
+    ("drivers/net/", ["{name}"]),
     # ── storage / block ──────────────────────────────────────────────────
-    ("drivers/nvme/host/",    ["BLK_DEV_NVME", "NVME_{name}", "{name}"]),
-    ("drivers/nvme/target/",  ["NVME_TARGET", "NVME_TARGET_{name}"]),
-    ("drivers/nvme/",         ["NVME_{name}", "{name}"]),
-    ("drivers/scsi/",         ["SCSI_{name}", "{name}"]),
-    ("drivers/block/zram/",   ["ZRAM"]),
-    ("drivers/block/",        ["BLK_DEV_{name}", "{name}"]),
-    ("drivers/md/",           ["{name}", "MD_{name}", "DM_{name}", "BCACHE"]),
+    ("drivers/nvme/host/", ["BLK_DEV_NVME", "NVME_{name}", "{name}"]),
+    ("drivers/nvme/target/", ["NVME_TARGET", "NVME_TARGET_{name}"]),
+    ("drivers/nvme/", ["NVME_{name}", "{name}"]),
+    ("drivers/scsi/", ["SCSI_{name}", "{name}"]),
+    ("drivers/block/zram/", ["ZRAM"]),
+    ("drivers/block/", ["BLK_DEV_{name}", "{name}"]),
+    ("drivers/md/", ["{name}", "MD_{name}", "DM_{name}", "BCACHE"]),
     # drivers/ata/ and drivers/mmc/ are handled below in the storage and
     # mmc-host blocks (more specific entries first wins).
-    ("drivers/mtd/",          ["MTD_{name}"]),
-
+    ("drivers/mtd/", ["MTD_{name}"]),
     # ── input / hid ──────────────────────────────────────────────────────
-    ("drivers/hid/usbhid/",   ["USB_HID", "USB_HIDDEV"]),
-    ("drivers/hid/",          ["HID_{name}", "{name}"]),
+    ("drivers/hid/usbhid/", ["USB_HID", "USB_HIDDEV"]),
+    ("drivers/hid/", ["HID_{name}", "{name}"]),
     ("drivers/input/keyboard/", ["KEYBOARD_{name}"]),
-    ("drivers/input/mouse/",    ["MOUSE_{name}"]),
+    ("drivers/input/mouse/", ["MOUSE_{name}"]),
     ("drivers/input/touchscreen/", ["TOUCHSCREEN_{name}"]),
     ("drivers/input/joystick/", ["JOYSTICK_{name}"]),
-    ("drivers/input/serio/",  ["SERIO_{name}"]),
-    ("drivers/input/misc/",   ["INPUT_{name}"]),
-    ("drivers/input/",        ["INPUT_{name}", "{name}"]),
-
+    ("drivers/input/serio/", ["SERIO_{name}"]),
+    ("drivers/input/misc/", ["INPUT_{name}"]),
+    ("drivers/input/", ["INPUT_{name}", "{name}"]),
     # ── i2c / spi / gpio / clk ───────────────────────────────────────────
-    ("drivers/i2c/busses/",   ["I2C_{name}"]),
-    ("drivers/i2c/muxes/",    ["I2C_MUX_{name}"]),
-    ("drivers/i2c/",          ["I2C_{name}"]),
-    ("drivers/spi/",          ["SPI_{name}"]),
-    ("drivers/gpio/",         ["GPIO_{name}"]),
-    ("drivers/clk/",          ["COMMON_CLK_{name}", "CLK_{name}"]),
-
+    ("drivers/i2c/busses/", ["I2C_{name}"]),
+    ("drivers/i2c/muxes/", ["I2C_MUX_{name}"]),
+    ("drivers/i2c/", ["I2C_{name}"]),
+    ("drivers/spi/", ["SPI_{name}"]),
+    ("drivers/gpio/", ["GPIO_{name}"]),
+    ("drivers/clk/", ["COMMON_CLK_{name}", "CLK_{name}"]),
     # ── tty / serial ─────────────────────────────────────────────────────
     ("drivers/tty/serial/8250/", ["SERIAL_8250_{name}", "SERIAL_8250"]),
-    ("drivers/tty/serial/",   ["SERIAL_{name}"]),
-    ("drivers/tty/",          ["{name}"]),
-
+    ("drivers/tty/serial/", ["SERIAL_{name}"]),
+    ("drivers/tty/", ["{name}"]),
     # ── ACPI / power / thermal ───────────────────────────────────────────
-    ("drivers/acpi/dptf/",    ["ACPI_DPTF", "ACPI_DPTF_{name}"]),
-    ("drivers/acpi/",         ["ACPI_{name}", "ACPI"]),
-    ("drivers/idle/",         ["INTEL_IDLE", "ACPI_PROCESSOR_IDLE", "{name}"]),
-    ("drivers/thermal/intel/", ["INTEL_{name}_THERMAL", "INT3400_THERMAL", "INT340X_THERMAL"]),
-    ("drivers/thermal/",      ["THERMAL_{name}", "{name}_THERMAL", "{name}"]),
+    ("drivers/acpi/dptf/", ["ACPI_DPTF", "ACPI_DPTF_{name}"]),
+    ("drivers/acpi/", ["ACPI_{name}", "ACPI"]),
+    ("drivers/idle/", ["INTEL_IDLE", "ACPI_PROCESSOR_IDLE", "{name}"]),
+    (
+        "drivers/thermal/intel/",
+        ["INTEL_{name}_THERMAL", "INT3400_THERMAL", "INT340X_THERMAL"],
+    ),
+    ("drivers/thermal/", ["THERMAL_{name}", "{name}_THERMAL", "{name}"]),
     ("drivers/power/supply/", ["{name}_BATTERY", "CHARGER_{name}", "{name}"]),
-    ("drivers/power/",        ["{name}"]),
-
+    ("drivers/power/", ["{name}"]),
     # ── storage / ata ────────────────────────────────────────────────────
-    ("drivers/ata/",          ["SATA_{name}", "PATA_{name}", "ATA_{name}", "{name}"]),
-
+    ("drivers/ata/", ["SATA_{name}", "PATA_{name}", "ATA_{name}", "{name}"]),
     # ── hwmon / sensors ──────────────────────────────────────────────────
-    ("drivers/hwmon/",        ["SENSORS_{name}"]),
-
+    ("drivers/hwmon/", ["SENSORS_{name}"]),
     # ── bluetooth / wireless extras ──────────────────────────────────────
-    ("drivers/bluetooth/",    ["BT_HCIBTUSB_{name}", "BT_{name}", "BT_HCIBTUSB"]),
-
+    ("drivers/bluetooth/", ["BT_HCIBTUSB_{name}", "BT_{name}", "BT_HCIBTUSB"]),
     # ── leds / rtc / regulator / pwm / dma / iommu ───────────────────────
-    ("drivers/leds/",         ["LEDS_{name}"]),
-    ("drivers/rtc/",          ["RTC_DRV_{name}", "RTC_{name}"]),
-    ("drivers/regulator/",    ["REGULATOR_{name}"]),
-    ("drivers/pwm/",          ["PWM_{name}"]),
-    ("drivers/dma/idxd/",     ["INTEL_IDXD"]),
-    ("drivers/dma/",          ["{name}_DMAC", "{name}_DMA", "{name}"]),
-    ("drivers/iommu/intel/",  ["INTEL_IOMMU", "INTEL_IOMMU_SVM"]),
-    ("drivers/iommu/amd/",    ["AMD_IOMMU"]),
-    ("drivers/iommu/",        ["{name}_IOMMU", "{name}"]),
-    ("drivers/edac/",         ["EDAC_{name}"]),
+    ("drivers/leds/", ["LEDS_{name}"]),
+    ("drivers/rtc/", ["RTC_DRV_{name}", "RTC_{name}"]),
+    ("drivers/regulator/", ["REGULATOR_{name}"]),
+    ("drivers/pwm/", ["PWM_{name}"]),
+    ("drivers/dma/idxd/", ["INTEL_IDXD"]),
+    ("drivers/dma/", ["{name}_DMAC", "{name}_DMA", "{name}"]),
+    ("drivers/iommu/intel/", ["INTEL_IOMMU", "INTEL_IOMMU_SVM"]),
+    ("drivers/iommu/amd/", ["AMD_IOMMU"]),
+    ("drivers/iommu/", ["{name}_IOMMU", "{name}"]),
+    ("drivers/edac/", ["EDAC_{name}"]),
     ("drivers/firmware/efi/", ["EFI_{name}", "EFI"]),
-    ("drivers/firmware/",     ["{name}", "FW_{name}"]),
-    ("drivers/extcon/",       ["EXTCON_{name}"]),
-    ("drivers/cxl/",          ["CXL_{name}"]),
-    ("drivers/perf/",         ["{name}"]),
+    ("drivers/firmware/", ["{name}", "FW_{name}"]),
+    ("drivers/extcon/", ["EXTCON_{name}"]),
+    ("drivers/cxl/", ["CXL_{name}"]),
+    ("drivers/perf/", ["{name}"]),
     ("drivers/pinctrl/intel/", ["PINCTRL_INTEL", "PINCTRL_{name}"]),
-    ("drivers/pinctrl/",      ["PINCTRL_{name}"]),
-    ("drivers/auxdisplay/",   ["AUXDISPLAY", "{name}"]),
-    ("drivers/mmc/host/",     ["MMC_{name}", "MMC_SDHCI_{name}"]),
-    ("drivers/mmc/",          ["{name}"]),
-
+    ("drivers/pinctrl/", ["PINCTRL_{name}"]),
+    ("drivers/auxdisplay/", ["AUXDISPLAY", "{name}"]),
+    ("drivers/mmc/host/", ["MMC_{name}", "MMC_SDHCI_{name}"]),
+    ("drivers/mmc/", ["{name}"]),
     # ── platform x86 (Dell, ThinkPad, ASUS, etc.) ────────────────────────
     ("drivers/platform/x86/dell/", ["DELL_{name}", "{name}", "DELL_LAPTOP"]),
     ("drivers/platform/x86/intel/", ["INTEL_{name}", "{name}"]),
-    ("drivers/platform/x86/amd/",  ["AMD_{name}", "{name}"]),
-    ("drivers/platform/x86/",  ["{name}", "X86_{name}_LAPTOP"]),
-    ("drivers/platform/",     ["{name}"]),
-
+    ("drivers/platform/x86/amd/", ["AMD_{name}", "{name}"]),
+    ("drivers/platform/x86/", ["{name}", "X86_{name}_LAPTOP"]),
+    ("drivers/platform/", ["{name}"]),
     # ── misc / char drivers ──────────────────────────────────────────────
-    ("drivers/misc/eeprom/",  ["EEPROM_{name}"]),
-    ("drivers/misc/mei/",     ["INTEL_MEI", "INTEL_MEI_{name}"]),
-    ("drivers/misc/",         ["{name}"]),
-    ("drivers/char/tpm/",     ["TCG_{name}", "TCG_TPM"]),
-    ("drivers/char/",         ["{name}"]),
-    ("drivers/watchdog/",     ["{name}_WDT", "{name}"]),
-
+    ("drivers/misc/eeprom/", ["EEPROM_{name}"]),
+    ("drivers/misc/mei/", ["INTEL_MEI", "INTEL_MEI_{name}"]),
+    ("drivers/misc/", ["{name}"]),
+    ("drivers/char/tpm/", ["TCG_{name}", "TCG_TPM"]),
+    ("drivers/char/", ["{name}"]),
+    ("drivers/watchdog/", ["{name}_WDT", "{name}"]),
     # ── infiniband / iio / media ─────────────────────────────────────────
-    ("drivers/infiniband/",   ["INFINIBAND_{name}", "{name}"]),
-    ("drivers/iio/",          ["{name}"]),
-    ("drivers/media/cec/",    ["CEC_CORE", "MEDIA_CEC_SUPPORT", "{name}"]),
-    ("drivers/media/",        ["{name}", "MEDIA_{name}"]),
-    ("drivers/staging/",      ["{name}"]),
-
+    ("drivers/infiniband/", ["INFINIBAND_{name}", "{name}"]),
+    ("drivers/iio/", ["{name}"]),
+    ("drivers/media/cec/", ["CEC_CORE", "MEDIA_CEC_SUPPORT", "{name}"]),
+    ("drivers/media/", ["{name}", "MEDIA_{name}"]),
+    ("drivers/staging/", ["{name}"]),
     # ── crypto / virtio (firmware handled above) ─────────────────────────
-    ("drivers/crypto/",       ["CRYPTO_DEV_{name}", "{name}"]),
-    ("drivers/virtio/",       ["VIRTIO_{name}", "{name}"]),
-    ("drivers/cpufreq/",      ["{name}_CPUFREQ", "{name}"]),
-    ("drivers/cpuidle/",      ["CPU_IDLE_GOV_{name}", "{name}"]),
-
+    ("drivers/crypto/", ["CRYPTO_DEV_{name}", "{name}"]),
+    ("drivers/virtio/", ["VIRTIO_{name}", "{name}"]),
+    ("drivers/cpufreq/", ["{name}_CPUFREQ", "{name}"]),
+    ("drivers/cpuidle/", ["CPU_IDLE_GOV_{name}", "{name}"]),
     # ── filesystems ──────────────────────────────────────────────────────
     # fs/<name>/<file> usually maps to CONFIG_<NAME>_FS. The {fsdir} placeholder
     # will be filled by the candidate generator to use the *directory* name,
     # not the module name (e.g. fs/ext4/ext4 → CONFIG_EXT4_FS).
-    ("fs/nfsd/",              ["NFSD"]),
-    ("fs/cifs/",              ["CIFS"]),
-    ("fs/9p/",                ["9P_FS"]),
-    ("fs/",                   ["{fsdir}_FS", "{name}_FS", "{name}"]),
-
+    ("fs/nfsd/", ["NFSD"]),
+    ("fs/cifs/", ["CIFS"]),
+    ("fs/9p/", ["9P_FS"]),
+    ("fs/", ["{fsdir}_FS", "{name}_FS", "{name}"]),
     # ── networking core ──────────────────────────────────────────────────
-    ("net/wireguard/",        ["WIREGUARD"]),
-    ("net/bluetooth/",        ["BT", "BT_{name}"]),
-    ("net/sched/",            ["NET_SCH_{name}"]),
-    ("net/netfilter/",        ["NETFILTER_{name}", "{name}", "NF_{name}"]),
-    ("net/ipv4/netfilter/",   ["IP_NF_{name}", "NF_{name}"]),
-    ("net/ipv6/netfilter/",   ["IP6_NF_{name}", "NF_{name}"]),
-    ("net/",                  ["{name}"]),
-
+    ("net/wireguard/", ["WIREGUARD"]),
+    ("net/bluetooth/", ["BT", "BT_{name}"]),
+    ("net/sched/", ["NET_SCH_{name}"]),
+    ("net/netfilter/", ["NETFILTER_{name}", "{name}", "NF_{name}"]),
+    ("net/ipv4/netfilter/", ["IP_NF_{name}", "NF_{name}"]),
+    ("net/ipv6/netfilter/", ["IP6_NF_{name}", "NF_{name}"]),
+    ("net/", ["{name}"]),
     # ── crypto / lib ─────────────────────────────────────────────────────
-    ("crypto/",               ["CRYPTO_{name}", "{name}"]),
-    ("lib/crypto/",           ["CRYPTO_LIB_{name}", "CRYPTO_{name}"]),
-    ("lib/",                  ["{name}"]),
-
+    ("crypto/", ["CRYPTO_{name}", "{name}"]),
+    ("lib/crypto/", ["CRYPTO_LIB_{name}", "CRYPTO_{name}"]),
+    ("lib/", ["{name}"]),
     # ── arch ─────────────────────────────────────────────────────────────
-    ("arch/x86/kvm/",         ["KVM_{name}", "KVM"]),
+    ("arch/x86/kvm/", ["KVM_{name}", "KVM"]),
     # arch/x86/crypto/aesni-intel → CONFIG_CRYPTO_AES_NI_INTEL — name needs the
     # AES_NI normalisation. The plain CRYPTO_{name} also covers CONFIG_CRYPTO_*
     # for entries like sha512-ssse3 → SHA512_SSSE3.
-    ("arch/x86/crypto/",      ["CRYPTO_{name}", "CRYPTO_AES_NI_INTEL"]),
-    ("arch/x86/events/intel/", ["PERF_EVENTS_INTEL_{name}", "PERF_EVENTS_INTEL_UNCORE"]),
-    ("arch/x86/events/",      ["{name}_EVENTS"]),
-    ("arch/x86/platform/",    ["{name}"]),
-    ("arch/x86/",             ["X86_{name}", "{name}"]),
-    ("arch/arm64/",           ["ARM64_{name}", "{name}"]),
-    ("arch/",                 ["{name}"]),
-
+    ("arch/x86/crypto/", ["CRYPTO_{name}", "CRYPTO_AES_NI_INTEL"]),
+    (
+        "arch/x86/events/intel/",
+        ["PERF_EVENTS_INTEL_{name}", "PERF_EVENTS_INTEL_UNCORE"],
+    ),
+    ("arch/x86/events/", ["{name}_EVENTS"]),
+    ("arch/x86/platform/", ["{name}"]),
+    ("arch/x86/", ["X86_{name}", "{name}"]),
+    ("arch/arm64/", ["ARM64_{name}", "{name}"]),
+    ("arch/", ["{name}"]),
     # ── kernel core ──────────────────────────────────────────────────────
-    ("kernel/",               ["{name}"]),
+    ("kernel/", ["{name}"]),
 ]
 
 
@@ -233,7 +224,9 @@ def candidate_configs(
         parts = source_path.split("/")
         fsdir = _normalize(parts[1]) if len(parts) >= 2 and parts[0] == "fs" else ""
 
-        path_with_slash = source_path + "/"  # so 'sound/soc/' matches 'sound/soc/foo/bar'
+        path_with_slash = (
+            source_path + "/"
+        )  # so 'sound/soc/' matches 'sound/soc/foo/bar'
         for prefix, templates in _PATH_TABLE:
             if not path_with_slash.startswith(prefix):
                 continue

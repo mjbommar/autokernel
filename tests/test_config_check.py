@@ -4,11 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
 
 from autokernel.config_check import (
-    CheckReport,
-    Finding,
     FindingKind,
     check,
 )
@@ -34,22 +31,35 @@ def _surface(*, choices=None, toggles=None, tunables=None) -> KconfigSurface:
 
 def _toggle(name: str, current: str = "n") -> BoolToggle:
     return BoolToggle(
-        name=name, prompt=f"prompt {name}", help=None,
-        current_value=current, location="x", direct_dep_str="",
+        name=name,
+        prompt=f"prompt {name}",
+        help=None,
+        current_value=current,
+        location="x",
+        direct_dep_str="",
     )
 
 
-def _tunable(name: str, current: str = "0", *, ranges: list[tuple[str, str]] | None = None) -> NumericTunable:
+def _tunable(
+    name: str, current: str = "0", *, ranges: list[tuple[str, str]] | None = None
+) -> NumericTunable:
     return NumericTunable(
-        name=name, type=SymbolType.INT, prompt=f"prompt {name}", help=None,
-        current_value=current, ranges=ranges or [], location="x",
+        name=name,
+        type=SymbolType.INT,
+        prompt=f"prompt {name}",
+        help=None,
+        current_value=current,
+        ranges=ranges or [],
+        location="x",
     )
 
 
 def _choice(prompt: str, options: list[tuple[str, bool]]) -> ChoiceGroup:
     """Build a choice with (option_name, is_current) tuples."""
     return ChoiceGroup(
-        name=None, prompt=prompt, help=None,
+        name=None,
+        prompt=prompt,
+        help=None,
         options=[
             ChoiceOption(name=n, prompt=n, help=None, is_current=is_current)
             for n, is_current in options
@@ -179,13 +189,15 @@ def test_full_check_combines_findings():
     surface = _surface(
         toggles=[_toggle("KNOWN", current="n")],
         tunables=[_tunable("NR_CPUS", "8192", ranges=[("2", "8192")])],
-        choices=[_choice("KASAN", [("KASAN_GENERIC", False), ("KASAN_OUTLINE", False)])],
+        choices=[
+            _choice("KASAN", [("KASAN_GENERIC", False), ("KASAN_OUTLINE", False)])
+        ],
     )
     proposed = (
-        "CONFIG_KNOWN=y\n"          # ok
-        "CONFIG_HALLUCINATED=y\n"    # error: unknown
-        "CONFIG_NR_CPUS=99999\n"     # error: out of range
-        "CONFIG_KASAN_OUTLINE=y\n"   # warning: dead letter
+        "CONFIG_KNOWN=y\n"  # ok
+        "CONFIG_HALLUCINATED=y\n"  # error: unknown
+        "CONFIG_NR_CPUS=99999\n"  # error: out of range
+        "CONFIG_KASAN_OUTLINE=y\n"  # warning: dead letter
     )
     rep = check(proposed, surface)
     assert {f.symbol for f in rep.errors} == {"CONFIG_HALLUCINATED", "CONFIG_NR_CPUS"}

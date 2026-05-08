@@ -32,7 +32,11 @@ from autokernel.kconfig_map import candidate_configs, resolve_module_to_config
         # Ethernet — direct
         ("r8169", "drivers/net/ethernet/realtek/r8169", "CONFIG_R8169"),
         # Sound
-        ("snd_sof_pci_intel_mtl", "sound/soc/sof/intel/snd-sof-pci-intel-mtl", "CONFIG_SND_SOC_SOF_INTEL_SND_SOF_PCI_INTEL_MTL"),
+        (
+            "snd_sof_pci_intel_mtl",
+            "sound/soc/sof/intel/snd-sof-pci-intel-mtl",
+            "CONFIG_SND_SOC_SOF_INTEL_SND_SOF_PCI_INTEL_MTL",
+        ),
         # Filesystems — fsdir-derived name
         ("ext4", "fs/ext4/ext4", "CONFIG_EXT4_FS"),
         ("btrfs", "fs/btrfs/btrfs", "CONFIG_BTRFS_FS"),
@@ -62,7 +66,9 @@ def test_candidates_are_deduped():
 def test_path_specificity_wins():
     """A `sound/soc/sof/intel/` path should not produce candidates derived
     from `sound/soc/` first."""
-    cands = candidate_configs("snd_sof_pci_intel_mtl", "sound/soc/sof/intel/snd-sof-pci-intel-mtl")
+    cands = candidate_configs(
+        "snd_sof_pci_intel_mtl", "sound/soc/sof/intel/snd-sof-pci-intel-mtl"
+    )
     # The first candidate must come from the SOF_INTEL prefix, not bare SND_SOC.
     assert cands[0].startswith("CONFIG_SND_SOC_SOF_INTEL_")
 
@@ -72,25 +78,36 @@ def test_path_specificity_wins():
 
 def test_resolve_picks_path_candidate_when_present():
     running = {"CONFIG_DRM_I915": "m"}
-    assert resolve_module_to_config("i915", "drivers/gpu/drm/i915/i915", running) == "CONFIG_DRM_I915"
+    assert (
+        resolve_module_to_config("i915", "drivers/gpu/drm/i915/i915", running)
+        == "CONFIG_DRM_I915"
+    )
 
 
 def test_resolve_returns_none_when_no_match():
     running = {"CONFIG_UNRELATED": "y"}
-    assert resolve_module_to_config("i915", "drivers/gpu/drm/i915/i915", running) is None
+    assert (
+        resolve_module_to_config("i915", "drivers/gpu/drm/i915/i915", running) is None
+    )
 
 
 def test_resolve_skips_disabled_symbols():
     """Even if CONFIG_DRM_I915 exists, =n means 'not enabled' — skip it."""
     running = {"CONFIG_DRM_I915": "n", "CONFIG_I915": "m"}
     # Only CONFIG_I915=m is enabled (a bare-name fallback). That should win.
-    assert resolve_module_to_config("i915", "drivers/gpu/drm/i915/i915", running) == "CONFIG_I915"
+    assert (
+        resolve_module_to_config("i915", "drivers/gpu/drm/i915/i915", running)
+        == "CONFIG_I915"
+    )
 
 
 def test_resolve_handles_unknown_path():
     """A path not in PATH_TABLE falls back to bare name."""
     running = {"CONFIG_FOO_BAR": "m"}
-    assert resolve_module_to_config("foo_bar", "drivers/exotic/foo_bar", running) == "CONFIG_FOO_BAR"
+    assert (
+        resolve_module_to_config("foo_bar", "drivers/exotic/foo_bar", running)
+        == "CONFIG_FOO_BAR"
+    )
 
 
 def test_resolve_filesystem_with_fsdir():

@@ -162,7 +162,9 @@ def _classify_vm_guest(snap: Snapshot, sys_root: Path) -> WorkloadDetection | No
             matched_vendor = sys_vendor
             break
     if matched_vendor:
-        reasons.append(f"DMI sys_vendor: {matched_vendor!r} matches a known VM/cloud vendor")
+        reasons.append(
+            f"DMI sys_vendor: {matched_vendor!r} matches a known VM/cloud vendor"
+        )
         matched += 1
 
     if (sys_root / "hypervisor").is_dir():
@@ -234,10 +236,10 @@ def _classify_laptop(snap: Snapshot, sys_root: Path) -> WorkloadDetection | None
 def _classify_server(snap: Snapshot, sys_root: Path) -> WorkloadDetection | None:
     """Server detection. Signals:
 
-      1. DMI chassis ∈ {17, 23, 28, 29}
-      2. DMI ``product_family`` matches a known server line
-      3. No GPU display controller (PCI class 0x03xx)
-      4. CPU cores >= 16 AND no battery (heuristic for "datacenter")
+    1. DMI chassis ∈ {17, 23, 28, 29}
+    2. DMI ``product_family`` matches a known server line
+    3. No GPU display controller (PCI class 0x03xx)
+    4. CPU cores >= 16 AND no battery (heuristic for "datacenter")
     """
     reasons: list[str] = []
     matched = 0
@@ -248,15 +250,23 @@ def _classify_server(snap: Snapshot, sys_root: Path) -> WorkloadDetection | None
         matched += 1
 
     family = _probe_dmi_string(sys_root, "product_family") or ""
-    server_lines = ("PowerEdge", "ProLiant", "UCS", "ThinkSystem", "PRIMERGY", "PRIMEPOWER")
+    server_lines = (
+        "PowerEdge",
+        "ProLiant",
+        "UCS",
+        "ThinkSystem",
+        "PRIMERGY",
+        "PRIMEPOWER",
+    )
     matched_line = next((p for p in server_lines if p.lower() in family.lower()), None)
     if matched_line:
-        reasons.append(f"DMI product_family: {family!r} matches server line {matched_line!r}")
+        reasons.append(
+            f"DMI product_family: {family!r} matches server line {matched_line!r}"
+        )
         matched += 1
 
     has_gpu = any(
-        (d.class_id or "").startswith(("0300", "0302", "0380"))
-        for d in snap.pci
+        (d.class_id or "").startswith(("0300", "0302", "0380")) for d in snap.pci
     )
     if not has_gpu and not _probe_has_battery(sys_root) and snap.cpu.cores >= 16:
         reasons.append(
@@ -320,7 +330,9 @@ def detect(
         return WorkloadDetection(explicit, 1.0, ["user-supplied via --workload"])
 
     if not snap.cpu.vendor_id:
-        return WorkloadDetection(WorkloadProfile.UNKNOWN, 0.0, ["snapshot lacks cpu info"])
+        return WorkloadDetection(
+            WorkloadProfile.UNKNOWN, 0.0, ["snapshot lacks cpu info"]
+        )
 
     for classifier in (
         _classify_vm_guest,

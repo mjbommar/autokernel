@@ -58,4 +58,4 @@ jobs:
       - name: Install shellcheck
         run: sudo apt-get update -qq && sudo apt-get install -y shellcheck
       - name: Lint scripts
-        run: shellcheck -S warning scripts/collect.sh install.sh
+        run: shellcheck -S warning scripts/collect.sh scripts/validate-docker.sh scripts/validate-qemu.sh install.sh

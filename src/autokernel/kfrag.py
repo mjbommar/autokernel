@@ -82,10 +82,7 @@ def write_kfrag(
     # Anything else — string ("foo"), int (250), choice option (HZ_1000) —
     # comes from the v0.13 multi-dimensional path and gets emitted as a
     # raw assignment.
-    others = [
-        r for r in accepted
-        if r.proposal.proposed_value not in {"y", "n", "m"}
-    ]
+    others = [r for r in accepted if r.proposal.proposed_value not in {"y", "n", "m"}]
 
     header = KfragHeader(
         schema_version=1,
@@ -114,9 +111,13 @@ def write_kfrag(
     lines.append(f"# demotions: {header.n_demote}")
     lines.append(f"# other:     {header.n_other} (choices/toggles/tunables)")
     lines.append(f"# rejected:  {len(review_set.rejected)} (kept at current value)")
-    lines.append(f"# deferred:  {len(review_set.deferred)} (no decision; current value preserved)")
+    lines.append(
+        f"# deferred:  {len(review_set.deferred)} (no decision; current value preserved)"
+    )
     lines.append("#")
-    lines.append("# Apply with:  scripts/kconfig/merge_config.sh -m .config <this-file>")
+    lines.append(
+        "# Apply with:  scripts/kconfig/merge_config.sh -m .config <this-file>"
+    )
     lines.append("#              make olddefconfig")
     lines.append("")
 
@@ -149,7 +150,9 @@ def write_kfrag(
         for r in others:
             note = _comment_for(r)
             lines.append(f"# {r.proposal.config}: {note}")
-            lines.append(_format_assignment(r.proposal.config, r.proposal.proposed_value))
+            lines.append(
+                _format_assignment(r.proposal.config, r.proposal.proposed_value)
+            )
             lines.append("")
 
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -179,11 +182,13 @@ def _format_assignment(symbol: str, value: str) -> str:
     # the choice container's. Agents construct the proposal that way.
     # So if value is the bare option name and symbol matches, we just
     # set =y. Otherwise treat as raw RHS.
-    sym_short = symbol[len("CONFIG_"):] if symbol.startswith("CONFIG_") else symbol
+    sym_short = symbol[len("CONFIG_") :] if symbol.startswith("CONFIG_") else symbol
     if v == sym_short:
         return f"{symbol}=y"
     # Numeric (int or hex)?
-    if v.lstrip("-").isdigit() or (v.startswith("0x") and all(c in "0123456789abcdefABCDEF" for c in v[2:])):
+    if v.lstrip("-").isdigit() or (
+        v.startswith("0x") and all(c in "0123456789abcdefABCDEF" for c in v[2:])
+    ):
         return f"{symbol}={v}"
     # Already-quoted string?
     if v.startswith('"') and v.endswith('"'):
@@ -212,7 +217,7 @@ _SET_RE = re.compile(r"^(CONFIG_[A-Z0-9_]+)=(.*)$")
 @dataclass(frozen=True)
 class ParsedKfrag:
     header_lines: list[str]
-    disables: list[str]   # symbols set to =n
+    disables: list[str]  # symbols set to =n
     assignments: dict[str, str]  # symbol → value (m, y, "string", numeric…)
 
 

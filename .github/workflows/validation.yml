@@ -1,0 +1,81 @@
+name: validation
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+    branches: [master, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pre-commit:
+    name: pre-commit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Sync dependencies
+        run: uv sync --frozen
+
+      - name: Run pre-commit
+        run: uv run pre-commit run --all-files
+
+  docker-validation:
+    name: docker validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build validation image
+        run: docker build -f Dockerfile.validation -t autokernel-validation .
+
+      - name: Run validation image
+        run: docker run --rm autokernel-validation
+
+  qemu-smoke:
+    name: qemu smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Sync dependencies
+        run: uv sync --frozen
+
+      - name: Install QEMU
+        run: sudo apt-get update -qq && sudo apt-get install -y qemu-system-x86
+
+      - name: Stage runner kernel
+        run: |
+          sudo cp "/boot/vmlinuz-$(uname -r)" "$RUNNER_TEMP/vmlinuz"
+          sudo chmod 0644 "$RUNNER_TEMP/vmlinuz"
+
+      - name: Boot current runner kernel under QEMU
+        env:
+          AUTOKERNEL_QEMU_REQUIRED: "1"
+          AUTOKERNEL_QEMU_KERNEL: ${{ runner.temp }}/vmlinuz
+        run: scripts/validate-qemu.sh

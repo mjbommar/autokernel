@@ -114,9 +114,9 @@ class ProposalTable(DataTable):
         if self.row_count > 0 and state.cursor < self.row_count:
             try:
                 self.move_cursor(row=state.cursor)
-            except Exception:
+            except Exception as exc:
                 # Textual sometimes raises during mount/clear races; benign.
-                pass
+                self.log.debug("cursor restore skipped during table refresh: %r", exc)
 
 
 class EvidencePanel(Static):

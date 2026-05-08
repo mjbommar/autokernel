@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -19,13 +18,15 @@ from autokernel.install import build_commit_plan, build_plan, execute
 
 
 def _info(family: Family):
-    return parse_os_release({
-        Family.DEBIAN: "ID=ubuntu\nID_LIKE=debian\n",
-        Family.FEDORA: "ID=fedora\n",
-        Family.ARCH: "ID=arch\n",
-        Family.SUSE: "ID=opensuse-tumbleweed\n",
-        Family.UNKNOWN: "ID=mystery\n",
-    }[family])
+    return parse_os_release(
+        {
+            Family.DEBIAN: "ID=ubuntu\nID_LIKE=debian\n",
+            Family.FEDORA: "ID=fedora\n",
+            Family.ARCH: "ID=arch\n",
+            Family.SUSE: "ID=opensuse-tumbleweed\n",
+            Family.UNKNOWN: "ID=mystery\n",
+        }[family]
+    )
 
 
 _DEB_GRUB = Bootloader(
@@ -136,6 +137,7 @@ def test_unknown_distro_returns_rejected_plan(tmp_path: Path):
         package_paths=[deb],
     )
     assert not plan.is_valid
+    assert plan.rejected_reason is not None
     assert "no install recipe" in plan.rejected_reason
 
 
