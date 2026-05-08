@@ -4,18 +4,26 @@ The honest framing: **autokernel is becoming "Linux from your
 hardware"** — an LLM-driven generator that takes a host's hardware +
 intent and produces a minimal, fast, secure system tuned to it.
 
-Current state (v0.14): we optimize the **kernel**. The natural arc
-is to push outward layer-by-layer until autokernel can build a
-complete bootable image.
+Current state (v0.16.3): we optimize the **kernel** and generate a
+**per-host minimal initramfs**. Closed-loop iteration with fitness
+feedback. Clang validated end-to-end. The natural arc is to push
+outward layer-by-layer until autokernel can build a complete
+bootable image.
 
 ```
 v0.10  optimize kernel config (deterministic + LLM trim)         [done]
 v0.13  multi-axis kernel optimization (4 dimensions)             [done]
 v0.14  closed-loop hill-climber                                  [done]
-─────  ↑ kernel only ↑ │ ↓ whole system ↓  ─────────────────────
-v0.15  clang default + LTO + iterate --execute live + docs       [next]
-v0.16  minitram — minimal initramfs from snapshot evidence
-v0.17  PGO + AutoFDO (clang) — workload-profiled kernel
+v0.15  clang default + LTO + docs                                [done]
+v0.15.1 iterate --execute live e2e + kernel-only target          [done]
+v0.16  closed loop closes (post-build chain, fitness trend,
+       config_check in iterate)                                  [done]
+v0.16.1 clang setup coverage all 6 distros + build pre-flight    [done]
+v0.16.2 minitram — minimal initramfs from snapshot evidence      [done]
+v0.16.3 clang actually used (CC=clang on argv) +
+       kernel-only success panel + live-validated build           [done]
+─────  ↑ kernel only + initramfs ↑ │ ↓ whole system ↓  ─────────
+v0.17  PGO + AutoFDO (clang) — workload-profiled kernel          [next]
 v0.18  autokernel distro — minimal userspace generator
 v0.19  closed-loop iterate over kernel + userspace
 v1.0   "Linux from your hardware" — bootable image generator
@@ -26,49 +34,111 @@ v1.0   "Linux from your hardware" — bootable image generator
 | Layer | Ubuntu typical | autokernel target | Win source |
 |---|---:|---:|---|
 | Bootloader | GRUB ~5 MB | EFI-stub built into kernel | Skip GRUB on UEFI |
-| Kernel image | 17 MB | **16 MB** *(done)* | LLM judgment over choices/toggles |
-| Initramfs | 40 MB | **3-5 MB** *(v0.16)* | Only what THIS host needs to boot |
-| Modules installed | 700 MB | **~50-100 MB** *(v0.15)* | localmodconfig already + cleanup |
+| Kernel image | 17.43 MB | **15.44 MB** *(done — clang + four-axis)* | LLM judgment + clang `-march=native` |
+| Initramfs | 41.5 MB | **3-5 MB** *(done — `autokernel minitram`)* | Only what THIS host needs to boot |
+| Modules installed | 774 MB | **~50-100 MB** *(done — localmodconfig)* | localmodconfig + cleanup |
 | Userspace base | 800 MB-2 GB | **30-150 MB** *(v0.18)* | busybox-static + chosen init + only used services |
 | **Total bootable** | **2-4 GB** | **~80-200 MB** | Whole system fits on a small EFI partition |
 
+## Live-validated bzImage comparison (Meteor Lake / Linux 6.19)
+
+Same `final.config`, three compilers:
+
+| Build | Compiler | bzImage | vs Ubuntu | Boot test |
+|---|---|---:|---:|---|
+| Ubuntu stock | gcc 14.x | 17.43 MB | — | not tested |
+| autokernel + gcc 15.2 | gcc | 16.58 MB | **−4.9%** | PASS 0.4s |
+| autokernel + clang 21.1.8 | clang | **15.44 MB** | **−11.4%** | **PASS 0.2s** |
+
+Clang produces a ~7% smaller binary than gcc on the exact same Kconfig.
+With `--lto=thin` (clang-only) the gap widens further.
+
 ## Each release in detail
 
-### v0.15: hardening + reach (compiler, live e2e, docs)
+### v0.15.0–v0.15.1: clang as default + iterate live e2e *(done)*
 
-| Item | Why |
-|---|---|
-| **clang as default compiler** | Required for CFI/LTO/KCSAN; better optimization passes; native `-march=native` works on both. Fall back to gcc with `--compiler=gcc`. |
-| **`--lto={thin,full}`** | Clang thin-LTO is the modern recipe for kernel perf — typically 2-5% throughput improvement at significant build-time cost. |
-| **`iterate --execute` live e2e** | The v0.14 closed loop has only been dry-run-tested. Need to see auto-revert under fire, real boot-test failures, real per-iteration size deltas. |
-| **`docs/`** *(this folder)* | Roadmap + architecture + agents reference, so future sessions can pick up the thread. |
-| **iterate dry-run wiring fix** | The dry-run path's review+apply doesn't currently chain because propose writes to `iter_dir/proposal.json` but review reads from `<snap>/proposal.json`. Small fix. |
+* **clang as default compiler.** `--compiler={clang,gcc,llvm}`; clang
+  is the default. installdeps brings clang/lld/llvm in for all 6
+  distro families. Required for CFI/LTO/KCSAN, smaller binaries.
+  Fall back to gcc with `--compiler=gcc`.
+* **`--lto={thin,full}`** opt-in flag.
+* **`docs/`** (this folder) memorialized the layer-by-layer plan.
+* Live `iterate --execute` end-to-end run uncovered three real bugs
+  (`bindeb-pkg` deps wall, stale-artifact reads, dry-run review
+  wiring) — all fixed in v0.15.1.
+* New `--target=kernel-only` skips packaging deps; iterate uses it
+  to validate the build+boot loop without `debhelper-compat`.
 
-### v0.16: `minitram` — minimal initramfs
+### v0.16.0: closing the closed loop *(done)*
 
-Today Ubuntu's `update-initramfs` builds a 40 MB initramfs containing
-every module that *might* be needed across all possible hosts.
-autokernel knows what's load-bearing for THIS host (LUKS-in-chain?
-LVM? RAID? specific DKMS?) and can build a **3-5 MB initramfs** with
-exactly those.
+The v0.15 live run found that the loop was open in three places —
+all fixed:
+
+* **`--base-config` chains from post-build `.config`** (what
+  olddefconfig + localmodconfig actually settled on), not from the
+  kfrag-merged `final.config`. Otherwise iter N+1 re-proposes
+  symbols olddefconfig had already kept.
+* **`config_check` invoked between apply and build** in iterate.
+  Catches LLM hallucinations + dead-letter choices + out-of-range
+  tunables before the build wastes time.
+* **History block carries the fitness target's value** across rounds
+  with steering guidance ("Kernel has GROWN — favor proposals that
+  reduce binary size") so the LLM can correct course.
+
+### v0.16.1: clang setup coverage *(done)*
+
+* All 6 distro families (Debian, Fedora, Arch, SUSE, Gentoo, Alpine)
+  ship clang/lld/llvm in `DistroSpec.build_deps`.
+* `preflight --for build` requires clang + ld.lld in addition to
+  gcc/make/ld; install-deps maps each to the right package per family.
+* `autokernel build --execute` pre-flights the compiler binary —
+  fails fast with `→ autokernel install-deps --for build --execute`
+  hint instead of a confusing mid-make "command not found".
+
+### v0.16.2: `minitram` — minimal initramfs *(done)*
+
+Today Ubuntu's `update-initramfs` builds a 41.5 MB initramfs
+containing every module that *might* be needed across all possible
+hosts. `autokernel minitram` knows what's load-bearing for THIS host
+(LUKS-in-chain? LVM? RAID? specific DKMS?) and packs only those — a
+**3-5 MB initramfs**.
 
 ```
-autokernel minitram <snap> --kernel-source PATH
-# → <snap>/initramfs.cpio.zst (~3-5 MB)
+autokernel minitram <snap> [--dropbear] [--execute]
+# → <snap>/initramfs.cpio.zst
 # Contents:
-#   /init                   busybox-static early shell
+#   /init                   busybox-static early shell (always)
 #   /lib/modules/X.Y.Z/...  exactly the boot-path modules + their fw
 #   /sbin/cryptsetup        only if LUKS in chain
 #   /sbin/lvm               only if LVM in chain
 #   /sbin/mdadm             only if MD/RAID in chain
-#   /sbin/dropbear          (optional) headless rescue SSH
+#   /sbin/dropbear          (--dropbear) headless rescue SSH
 ```
 
 Reuses Snapshot evidence: `boot.luks_in_chain`, `boot.root_fstype`,
 `block_devices`, `dkms`. No LLM in the hot path — pure deterministic
 composition.
 
-### v0.17: PGO + AutoFDO
+### v0.16.3: clang actually used + kernel-only success panel *(done)*
+
+A real clang build on Meteor Lake revealed two final bugs from the
+v0.15 default change:
+
+* **Setting `CC=clang` in env wasn't enough.** The kernel's top-level
+  Makefile reassigns CC, so env-only CC=clang gets shadowed and gcc
+  ends up doing the actual compile. Fix: pass
+  `CC=clang HOSTCC=clang` (or `LLVM=1`) on the make argv as
+  command-line variables, which Kbuild honors.
+* **`BuildResult.ok` required `deb_paths`** — but `--target=kernel-only`
+  skips packaging, so success was always reported as failure. Fix:
+  `BuildResult` gains `target` and `bzimage_path` fields; `ok`
+  distinguishes kernel-only success (bzImage exists) from
+  packaging-target success (deb/rpm/tar in deb_paths).
+
+Live verified on Meteor Lake / clang 21.1.8: 15.44 MB bzImage, boot
+test PASS in 0.2s. See live comparison table above.
+
+### v0.17: PGO + AutoFDO *(next)*
 
 Profile-Guided Optimization for the kernel itself. Both gcc and clang
 support it; clang's AutoFDO (sampling-based) is the easier path. Two

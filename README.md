@@ -8,12 +8,16 @@ Debian/Ubuntu, Fedora/RHEL, Arch, openSUSE, Gentoo, Alpine.
 Inspired by Gentoo's `localmodconfig`, FreeBSD's `include GENERIC` + diff
 style, and Debian's `make bindeb-pkg`.
 
-> **Status: 0.15.** Closed-loop optimizer with **clang as the default
-> compiler**, LTO opt-in via `--lto={thin,full}`, and a written-out
-> roadmap to "Linux from your hardware". The closed-loop runs propose
-> → check → apply → build → boot-test → measure for N rounds, feeding
-> each round's results into the next propose call as context. Four-axis
-> intent (workload × threat × modules × aggression) composed via
+> **Status: 0.16.3.** Closed-loop optimizer with **clang as the default
+> compiler** (live-validated end-to-end: 15.44 MB bzImage on Meteor Lake
+> vs 17.43 MB Ubuntu stock, **−11.4%**). LTO opt-in via
+> `--lto={thin,full}`. The closed loop now actually closes —
+> `--base-config` chains from the post-build `.config`, `config_check`
+> blocks LLM hallucinations before the slow build, and the prompt's
+> history block carries a fitness trend so the LLM can see whether
+> the kernel is shrinking. New `autokernel minitram` builds a per-host
+> minimal initramfs (3-5 MB vs Ubuntu's 41.5 MB). Four-axis intent
+> (workload × threat × modules × aggression) composed via
 > `--preset=NAME` or per-axis flags. See [docs/ROADMAP.md](docs/ROADMAP.md)
 > for the layer-by-layer arc, [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 > for how the pieces fit together, [docs/AGENTS.md](docs/AGENTS.md)
@@ -21,6 +25,7 @@ style, and Debian's `make bindeb-pkg`.
 > v0.17 profile-guided optimization design.
 
 [![tests](https://github.com/mjbommar/autokernel/actions/workflows/test.yml/badge.svg)](https://github.com/mjbommar/autokernel/actions/workflows/test.yml)
+[![validation](https://github.com/mjbommar/autokernel/actions/workflows/validation.yml/badge.svg)](https://github.com/mjbommar/autokernel/actions/workflows/validation.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 ## Install
@@ -58,6 +63,22 @@ cd autokernel
 uv sync
 cp .env.example .env  # add ANTHROPIC_API_KEY or OPENAI_API_KEY
 uv run autokernel preflight
+```
+
+## Development validation
+
+```bash
+uv run pre-commit run --all-files
+scripts/validate-docker.sh
+scripts/validate-qemu.sh  # QEMU smoke; set AUTOKERNEL_QEMU_KERNEL if /boot has no vmlinuz
+```
+
+The Docker validation image runs the same static checks and pytest suite
+inside Ubuntu 24.04 with QEMU installed:
+
+```bash
+docker build -f Dockerfile.validation -t autokernel-validation .
+docker run --rm autokernel-validation
 ```
 
 ## Easiest path: `quickstart`
@@ -185,8 +206,9 @@ so reruns are free.
 | `review DIR --rules…` | Bulk-decision rules over `needs_review` | `DIR/review.json` + `DIR/auto.kfrag` |
 | `apply DIR` | Merge kfrag into running `.config`, validate load-bearing | `DIR/final.config` |
 | `fetch-source [--method=…]` | Distro-aware kernel source acquisition | a kernel source tree |
-| `build DIR --kernel-source PATH [--localmodconfig] [--execute]` | Drop config + olddefconfig; `--localmodconfig` trims modules to host's lsmod; `--execute` compiles | logs + (`--execute`) `.deb`/`.rpm`/`.tar.zst` |
-| `iterate DIR --kernel-source PATH [--preset=NAME] [--max-iterations=N] [--target=size]` | Closed-loop optimizer — propose → check → apply → build → boot-test for N rounds, with results feeding the next round's prompt | `DIR/iterations/i<NNN>/` per round |
+| `build DIR --kernel-source PATH [--compiler=clang] [--lto=thin] [--target=kernel-only] [--localmodconfig] [--execute]` | Drop config + olddefconfig; `--localmodconfig` trims modules to host's lsmod; `--target=kernel-only` skips packaging (just `make bzImage modules`); `--execute` compiles | logs + (`--execute`) bzImage / `.deb`/`.rpm`/`.tar.zst` |
+| `iterate DIR --kernel-source PATH [--preset=NAME] [--max-iterations=N] [--target=size]` | Closed-loop optimizer — propose → check → apply → build → boot-test for N rounds; history (with fitness trend) feeds the next round | `DIR/iterations/i<NNN>/` per round |
+| `minitram DIR [--dropbear] [--execute]` | Build a per-host minimal initramfs from snapshot evidence (LUKS / LVM / RAID / DKMS / fs detected). Pure deterministic | `DIR/initramfs.cpio.zst` (~3-5 MB) |
 
 ## Pipeline
 

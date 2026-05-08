@@ -100,18 +100,37 @@ historical/strategic view see [ROADMAP.md](ROADMAP.md).
 ─── OR ────────────────────────────────────────────────────────  │
                                                                   │
 ┌──────────────────────────────────────────────────────────────┐  │
-│  iterate (closed loop, v0.14)                                │  │
+│  iterate (closed loop, v0.14 → v0.16)                        │  │
 │  for round in 1..N:                                          │  │
-│    propose --history-from=iN.txt --base-config=i(N-1)/final  │◄─┘
-│    config_check (catches LLM hallucinations)                 │
+│    history block summary (proposals + fitness trend)         │  │
+│      → iter_dir/history.txt                                  │  │
+│    propose --history-from=iter_dir/history.txt               │  │
+│            --base-config=i(N-1)/post_build.config            │◄─┘
+│      (← v0.16: post_build.config not final.config — what     │
+│       olddefconfig actually settled on)                      │
 │    review + apply                                            │
-│    build (with --execute)                                    │
+│    config_check (← v0.16: catches hallucinations,            │
+│                  dead-letter choices, out-of-range tunables) │
+│    build --target=kernel-only --execute                      │
+│      (← v0.15.1: kernel-only skips packaging deps;           │
+│       v0.16.3: CC=clang on argv, not just env)               │
 │    boot-test                                                 │
 │    measure (size, time, what landed, what got stripped)      │
 │    record → iterations/iN/record.json                        │
 │    converged-on-size? → break                                │
 │    regressed? → auto-revert + add do-not-repeat to history   │
 └──────────────────────────────────────────────────────────────┘
+
+   And in parallel — `autokernel minitram` (v0.16.2):                
+                                                                     
+   Snapshot evidence → MinitramPlan → cpio.zst (~3-5 MB)             
+     boot.luks_in_chain  → cryptsetup tool + dm_crypt module         
+     boot.root_fstype    → fs module (e.g. btrfs.ko)                 
+     block_devices LVM   → lvm tool + dm_mod module                  
+     block_devices RAID  → mdadm tool + raid* modules                
+     dkms list           → each DKMS module's .ko                    
+     plus busybox-static + a generated /init shell script            
+   Pure deterministic (no LLM in hot path).                          
 ```
 
 ## Key data structures
@@ -141,8 +160,22 @@ historical/strategic view see [ROADMAP.md](ROADMAP.md).
 - **`IterationRecord`** (`iteration.py`) — one round of the closed
   loop. ctx_summary + proposals + measurements + regressed flag.
   Persisted to `<snap>/iterations/i<NNN>/record.json`.
-  `summarize_history_for_prompt()` renders a compact text block fed
-  to the next round's agents.
+  `summarize_history_for_prompt(target=...)` renders a compact text
+  block including a **fitness trend** (`i1=18.0MB → i2=16.8MB`) and
+  per-direction guidance ("Kernel has GROWN — favor proposals that
+  reduce binary size") that gets fed to the next round's agents.
+
+- **`MinitramPlan`** (`minitram.py`) — composition plan for a
+  per-host initramfs. Lists tools (cryptsetup, lvm, mdadm, optional
+  dropbear) with their ldd-resolved libs, kernel modules from
+  `/lib/modules/<release>/...`, and a generated `/init` shell
+  script. Built by `plan(snapshot)`; packed to `cpio.zst` by
+  `build(plan)`.
+
+- **`BuildResult`** (`build.py`) — result of `build()`. Now carries
+  `target` and `bzimage_path` so `BuildResult.ok` can correctly
+  report success for `--target=kernel-only` (no .deb needed —
+  bzImage existence is the success criterion).
 
 ## Per-batch caching
 
@@ -186,33 +219,64 @@ post-hoc inspection. No silent drops.
 ## Subprocess model
 
 The CLI verbs (`scan`, `propose`, `review`, `apply`, `build`,
-`boot-test`, `install`, `iterate`) shell out to each other when
-composition is needed. That's why `iterate` is a thin orchestrator:
+`boot-test`, `install`, `iterate`, `minitram`) shell out to each
+other when composition is needed. That's why `iterate` is a thin
+orchestrator:
 
 ```python
 # iterate's body, simplified:
 for n in range(1, N+1):
     write_history_block(iter_dir/n/'history.txt')
-    subprocess.run(['autokernel', 'propose', ..., '--history-from=...'])
+    subprocess.run(['autokernel', 'propose', ...,
+                    '--history-from=iter_dir/history.txt',
+                    '--base-config=i(N-1)/post_build.config'])  # v0.16
+    copy iter_dir/proposal.json → snap_dir/proposal.json  # v0.15.1 wiring
     subprocess.run(['autokernel', 'review', ...])
     subprocess.run(['autokernel', 'apply', ...])
+    snapshot final.config → iter_dir/final.config  # for chaining
+    run config_check(final.config, kconfig_surface)  # v0.16
     if execute:
-        subprocess.run(['autokernel', 'build', '--execute', ...])
+        subprocess.run(['autokernel', 'build', '--execute',
+                        '--target=kernel-only',                # v0.15.1
+                        '--compiler=clang', ...])               # v0.16.3
         subprocess.run(['autokernel', 'boot-test', ...])
+        snapshot kernel_source/.config → iter_dir/post_build.config
     measure_and_record(...)
 ```
 
 This keeps each verb independently runnable + testable, at the cost
-of subprocess overhead and PYTHONUNBUFFERED=1 plumbing for live
-progress.
+of subprocess overhead and `PYTHONUNBUFFERED=1` plumbing for live
+progress (each step transition logs to `iter_dir/progress.log`).
 
 ## Why pydantic-ai
 
 - **Structured output** forces the LLM to commit to a schema. No
   natural-language postprocessing.
-- **Typed deps** (we plan to use deps in v0.15+) for tool access
-  backed by Snapshot — agent can ask "is module X loaded?" without
-  giving it raw filesystem access.
+- **Typed deps** (planned for v0.17+) for tool access backed by
+  Snapshot — agent can ask "is module X loaded?" without giving it
+  raw filesystem access.
 - **Provider-agnostic** — we resolve `--llm-mode={auto,cheap,fast,
   quality}` to a model from whichever provider the user has keys for
   (`autokernel.llm.resolve()`).
+
+## Compiler plumbing (v0.16.3)
+
+A real clang build on Meteor Lake found that setting `CC=clang` in
+the env isn't enough — the kernel's top-level Makefile reassigns CC,
+shadowing the env variable. The fix:
+
+```python
+# build._compiler_make_vars(compiler) returns:
+#   "clang" → ["CC=clang", "HOSTCC=clang"]
+#   "llvm"  → ["LLVM=1"]
+#   "gcc"   → ["CC=gcc", "HOSTCC=gcc"]
+# These get spliced into every make invocation as command-line
+# variables (Kbuild honors them) — not just env (which Kbuild
+# overwrites for CC).
+argv = ["make", f"-j{jobs}", *compiler_vars, *targets]
+```
+
+Same pattern applies to olddefconfig + localmodconfig within
+`prepare()`. Live verified: `vmlinux` strings show
+`Ubuntu clang version 21.1.8` after the fix; before, gcc was
+silently winning despite `--compiler=clang`.

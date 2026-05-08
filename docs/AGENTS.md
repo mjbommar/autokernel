@@ -16,12 +16,20 @@ The shared evidence block (built by `_evidence_block()` in
 `agent_dims.py`):
 
 ```
-# iteration history (last N of M):                    ← only when --history-from given
+# iteration history (last 3 of 4) — target=size:           ← only when --history-from given
 #   i=1 (baseline): landed=12/18, bzImage=18.2MB, boot PASS
 #   i=2:           landed=11/14, bzImage=16.8MB, boot PASS
+#   i=3:           landed=5/9,   bzImage=16.5MB, boot PASS
+#
+# FITNESS TREND (target=size, smaller is better):              ← v0.16
+#   i1=18.20MB → i2=16.80MB (-7.7% vs prev) → i3=16.50MB (-1.8% vs prev)
+#
+# GUIDANCE:                                                     ← v0.16
+#   Kernel is shrinking — keep going. Look for additional trims that
+#   haven't been considered yet.
 #
 # rules from past iterations:
-#   - i=2 regressed; do NOT re-propose: CONFIG_BTRFS_FS, CONFIG_X (reason: ...)
+#   - i=4 regressed; do NOT re-propose: CONFIG_BTRFS_FS (reason: VFS panic)
 
 # OptimizationContext:
 #   workload:   server
