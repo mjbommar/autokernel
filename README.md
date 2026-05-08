@@ -8,10 +8,10 @@ Debian/Ubuntu, Fedora/RHEL, Arch, openSUSE, Gentoo, Alpine.
 Inspired by Gentoo's `localmodconfig`, FreeBSD's `include GENERIC` + diff
 style, and Debian's `make bindeb-pkg`.
 
-> **Status: 0.11.** Full pipeline + CPU microarch tuning + LLM
-> auto-detection + **boot-test in a VM before installing**. Build →
-> verify in QEMU/virtme-ng → install. `autokernel install --execute`
-> now refuses to proceed without a recent passing boot-test record.
+> **Status: 0.12.** Full pipeline + `autokernel install-deps` —
+> distro-aware system-package installer for build / boot-test / install
+> dependencies, idempotent and dry-run-by-default. One verb to set up
+> the host instead of copy-pasting `apt install …`.
 
 [![tests](https://github.com/mjbommar/autokernel/actions/workflows/test.yml/badge.svg)](https://github.com/mjbommar/autokernel/actions/workflows/test.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -28,6 +28,20 @@ curl -LsSf https://raw.githubusercontent.com/mjbommar/autokernel/master/install.
 
 The installer is non-destructive: never `sudo`s, never touches `/etc` or
 `/boot`, everything lands under `$HOME`.
+
+Then **one verb sets up the rest of the host** — distro-aware,
+idempotent, dry-run by default:
+
+```bash
+autokernel install-deps                          # see what would be installed
+autokernel install-deps --for build --execute    # build deps only
+autokernel install-deps --execute                # everything (build + boot-test + install)
+```
+
+System packages go via your distro's package manager (`apt` / `dnf` /
+`pacman` / `zypper` — sudo is invoked transparently). Optional Python
+tools like `virtme-ng` install via `uv tool install` (no sudo, isolated
+env). The verb only runs what's actually missing.
 
 For development, clone and `uv sync`:
 
@@ -364,8 +378,8 @@ touches your live `/boot`. Two methods, picked automatically:
 
 | Method | Setup | What it tests |
 |---|---|---|
-| **virtme-ng** (preferred) | `pip install virtme-ng` | Boots the kernel against the host's read-only `/` over virtio-fs. Reaches userspace. |
-| **QEMU kernel-only** (fallback) | `apt install qemu-system-x86` (or distro equivalent) | Boots the kernel with no rootfs. Success = kernel reaches the VFS-mount stage without an earlier panic. |
+| **virtme-ng** (preferred) | `uv tool install virtme-ng` | Boots the kernel against the host's read-only `/` over virtio-fs. Reaches userspace. |
+| **QEMU kernel-only** (fallback) | `autokernel install-deps --for boot-test --execute` (or `apt install qemu-system-x86` directly) | Boots the kernel with no rootfs. Success = kernel reaches the VFS-mount stage without an earlier panic. |
 
 A passing test writes `<snapshot>/boot-test.json` with the bzImage's
 SHA-256. `autokernel install --execute` then refuses to proceed unless:

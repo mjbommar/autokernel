@@ -123,8 +123,14 @@ def run(
     from autokernel.cli import _render_preflight  # avoid circular at import time
     _render_preflight(pf_run, distro=distro, for_="build")
     if pf_run.has_failures:
+        # Surface the one-shot fix verb instead of just "go install stuff yourself."
+        console.print(
+            "\n[bold]fix in one step:[/bold]\n"
+            "  autokernel install-deps --for build --execute   "
+            "[dim](installs the right packages for your distro)[/dim]"
+        )
         if not _confirm_continue_after_warnings(console=console, yes=yes):
-            console.print("[yellow]bailing — install missing build deps and rerun.[/yellow]")
+            console.print("[yellow]bailing — run install-deps and rerun.[/yellow]")
             return
 
     # ── 2. scan ────────────────────────────────────────────────────────

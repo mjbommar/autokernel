@@ -626,7 +626,7 @@ def check_virtme_available(ctx: CheckContext) -> CheckResult:
         severity=Severity.WARN,
         message="virtme-ng not installed (QEMU kernel-only boot-test still works)",
         fix_hint=(
-            "pip install virtme-ng  (recommended; faster than apt's `virtme` package)"
+            "uv tool install virtme-ng  (preferred; isolated env, ~/.local/bin shim)"
         ),
     )
 

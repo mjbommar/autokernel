@@ -45,6 +45,7 @@ from autokernel import build as build_mod
 from autokernel import errors as err
 from autokernel import fetch as fetch_mod
 from autokernel import install as install_mod
+from autokernel import installdeps as installdeps_mod
 from autokernel import llm as llm_mod
 from autokernel import preflight as preflight_mod
 from autokernel import rollback as rollback_mod
@@ -1271,6 +1272,112 @@ def config_test(
         )
 
 
+# ── install-deps ───────────────────────────────────────────────────────────
+
+
+@app.command("install-deps")
+def install_deps_cmd(
+    target: Annotated[installdeps_mod.Target, typer.Option("--for", help="What to install for: build / boot-test / install / all")] = installdeps_mod.Target.ALL,
+    execute: Annotated[bool, typer.Option(help="Actually run the install. Default: dry-run (just print the command).")] = False,
+    no_recommended: Annotated[bool, typer.Option("--no-recommended", help="Skip recommended-but-not-required packages (ccache, etc.)")] = False,
+    no_virtme: Annotated[bool, typer.Option("--no-virtme", help="Don't suggest/install virtme-ng (the boot-test enhancement)")] = False,
+) -> None:
+    """Install missing system packages for build / boot-test / install.
+
+    Distro-aware: produces the right ``apt``/``dnf``/``pacman``/``zypper``
+    command for your detected family. Defaults to dry-run; ``--execute``
+    actually runs the install (with sudo for system packages and
+    ``uv tool install`` for any optional Python tools like virtme-ng).
+
+    Idempotent: re-running when nothing's missing is a no-op.
+    """
+    distro = detect_distro()
+    spec = spec_for(distro)
+
+    p = installdeps_mod.plan(
+        distro=distro,
+        spec=spec,
+        target=target,
+        recommended=not no_recommended,
+        include_virtme=not no_virtme,
+    )
+
+    if not p.is_valid:
+        raise err.fail(
+            "can't build install-deps plan",
+            why=p.rejected_reason or "unknown",
+            fix=(
+                "this distro family isn't fully supported; install the kernel "
+                "build-deps manually using your distro's package manager"
+            ),
+            exit_code=2,
+        )
+
+    _render_install_deps_plan(p, distro=distro)
+
+    if not p.needs_anything:
+        console.print("[green]✓ already up to date — nothing to install[/green]")
+        return
+
+    if not execute:
+        console.print("\n[dim]dry-run; pass --execute to actually run the commands above[/dim]")
+        return
+
+    log_dir = Path.home() / ".cache" / "autokernel" / "install-deps"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    console.print("\n[cyan]running install plan…[/cyan] [dim](will prompt for sudo password if needed)[/dim]")
+    result = installdeps_mod.execute(
+        p,
+        log_dir=log_dir,
+        install_virtme=not no_virtme,
+    )
+    if not result.ok:
+        rc = next((r.exit_code for r in result.runs if r.exit_code != 0), 1)
+        raise typer.Exit(rc)
+    console.print(Panel.fit(
+        "[green]✓ install complete[/green]\n"
+        f"  installed: {len(p.missing)} system package(s)"
+        + (f" + {len(p.optional_python_pkgs)} uv tool(s)" if p.optional_python_pkgs else "")
+        + f"\n\n[dim]next: `autokernel preflight --for {target.value}` should now be all-green[/dim]",
+        title="autokernel install-deps",
+    ))
+
+
+def _render_install_deps_plan(plan_obj, *, distro) -> None:
+    console.rule(f"install-deps: --for={plan_obj.target.value}")
+    console.print(
+        f"[dim]distro: {distro.pretty_name or distro.id} (family={plan_obj.family.value})[/dim]"
+    )
+
+    if not plan_obj.is_valid:
+        console.print(f"\n[red]✗ plan rejected:[/red] {plan_obj.rejected_reason}")
+        return
+
+    if plan_obj.already_installed:
+        console.print(
+            f"\n[green]✓ already installed ({len(plan_obj.already_installed)}):[/green] "
+            f"[dim]{', '.join(plan_obj.already_installed)}[/dim]"
+        )
+
+    if plan_obj.missing:
+        console.print(
+            f"\n[bold]missing system packages ({len(plan_obj.missing)}):[/bold]"
+        )
+        for pkg in plan_obj.missing:
+            console.print(f"  · {pkg}")
+        argv = plan_obj.full_argv
+        console.print(f"\n[bold]command:[/bold]\n  $ {' '.join(argv)}")
+    else:
+        console.print("\n[dim]no system packages to install[/dim]")
+
+    if plan_obj.optional_python_pkgs:
+        console.print(
+            f"\n[bold]optional uv tools ({len(plan_obj.optional_python_pkgs)}):[/bold]"
+        )
+        for pkg in plan_obj.optional_python_pkgs:
+            console.print(f"  · {pkg}  [dim]→ uv tool install {pkg}[/dim]")
+
+
 # ── boot-test ─────────────────────────────────────────────────────────────
 
 
@@ -1321,9 +1428,9 @@ def boot_test(
             "no boot-test runtime available",
             why=str(e),
             fix=(
-                "install qemu-system-x86 (sudo apt install qemu-system-x86), "
-                "or pip install virtme-ng. "
-                "Run `autokernel preflight --for boot-test` for distro-specific hints."
+                "`autokernel install-deps --for boot-test --execute` (covers both: "
+                "system qemu-system-x86 + uv-tool-installed virtme-ng), or run "
+                "`autokernel preflight --for boot-test` for distro-specific hints."
             ),
             exit_code=1,
         )
