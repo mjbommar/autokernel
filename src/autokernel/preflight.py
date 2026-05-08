@@ -586,6 +586,51 @@ def check_grub_tools(ctx: CheckContext) -> CheckResult:
     )
 
 
+# ── boot-test checks ─────────────────────────────────────────────────────
+
+
+def check_qemu_available(ctx: CheckContext) -> CheckResult:
+    """qemu-system-x86_64 must be on PATH for the kernel-only boot-test
+    fallback. Without it, boot-test only works if virtme-ng is around."""
+    if _which("qemu-system-x86_64"):
+        return CheckResult(
+            name="qemu_available",
+            severity=Severity.PASS,
+            message="qemu-system-x86_64 on PATH",
+        )
+    pkgs = {
+        Family.DEBIAN: ["qemu-system-x86"],
+        Family.FEDORA: ["qemu-system-x86"],
+        Family.ARCH: ["qemu-base"],
+        Family.SUSE: ["qemu-x86"],
+    }.get(ctx.spec.family, ["qemu-system-x86"])
+    return CheckResult(
+        name="qemu_available",
+        severity=Severity.WARN,
+        message="qemu-system-x86_64 not installed (boot-test will need virtme-ng instead)",
+        fix_hint=_install_hint(ctx.spec, pkgs),
+    )
+
+
+def check_virtme_available(ctx: CheckContext) -> CheckResult:
+    """virtme-ng or virtme-run is the richer boot-test method (full
+    userspace transition). Optional — QEMU kernel-only is enough."""
+    if _which("virtme-ng") or _which("virtme-run"):
+        return CheckResult(
+            name="virtme_available",
+            severity=Severity.PASS,
+            message="virtme-ng / virtme-run on PATH (richer boot-test available)",
+        )
+    return CheckResult(
+        name="virtme_available",
+        severity=Severity.WARN,
+        message="virtme-ng not installed (QEMU kernel-only boot-test still works)",
+        fix_hint=(
+            "pip install virtme-ng  (recommended; faster than apt's `virtme` package)"
+        ),
+    )
+
+
 # ── snapshot-aware checks ───────────────────────────────────────────────────
 
 
@@ -672,6 +717,9 @@ _REGISTRY: list[tuple[str, _Registered]] = [
     ("boot_writable", _Registered(check_boot_writable, frozenset({"install"}))),
     ("fallback_kernel_present", _Registered(check_fallback_kernel_present, frozenset({"install"}))),
     ("grub_tools", _Registered(check_grub_tools, frozenset({"install"}))),
+    # boot-test
+    ("qemu_available", _Registered(check_qemu_available, frozenset({"boot-test"}))),
+    ("virtme_available", _Registered(check_virtme_available, frozenset({"boot-test"}))),
 ]
 
 

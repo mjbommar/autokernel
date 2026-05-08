@@ -40,6 +40,7 @@ from rich.panel import Panel
 from rich.table import Table
 
 from autokernel import bootloader as bootloader_mod
+from autokernel import boottest as boottest_mod
 from autokernel import build as build_mod
 from autokernel import errors as err
 from autokernel import fetch as fetch_mod
@@ -719,6 +720,7 @@ def preflight(
         "apply":    {"always", "apply"},
         "build":    {"always", "build"},
         "install":  {"always", "install"},
+        "boot-test": {"always", "boot-test"},
     }
     tags = tag_map.get(for_)
     if for_ not in tag_map:
@@ -890,6 +892,7 @@ def install(
     commit: Annotated[bool, typer.Option(help="Promote the running kernel to permanent default (after a successful probation boot).")] = False,
     no_probation: Annotated[bool, typer.Option("--no-probation", help="Skip the one-shot grub-reboot step (NOT RECOMMENDED).")] = False,
     skip_preflight: Annotated[bool, typer.Option(help="Skip pre-flight checks (use only if you've verified them yourself).")] = False,
+    skip_boot_test: Annotated[bool, typer.Option(help="Don't require a recent successful `boot-test` for this snapshot. Override only when you know what you're doing.")] = False,
 ) -> None:
     """Install a built kernel package with one-shot probation, or commit a successful boot."""
     import os
@@ -948,6 +951,54 @@ def install(
                 fix="address the FAILed items above, or rerun with --skip-preflight",
                 exit_code=1,
             )
+
+    # ── boot-test gate ──────────────────────────────────────────────────
+    # Only enforced when the user requests --execute. In dry-run we just
+    # mention the lack of a boot-test as a friendly nudge.
+    bt_record = boottest_mod.read_latest_record(snapshot_dir)
+
+    if execute and not skip_boot_test:
+        if bt_record is None:
+            raise err.fail(
+                "no boot-test on record for this snapshot",
+                why=(
+                    "installing an untested kernel risks an unbootable system. "
+                    f"a successful `autokernel boot-test {snapshot_dir} --kernel-source PATH` "
+                    f"writes the all-clear at {snapshot_dir}/boot-test.json."
+                ),
+                fix=(
+                    f"run `autokernel boot-test {snapshot_dir} --kernel-source PATH` "
+                    f"to verify, or pass --skip-boot-test to override (not recommended)"
+                ),
+                exit_code=1,
+            )
+        if not bt_record.get("verdict_ok"):
+            raise err.fail(
+                "the most recent boot-test for this snapshot FAILED",
+                why=str(bt_record.get("verdict_reason", "")),
+                fix=(
+                    "fix the kernel build, re-run boot-test, or pass --skip-boot-test "
+                    "if you've verified the kernel some other way"
+                ),
+                exit_code=1,
+            )
+
+    # Always surface the boot-test record state to the user — whether
+    # we're enforcing it or not.
+    if bt_record is None and not skip_boot_test:
+        console.print(
+            "[yellow]· no boot-test on record;[/yellow] "
+            f"run `autokernel boot-test {snapshot_dir} --kernel-source PATH` "
+            "before --execute"
+        )
+    elif bt_record is not None:
+        ok = "✓" if bt_record.get("verdict_ok") else "✗"
+        color = "green" if bt_record.get("verdict_ok") else "red"
+        console.print(
+            f"[{color}]{ok}[/{color}] boot-test on record "
+            f"[dim]({bt_record.get('timestamp', 'unknown')}, "
+            f"method={bt_record.get('method', '?')})[/dim]"
+        )
 
     # ── plan + render + (maybe) execute ─────────────────────────────────
     plan = install_mod.build_plan(
@@ -1218,6 +1269,112 @@ def config_test(
             ),
             exit_code=1,
         )
+
+
+# ── boot-test ─────────────────────────────────────────────────────────────
+
+
+@app.command("boot-test")
+def boot_test(
+    snapshot_dir: Annotated[Path, typer.Argument(help="Snapshot directory")],
+    kernel_source: Annotated[Path, typer.Option("--kernel-source", help="Path to the kernel source tree containing the freshly-built bzImage")],
+    method: Annotated[boottest_mod.Method, typer.Option(help="virtme | qemu | auto")] = boottest_mod.Method.AUTO,
+    timeout: Annotated[float, typer.Option(help="Hard timeout in seconds")] = 60.0,
+    dry_run: Annotated[bool, typer.Option(help="Print the plan without executing")] = False,
+) -> None:
+    """Boot the freshly-built kernel in a VM to verify it works.
+
+    Two methods, both fast (5-15 sec) and non-destructive:
+
+    * **virtme-ng** (preferred when installed) — boots the kernel against
+      the host's read-only / via virtio-fs.
+    * **QEMU kernel-only** — boots the kernel with no rootfs; success
+      means the kernel reached the VFS-mount stage without an earlier
+      panic. Universal fallback.
+
+    Saves the verdict to <snapshot>/boot-test.json so a future
+    `autokernel install --execute` can verify a recent passing test.
+    """
+    _validate_snapshot_dir(snapshot_dir)
+    bzimage = boottest_mod.find_bzimage(kernel_source)
+    if bzimage is None:
+        raise err.fail(
+            f"no bzImage found under {kernel_source}",
+            why="expected arch/x86/boot/bzImage or vmlinux",
+            fix=(
+                f"run `autokernel build {snapshot_dir} --kernel-source {kernel_source} --execute` "
+                f"first to compile the kernel"
+            ),
+            exit_code=2,
+        )
+
+    snap = snap_mod.load(snapshot_dir)
+    try:
+        plan_obj = boottest_mod.plan(
+            method=method,
+            bzimage_path=bzimage,
+            kernel_release=snap.kernel.release,
+            timeout=timeout,
+        )
+    except RuntimeError as e:
+        raise err.fail(
+            "no boot-test runtime available",
+            why=str(e),
+            fix=(
+                "install qemu-system-x86 (sudo apt install qemu-system-x86), "
+                "or pip install virtme-ng. "
+                "Run `autokernel preflight --for boot-test` for distro-specific hints."
+            ),
+            exit_code=1,
+        )
+
+    _render_boot_test_plan(plan_obj)
+    if dry_run:
+        console.print("\n[dim]dry-run; pass without --dry-run to actually boot[/dim]")
+        return
+
+    console.print(f"\n[cyan]booting kernel {plan_obj.kernel_release} via {plan_obj.method.value}…[/cyan]")
+    result = boottest_mod.execute(plan_obj, snapshot_dir=snapshot_dir)
+    _render_boot_test_result(result)
+    if not result.verdict.ok:
+        raise typer.Exit(1)
+
+
+def _render_boot_test_plan(plan_obj) -> None:
+    console.rule("boot-test")
+    console.print(
+        f"[dim]method:        {plan_obj.method.value}\n"
+        f"bzImage:       {plan_obj.bzimage_path}\n"
+        f"kernel:        {plan_obj.kernel_release}\n"
+        f"timeout:       {plan_obj.timeout}s[/dim]\n"
+        f"\n[bold]description[/bold]\n{plan_obj.description}\n"
+        f"\n[bold]command[/bold]\n  $ {' '.join(plan_obj.argv)}"
+    )
+
+
+def _render_boot_test_result(result) -> None:
+    if result.verdict.ok:
+        console.print(Panel.fit(
+            f"[green]✓ PASS[/green]\n"
+            f"  reason:   {result.verdict.reason}\n"
+            f"  duration: {result.duration_s:.1f}s\n"
+            f"  bzimage:  sha256:{result.bzimage_sha256[:16]}…\n"
+            f"  log:      {result.serial_log_path}\n"
+            f"  record:   {result.record_path}",
+            title="boot-test",
+            border_style="green",
+        ))
+    else:
+        console.print(Panel.fit(
+            f"[red]✗ FAIL[/red]\n"
+            f"  reason:   {result.verdict.reason}\n"
+            f"  exit:     {result.exit_code}\n"
+            f"  duration: {result.duration_s:.1f}s\n"
+            f"  log:      {result.serial_log_path}\n"
+            f"  [yellow]inspect the serial log to see what went wrong[/yellow]",
+            title="boot-test",
+            border_style="red",
+        ))
 
 
 def _main() -> None:

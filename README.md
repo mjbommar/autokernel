@@ -8,11 +8,10 @@ Debian/Ubuntu, Fedora/RHEL, Arch, openSUSE, Gentoo, Alpine.
 Inspired by Gentoo's `localmodconfig`, FreeBSD's `include GENERIC` + diff
 style, and Debian's `make bindeb-pkg`.
 
-> **Status: 0.10.** Full pipeline + CPU microarch tuning + LLM
-> auto-detection. Set any provider's API key (Anthropic, OpenAI, Google,
-> Mistral, Groq, xAI, DeepSeek, OpenRouter); `autokernel propose`
-> picks the right model. `autokernel config show` / `config test` to
-> inspect / verify before paying for a real run.
+> **Status: 0.11.** Full pipeline + CPU microarch tuning + LLM
+> auto-detection + **boot-test in a VM before installing**. Build →
+> verify in QEMU/virtme-ng → install. `autokernel install --execute`
+> now refuses to proceed without a recent passing boot-test record.
 
 [![tests](https://github.com/mjbommar/autokernel/actions/workflows/test.yml/badge.svg)](https://github.com/mjbommar/autokernel/actions/workflows/test.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -330,6 +329,7 @@ symbol. `RemovalProposal` carries `config`, `current_value` /
 - [x] `quickstart` walk-through + centralized error hints *(0.8)*
 - [x] CPU microarch tuning: auto-detect Zen 1–5 / Sandy Bridge → Lunar Lake; auto-apply `CONFIG_M<arch>=y` *(0.9)*
 - [x] LLM provider auto-detection + `config show / test`; `--llm-mode` preset shorthand; 8 provider families *(0.10)*
+- [x] **`boot-test`** verb (QEMU kernel-only + virtme-ng) + `install --execute` gates on a recent passing record *(0.11)*
 - [ ] systemd watchdog for auto-promoting after N successful boots (currently `--commit` is manual)
 - [ ] systemd-boot / rEFInd support for `install`
 - [ ] systemd-boot / rEFInd support for `install`
@@ -355,6 +355,27 @@ to be generic than wrong. Opt out per-run with `--no-cpu-tune`.
 
 The mapping table lives in `src/autokernel/cpu.py`. PRs welcome for
 new microarchitectures.
+
+## Boot-test in a VM before installing
+
+`autokernel boot-test SNAPSHOT --kernel-source PATH` boots the
+freshly-built kernel in a VM (5-15 sec) so a broken kernel never
+touches your live `/boot`. Two methods, picked automatically:
+
+| Method | Setup | What it tests |
+|---|---|---|
+| **virtme-ng** (preferred) | `pip install virtme-ng` | Boots the kernel against the host's read-only `/` over virtio-fs. Reaches userspace. |
+| **QEMU kernel-only** (fallback) | `apt install qemu-system-x86` (or distro equivalent) | Boots the kernel with no rootfs. Success = kernel reaches the VFS-mount stage without an earlier panic. |
+
+A passing test writes `<snapshot>/boot-test.json` with the bzImage's
+SHA-256. `autokernel install --execute` then refuses to proceed unless:
+
+- a `boot-test.json` exists, AND
+- its verdict is PASS
+
+Override (you've verified some other way) with `--skip-boot-test`. The
+gate is dry-run-friendly: `autokernel install` (no `--execute`) just
+nudges you to run boot-test first instead of erroring.
 
 ## License
 

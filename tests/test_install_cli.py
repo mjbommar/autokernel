@@ -140,7 +140,13 @@ def test_install_execute_without_root_exits_5(
     monkeypatch.setattr("os.geteuid", lambda: 1000)  # not root
     result = runner.invoke(
         app,
-        ["install", str(snap), "--package", str(deb), "--skip-preflight", "--execute"],
+        [
+            "install", str(snap),
+            "--package", str(deb),
+            "--skip-preflight",
+            "--skip-boot-test",
+            "--execute",
+        ],
     )
     assert result.exit_code == 5
     assert "requires root" in result.output.lower()
@@ -159,6 +165,7 @@ def test_install_execute_as_root_runs_steps(
             "install", str(snap),
             "--package", str(deb),
             "--skip-preflight",
+            "--skip-boot-test",
             "--execute",
             "--kernel-entry", "Linux 6.13.5",
         ],
@@ -169,6 +176,85 @@ def test_install_execute_as_root_runs_steps(
     # Record file written
     record_files = list((snap / "install").rglob("record.json"))
     assert len(record_files) == 1
+
+
+def test_install_execute_blocks_without_boot_test_record(
+    tmp_path: Path, patched_env, captured_runs, monkeypatch
+):
+    """Without --skip-boot-test, install --execute refuses to proceed
+    when no boot-test record exists for this snapshot."""
+    snap, deb = _seed_snapshot_with_deb(tmp_path)
+    monkeypatch.setattr("os.geteuid", lambda: 0)
+    result = runner.invoke(
+        app,
+        [
+            "install", str(snap),
+            "--package", str(deb),
+            "--skip-preflight",  # but NOT skip-boot-test
+            "--execute",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "boot-test" in result.output.lower()
+    assert "skip-boot-test" in result.output
+    assert captured_runs == []
+
+
+def test_install_execute_passes_with_passing_boot_test_record(
+    tmp_path: Path, patched_env, captured_runs, monkeypatch
+):
+    """Once a passing boot-test.json exists, install --execute proceeds."""
+    snap, deb = _seed_snapshot_with_deb(tmp_path)
+    # Synthesize a passing boot-test record.
+    import json
+    (snap / "boot-test.json").write_text(json.dumps({
+        "schema": 1,
+        "verdict_ok": True,
+        "verdict_reason": "passed",
+        "kernel_release": "6.13.5",
+        "method": "qemu",
+        "timestamp": "2026-05-08T12:00:00+00:00",
+    }))
+    monkeypatch.setattr("os.geteuid", lambda: 0)
+    result = runner.invoke(
+        app,
+        [
+            "install", str(snap),
+            "--package", str(deb),
+            "--skip-preflight",
+            "--execute",
+            "--kernel-entry", "Linux 6.13.5",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    # Output should mention the boot-test record was found
+    assert "boot-test on record" in result.output
+
+
+def test_install_execute_refuses_with_failing_boot_test_record(
+    tmp_path: Path, patched_env, captured_runs, monkeypatch
+):
+    """A FAILED boot-test record blocks install --execute."""
+    snap, deb = _seed_snapshot_with_deb(tmp_path)
+    import json
+    (snap / "boot-test.json").write_text(json.dumps({
+        "schema": 1,
+        "verdict_ok": False,
+        "verdict_reason": "kernel panic before VFS stage",
+    }))
+    monkeypatch.setattr("os.geteuid", lambda: 0)
+    result = runner.invoke(
+        app,
+        [
+            "install", str(snap),
+            "--package", str(deb),
+            "--skip-preflight",
+            "--execute",
+        ],
+    )
+    assert result.exit_code == 1
+    assert "failed" in result.output.lower()
+    assert captured_runs == []
 
 
 # ── install --commit ─────────────────────────────────────────────────────
