@@ -44,6 +44,7 @@ from autokernel import build as build_mod
 from autokernel import errors as err
 from autokernel import fetch as fetch_mod
 from autokernel import install as install_mod
+from autokernel import llm as llm_mod
 from autokernel import preflight as preflight_mod
 from autokernel import rollback as rollback_mod
 from autokernel import snapshot as snap_mod
@@ -85,6 +86,15 @@ app = typer.Typer(
     help="LLM-assisted minimal Linux kernel builder.",
     no_args_is_help=True,
 )
+
+# `autokernel config <show|test>` is a sub-app so the verb namespacing
+# stays clean. The Typer add_typer call binds it under app at "config".
+config_app = typer.Typer(
+    add_completion=False,
+    help="Inspect / test the LLM configuration.",
+    no_args_is_help=True,
+)
+app.add_typer(config_app, name="config")
 
 console = Console()
 err_console = Console(stderr=True)
@@ -154,8 +164,9 @@ def propose(
     autonomy: Annotated[AutonomyLevel, typer.Option(help="How aggressive to be")] = AutonomyLevel.ADVISE,
     skip_llm: Annotated[bool, typer.Option(help="Skip the LLM stage; only run deterministic rules")] = False,
     max_candidates: Annotated[int, typer.Option(help="Cap the number of candidates passed to the LLM")] = 600,
-    model: Annotated[str | None, typer.Option(help="pydantic-ai model id (overrides AUTOKERNEL_MODEL)")] = None,
-    service_tier: Annotated[str | None, typer.Option(help="OpenAI service_tier: 'flex' | 'priority' | 'auto' (overrides AUTOKERNEL_SERVICE_TIER)")] = None,
+    llm_mode: Annotated[str, typer.Option("--llm-mode", help="Mode preset: auto|cheap|fast|quality. Picks the best model from a provider you have credentials for. Overridden by --model.")] = "auto",
+    model: Annotated[str | None, typer.Option(help="Literal pydantic-ai model id (e.g. 'anthropic:claude-opus-4-7'). Overrides --llm-mode.")] = None,
+    service_tier: Annotated[str | None, typer.Option(help="OpenAI service_tier: 'flex' | 'priority' | 'auto'")] = None,
     out: Annotated[Path | None, typer.Option(help="Write proposal JSON to this path")] = None,
     force_dkms: Annotated[bool, typer.Option(help="Allow auto-* autonomy even when DKMS modules are present (use only if you understand the rebuild risk)")] = False,
     no_cpu_tune: Annotated[bool, typer.Option("--no-cpu-tune", help="Don't propose CPU microarch tuning (CONFIG_M<arch>=y).")] = False,
@@ -239,16 +250,38 @@ def propose(
     # ── LLM proposals ───────────────────────────────────────────────────
     llm: list = []
     if not skip_llm and llm_pool:
+        # Resolve model + service tier via the LLM-config module so the user
+        # gets a clear error when no provider is configured (instead of a
+        # cryptic auth failure mid-batch).
+        spec = model if model else llm_mode
+        try:
+            cfg = llm_mod.resolve(spec=spec, service_tier=service_tier)
+        except llm_mod.NoProviderConfigured as e:
+            raise err.fail(
+                "no LLM provider configured",
+                why=str(e),
+                fix="set ANTHROPIC_API_KEY or OPENAI_API_KEY in .env (see .env.example), or pass --skip-llm to use only deterministic rules",
+                exit_code=1,
+            )
+        except llm_mod.ProviderNotAvailable as e:
+            raise err.fail(
+                f"the model {spec!r} requires {e.provider.value!r} but its API key is not set",
+                fix=f"set one of: {', '.join(e.env_vars)}; or pick a different --llm-mode/--model",
+                exit_code=1,
+            )
+        console.print(
+            f"[dim]LLM: {cfg.model}[/dim]"
+            + (f"  [dim]tier={cfg.service_tier}[/dim]" if cfg.service_tier else "")
+        )
+
         cache_dir = snapshot_dir / "batches"
         with console.status(f"[cyan]asking LLM about {len(llm_pool)} candidates…[/cyan]"):
             def _progress(i: int, n: int, sz: int, *, cached: bool = False) -> None:
                 tag = "[dim](cached)[/dim]" if cached else ""
                 console.log(f"  batch {i}/{n} ({sz} symbols) {tag}")
-            kwargs: dict = {}
-            if model:
-                kwargs["model"] = model
-            if service_tier:
-                kwargs["service_tier"] = service_tier
+            kwargs: dict = {"model": cfg.model}
+            if cfg.service_tier:
+                kwargs["service_tier"] = cfg.service_tier
             llm = llm_propose(
                 snap, llm_pool, progress=_progress, cache_dir=cache_dir, **kwargs
             )
@@ -1075,6 +1108,116 @@ def _render_install_result(result) -> None:
             f"{run.duration_s:.1f}",
         )
     console.print(t)
+
+
+# ── config sub-app: show / test ────────────────────────────────────────────
+
+
+@config_app.command("show")
+def config_show(
+    spec: Annotated[str, typer.Option("--mode", help="Pretend the user passed this --llm-mode / --model and show what it'd resolve to. Default: 'auto'.")] = "auto",
+) -> None:
+    """Show the resolved LLM configuration + per-provider availability."""
+    rep = llm_mod.status_report()
+    available = [s.provider for s in rep if s.available]
+
+    # Resolution attempt — show what `propose --llm-mode=<spec>` would use.
+    cfg: llm_mod.LLMConfig | None = None
+    err_msg: str | None = None
+    try:
+        cfg = llm_mod.resolve(spec=spec, available=available)
+    except (llm_mod.NoProviderConfigured, llm_mod.ProviderNotAvailable) as e:
+        err_msg = str(e)
+
+    # Header panel: which provider would run and which env var holds the key.
+    if cfg is not None:
+        body = (
+            f"[green]✓ resolved[/green]\n"
+            f"  spec:        [bold]{spec}[/bold]\n"
+            f"  model:       [bold]{cfg.model}[/bold]\n"
+            f"  provider:    {cfg.provider.value}\n"
+            f"  api_key_var: [dim]{cfg.api_key_var}[/dim]"
+        )
+        if cfg.service_tier:
+            body += f"\n  service_tier: {cfg.service_tier}"
+        if cfg.mode is not None:
+            body += f"\n  mode preset: {cfg.mode.value}"
+    else:
+        body = (
+            f"[red]✗ cannot resolve {spec!r}[/red]\n"
+            f"  [dim]{err_msg}[/dim]"
+        )
+    console.print(Panel.fit(body, title="autokernel config (resolved)"))
+
+    # Per-provider availability table.
+    t = Table(title="provider availability", header_style="cyan")
+    t.add_column("provider")
+    t.add_column("env var")
+    t.add_column("set?")
+    t.add_column("default model (auto)")
+    for s in rep:
+        defaults = llm_mod.model_options_for(s.provider)
+        default_auto = defaults.get(llm_mod.LLMMode.AUTO, "—")
+        env_label = ", ".join(s.env_vars)
+        if s.available:
+            t.add_row(s.provider.value, env_label, f"[green]✓ {s.api_key_var}[/green]", default_auto)
+        else:
+            t.add_row(s.provider.value, env_label, "[dim]·[/dim]", default_auto)
+    console.print(t)
+
+    # Per-mode model menu for the active provider so the user knows what
+    # --llm-mode={cheap,fast,quality} would pick today.
+    if cfg is not None:
+        opts = llm_mod.model_options_for(cfg.provider)
+        m = Table(title=f"mode presets for {cfg.provider.value}", header_style="cyan")
+        m.add_column("mode")
+        m.add_column("model")
+        for mode, model in opts.items():
+            highlight = " ← current" if cfg.mode == mode else ""
+            m.add_row(mode.value, model + highlight)
+        console.print(m)
+
+
+@config_app.command("test")
+def config_test(
+    spec: Annotated[str, typer.Option("--mode", help="Mode preset or literal model id to test (default: 'auto').")] = "auto",
+    service_tier: Annotated[str | None, typer.Option("--service-tier", help="OpenAI service_tier override")] = None,
+) -> None:
+    """Send a tiny prompt to the configured model to verify credentials.
+
+    Cost is approximately $0.001 — far cheaper than a real propose run.
+    """
+    available = [s.provider for s in llm_mod.status_report() if s.available]
+    try:
+        cfg = llm_mod.resolve(spec=spec, service_tier=service_tier, available=available)
+    except llm_mod.NoProviderConfigured as e:
+        raise err.fail(
+            "no LLM provider configured",
+            why=str(e),
+            fix="copy .env.example to .env and set ANTHROPIC_API_KEY or OPENAI_API_KEY (or run `autokernel config show` to see all options)",
+            exit_code=1,
+        )
+    except llm_mod.ProviderNotAvailable as e:
+        raise err.fail(
+            f"the model {spec!r} requires {e.provider.value!r} but its API key is not set",
+            fix=f"set one of: {', '.join(e.env_vars)}; or pick a different --mode/--model",
+            exit_code=1,
+        )
+
+    console.print(f"[dim]testing {cfg.model}…[/dim]")
+    result = llm_mod.test_connection(cfg)
+    if result.ok:
+        console.print(f"[green]✓ {cfg.model}[/green]   {result.message}")
+    else:
+        raise err.fail(
+            f"connection test failed for {cfg.model}",
+            why=result.message,
+            fix=(
+                f"verify {cfg.api_key_var} is set correctly, the model id is "
+                f"available in your account, and there are no network issues"
+            ),
+            exit_code=1,
+        )
 
 
 def _main() -> None:

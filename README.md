@@ -8,9 +8,11 @@ Debian/Ubuntu, Fedora/RHEL, Arch, openSUSE, Gentoo, Alpine.
 Inspired by Gentoo's `localmodconfig`, FreeBSD's `include GENERIC` + diff
 style, and Debian's `make bindeb-pkg`.
 
-> **Status: 0.9.** Full pipeline + CPU microarch tuning. `propose` now
-> auto-recommends the right `CONFIG_M<microarch>=y` for your host's CPU
-> (Zen 1–5, Sandy Bridge through Lunar Lake). Auto-applied at ADVISE.
+> **Status: 0.10.** Full pipeline + CPU microarch tuning + LLM
+> auto-detection. Set any provider's API key (Anthropic, OpenAI, Google,
+> Mistral, Groq, xAI, DeepSeek, OpenRouter); `autokernel propose`
+> picks the right model. `autokernel config show` / `config test` to
+> inspect / verify before paying for a real run.
 
 [![tests](https://github.com/mjbommar/autokernel/actions/workflows/test.yml/badge.svg)](https://github.com/mjbommar/autokernel/actions/workflows/test.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -49,6 +51,42 @@ Prompts before each step (preflight → scan → propose → review → apply).
 Hit Enter to accept defaults; Ctrl-C to bail; the failure of any step
 prints exactly what to do next. Output lives under
 `~/.local/share/autokernel/quickstart/` by default.
+
+## LLM configuration
+
+`autokernel propose` calls a cloud LLM to judge config trims. It
+**auto-detects** which provider you have credentials for and picks a
+sensible default model — you don't need to memorize pydantic-ai model
+ids.
+
+```bash
+# Set any one of these in your shell or .env:
+export ANTHROPIC_API_KEY=sk-ant-...
+export OPENAI_API_KEY=sk-...
+export GOOGLE_API_KEY=...        # or GEMINI_API_KEY
+export MISTRAL_API_KEY=...
+export GROQ_API_KEY=...
+export XAI_API_KEY=...
+export DEEPSEEK_API_KEY=...
+export OPENROUTER_API_KEY=...
+
+# See what would run, without spending money:
+autokernel config show
+
+# Verify the connection with a tiny ping (~$0.001):
+autokernel config test
+
+# Run propose with a mode preset instead of a literal model id:
+autokernel propose /tmp/snap --llm-mode=cheap     # haiku / gpt-mini / gemini-flash
+autokernel propose /tmp/snap --llm-mode=quality   # opus / gpt-5 / gemini-2.5-pro
+
+# Or pin a specific model:
+autokernel propose /tmp/snap --model=anthropic:claude-opus-4-7
+```
+
+When multiple providers are available, autokernel prefers them in this
+order: `anthropic`, `openai`, `google-gla`, `mistral`, `groq`, `xai`,
+`deepseek`, `openrouter`. Override with `--model <provider>:<id>`.
 
 ## Quick start (manual verbs)
 
@@ -290,10 +328,10 @@ symbol. `RemovalProposal` carries `config`, `current_value` /
 - [x] Interactive review TUI (Textual) *(0.7)*
 - [x] `install --probation` + `rollback` (manual --commit; one-shot grub-reboot) *(0.8)*
 - [x] `quickstart` walk-through + centralized error hints *(0.8)*
-- [ ] systemd watchdog for auto-promotion (currently `--commit` is manual)
-- [ ] systemd-boot / rEFInd support for `install`
 - [x] CPU microarch tuning: auto-detect Zen 1–5 / Sandy Bridge → Lunar Lake; auto-apply `CONFIG_M<arch>=y` *(0.9)*
+- [x] LLM provider auto-detection + `config show / test`; `--llm-mode` preset shorthand; 8 provider families *(0.10)*
 - [ ] systemd watchdog for auto-promoting after N successful boots (currently `--commit` is manual)
+- [ ] systemd-boot / rEFInd support for `install`
 - [ ] systemd-boot / rEFInd support for `install`
 - [ ] PEP 723 single-file scripts for kernel-dev workflows: bisect, patch series, Kconfig fragment composer.
 
