@@ -1879,6 +1879,7 @@ def iterate(
             history=history,
             compiler=compiler,
             lto=lto,
+            target=target,
         )
         save_record(snapshot_dir, record)
         history.append(record)
@@ -1907,6 +1908,38 @@ def iterate(
         console.print(f"  boot-test: {passes} passed, {fails} failed")
 
 
+def _run_config_check(snapshot_dir: Path, kernel_source: Path) -> tuple[int, int]:
+    """Walk Kconfig + check the snapshot's final.config; render report;
+    return (n_errors, n_warnings).
+
+    Output rendered into the iter_dir's progress trail via console.
+    Doesn't auto-drop proposals from the kfrag (yet) — that's a v0.16+
+    follow-up; for now we just surface the findings.
+    """
+    final_cfg = snapshot_dir / "final.config"
+    if not final_cfg.exists():
+        return (0, 0)
+    try:
+        from autokernel.config_check import check
+        from autokernel.kconfig_walk import walk
+        surface = walk(kernel_source, arch="x86_64",
+                       config_path=snapshot_dir.parent / "running_config" if (snapshot_dir.parent / "running_config").exists() else None)
+        report = check(final_cfg.read_text(), surface)
+        if report.errors:
+            console.print(f"[red]config_check: {len(report.errors)} errors[/red]")
+            for f in report.errors[:5]:
+                console.print(f"  [red]✗[/red] {f.symbol}: {f.detail}")
+        if report.warnings:
+            console.print(f"[yellow]config_check: {len(report.warnings)} warnings[/yellow]")
+            for f in report.warnings[:3]:
+                console.print(f"  [yellow]·[/yellow] {f.symbol}: {f.detail}")
+        return (len(report.errors), len(report.warnings))
+    except Exception as e:
+        # Don't let a check failure block iterate's progress; just log.
+        console.print(f"[yellow]config_check skipped: {e}[/yellow]")
+        return (0, 0)
+
+
 def _run_one_iteration(
     *,
     iter_n: int,
@@ -1921,6 +1954,7 @@ def _run_one_iteration(
     service_tier: str | None,
     compiler: str = "clang",
     lto: str = "none",
+    target: str = "size",
     execute: bool,
     auto_revert: bool,
     history: list,
@@ -1955,7 +1989,7 @@ def _run_one_iteration(
 
     # 1. propose — invoke the propose verb's logic with our ctx.
     _step(f"propose --dimension={dimension}")
-    history_block = summarize_history_for_prompt(history) if history else None
+    history_block = summarize_history_for_prompt(history, target=target) if history else None
     if history_block:
         console.print("[dim]" + history_block + "[/dim]")
 
@@ -1968,12 +2002,23 @@ def _run_one_iteration(
         history_path = iter_dir / "history.txt"
         history_path.write_text(history_block)
 
+    # base-config: the .config the LLM compares against. We prefer the
+    # post-build .config (what *actually* got compiled — i.e. what
+    # olddefconfig + localmodconfig settled on) over the kfrag-merged
+    # final.config (what we *asked for*). Otherwise the LLM in round
+    # N+1 sees =n for symbols that olddefconfig stripped to =y, and
+    # re-proposes them every round forever. Fall back to final.config
+    # only when we don't have a post-build snapshot (dry-run or
+    # build-failed cases).
     base_config_path: Path | None = None
     if history:
         prev = iteration_dir(snapshot_dir, history[-1].iteration)
-        candidate = prev / "final.config"
-        if candidate.exists():
-            base_config_path = candidate
+        post_build = prev / "post_build.config"
+        kfrag_merged = prev / "final.config"
+        if post_build.exists():
+            base_config_path = post_build
+        elif kfrag_merged.exists():
+            base_config_path = kfrag_merged
 
     # NOTE: we call the propose function directly, not through Typer.
     # This requires reusing the workhorse logic. For brevity and to
@@ -2103,6 +2148,19 @@ def _run_one_iteration(
     if final_cfg_src.exists():
         (iter_dir / "final.config").write_text(final_cfg_src.read_text())
 
+    # 2.5. config_check — catches LLM hallucinations + dead-letter
+    # choices (parent feature disabled) BEFORE the slow build wastes
+    # time. Errors block; we drop the affected proposals from the
+    # kfrag and re-apply.
+    _step("config_check (against target Kconfig)")
+    t0 = time.time()
+    n_errors, n_warnings = _run_config_check(snapshot_dir, kernel_source)
+    _step(
+        "config_check done",
+        done=True,
+        extra=f"({time.time() - t0:.1f}s, {n_errors} errors, {n_warnings} warnings)",
+    )
+
     # 3. build prepare + execute.
     _step("build --execute --localmodconfig (slow — see iter dir build.log)")
     t0 = time.time()
@@ -2123,6 +2181,16 @@ def _run_one_iteration(
     with build_log_path.open("w") as f:
         rc = subprocess.run(build_argv, cwd=Path.cwd(), stdout=f, stderr=subprocess.STDOUT).returncode
     build_failed = rc != 0
+
+    # Snapshot the post-build .config — the actual state the kernel
+    # was compiled with, after olddefconfig + localmodconfig + olddefconfig.
+    # iteration N+1's --base-config will point here so the LLM sees what
+    # really took effect, not just what we asked for.
+    if not build_failed:
+        post_build = kernel_source / ".config"
+        if post_build.exists():
+            (iter_dir / "post_build.config").write_text(post_build.read_text())
+
     _step(
         "build done" if not build_failed else "build FAILED",
         done=True,

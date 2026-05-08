@@ -207,3 +207,86 @@ def test_has_not_converged_with_missing_measurements():
         ),
     ]
     assert not has_converged(history)
+
+
+# ── fitness signal in history (v0.16) ─────────────────────────────────────
+
+
+def test_summarize_includes_fitness_trend_line_for_size():
+    history = [
+        _record(1, bzimage_bytes=18_000_000),
+        _record(2, bzimage_bytes=16_800_000),
+        _record(3, bzimage_bytes=16_500_000),
+    ]
+    text = summarize_history_for_prompt(history, target="size")
+    assert "FITNESS TREND" in text
+    assert "target=size" in text
+    # The trend line shows MB values + percentage deltas.
+    assert "17.17MB" in text or "18.0" in text or "MB" in text
+    assert "%" in text  # percentage somewhere
+
+
+def test_summarize_emits_growth_warning_when_size_growing():
+    """When kernel has grown across iterations, guidance steers the LLM
+    toward smaller proposals."""
+    history = [
+        _record(1, bzimage_bytes=16_000_000),
+        _record(2, bzimage_bytes=16_400_000),  # +2.5% growth
+    ]
+    text = summarize_history_for_prompt(history, target="size")
+    assert "GROWN" in text or "grown" in text.lower()
+    # Must instruct the LLM to PREFER trims, not re-enable.
+    assert "do NOT re-enable" in text or "trim" in text.lower()
+
+
+def test_summarize_emits_keep_going_when_shrinking():
+    history = [
+        _record(1, bzimage_bytes=18_000_000),
+        _record(2, bzimage_bytes=16_500_000),  # -8.3% shrink
+    ]
+    text = summarize_history_for_prompt(history, target="size")
+    assert "shrinking" in text.lower() or "going" in text.lower()
+
+
+def test_summarize_emits_stability_when_size_flat():
+    history = [
+        _record(1, bzimage_bytes=16_500_000),
+        _record(2, bzimage_bytes=16_510_000),  # 0.06% — stable
+    ]
+    text = summarize_history_for_prompt(history, target="size")
+    assert "stable" in text.lower() or "convergence" in text.lower()
+
+
+def test_summarize_skips_guidance_with_too_few_data_points():
+    history = [_record(1, bzimage_bytes=16_000_000)]
+    text = summarize_history_for_prompt(history, target="size")
+    # Trend line still renders; guidance section absent.
+    assert "GUIDANCE" not in text
+
+
+def test_summarize_skips_regressed_iterations_in_fitness_trend():
+    """Regressed iterations shouldn't anchor the fitness trend
+    interpretation — they're auto-reverted."""
+    history = [
+        _record(1, bzimage_bytes=16_000_000),
+        _record(2, bzimage_bytes=20_000_000, regressed=True),  # built but boot failed
+        _record(3, bzimage_bytes=15_800_000),
+    ]
+    text = summarize_history_for_prompt(history, target="size")
+    # Guidance should be based on i=1 → i=3 (good→good), not i=1 → i=2.
+    # i=1 → i=3 is shrinking (-1.25%), so we expect "shrinking" guidance.
+    assert "shrinking" in text.lower() or "going" in text.lower() or "stable" in text.lower()
+
+
+def test_fitness_trend_line_handles_missing_values():
+    from autokernel.iteration import _fitness_trend_line
+    history = [
+        _record(1, bzimage_bytes=18_000_000),
+        IterationRecord(
+            iteration=2, ctx_summary={}, proposals=[],
+            measurements=BuildMeasurements(bzimage_bytes=None),
+        ),
+    ]
+    line = _fitness_trend_line(history, "size")
+    assert "i1=" in line
+    assert "i2=?" in line

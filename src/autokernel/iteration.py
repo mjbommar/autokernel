@@ -115,18 +115,32 @@ def summarize_history_for_prompt(
     *,
     budget_recent: int = 3,
     include_baseline: bool = True,
+    target: str = "size",
 ) -> str:
     """Compact, prompt-ready summary of iteration history.
 
+    Includes the **fitness target's value across rounds** so the LLM
+    can reason about whether its proposals are moving the right
+    direction. Without this signal, live e2e on Meteor Lake showed
+    +2.4% size growth between rounds — the LLM had no way to know
+    "smaller is better" was the goal.
+
+    ``target`` values: ``"size"`` (bzImage_bytes), ``"boot-time"``
+    (boot_test_seconds), ``"surface"`` (module_count). Default
+    ``"size"`` matches the iterate verb's default.
+
     Layout:
-        # iteration history (last 3 + baseline):
+        # iteration history (last 3 + baseline) — target=size:
         #   i=1 (baseline): proposed=18, landed=12, bzImage=18.2MB, boot PASS
-        #   i=2:            proposed=14, landed=11, bzImage=16.8MB, boot PASS
-        #   i=3 REVERTED:   proposed=9,  landed=5,  boot FAIL (vfs-panic) —
-        #                   reverted CONFIG_BTRFS_FS=n
+        #   i=2:            proposed=14, landed=11, bzImage=16.8MB (-7.7% vs i=1), boot PASS
+        #   i=3 REVERTED:   proposed=9,  landed=5,  boot FAIL (vfs-panic) — reverted CONFIG_BTRFS_FS=n
         #
-        # rules from past iterations:
-        #   - do not propose CONFIG_BTRFS_FS=n (rootfs is btrfs!)
+        # FITNESS TREND (target=size, smaller is better):
+        #   18.2MB → 16.8MB (-7.7%) → ?
+        #
+        # GUIDANCE: history shows shrinking has worked; keep proposing
+        # trims and choices that reduce binary size. Don't re-enable
+        # symbols already trimmed.
 
     Returns ``""`` when history is empty.
     """
@@ -134,7 +148,7 @@ def summarize_history_for_prompt(
         return ""
 
     out: list[str] = []
-    out.append(f"# iteration history (last {budget_recent} of {len(history)}):")
+    out.append(f"# iteration history (last {budget_recent} of {len(history)}) — target={target}:")
 
     # Pick which records to render.
     rendered: list[IterationRecord] = []
@@ -165,6 +179,21 @@ def summarize_history_for_prompt(
             f"landed={landed_frac}, bzImage={bz}, boot {boot}"
         )
 
+    # Fitness trend — the explicit signal the LLM needs to reason
+    # about direction. If target=size and the kernel grew between
+    # rounds, the LLM sees that and can correct course.
+    trend_line = _fitness_trend_line(history, target)
+    if trend_line:
+        out.append("#")
+        out.append(f"# FITNESS TREND (target={target}, smaller is better):")
+        out.append(f"#   {trend_line}")
+        guidance = _fitness_guidance(history, target)
+        if guidance:
+            out.append("#")
+            out.append("# GUIDANCE:")
+            for line in guidance:
+                out.append(f"#   {line}")
+
     # Rules harvested from regressions: any reverted iteration's proposals
     # become "do not repeat".
     rules = []
@@ -182,6 +211,82 @@ def summarize_history_for_prompt(
         out.extend(rules)
 
     return "\n".join(out)
+
+
+def _fitness_value(record: IterationRecord, target: str) -> float | None:
+    """Pull the relevant metric from a record's measurements."""
+    m = record.measurements
+    if target == "size":
+        return m.bzimage_bytes
+    if target == "boot-time":
+        return m.boot_test_seconds
+    if target == "surface":
+        return float(m.module_count) if m.module_count is not None else None
+    return None
+
+
+def _fitness_trend_line(history: list[IterationRecord], target: str) -> str:
+    """Render the metric across rounds with deltas: '18.2MB → 16.8MB (-7.7%)'."""
+    if not history:
+        return ""
+    parts: list[str] = []
+    prev: float | None = None
+    for r in history:
+        v = _fitness_value(r, target)
+        if v is None:
+            parts.append(f"i{r.iteration}=?")
+            prev = None
+            continue
+        if target == "size":
+            tag = f"{v / (1024 * 1024):.2f}MB"
+        elif target == "boot-time":
+            tag = f"{v:.2f}s"
+        else:
+            tag = f"{int(v)}"
+        if prev is not None and prev > 0:
+            delta = (v - prev) / prev * 100
+            tag += f" ({delta:+.1f}% vs prev)"
+        parts.append(f"i{r.iteration}={tag}")
+        prev = v
+    return " → ".join(parts)
+
+
+def _fitness_guidance(history: list[IterationRecord], target: str) -> list[str]:
+    """Return 1-3 sentences of natural-language guidance based on the
+    trajectory the LLM should react to.
+
+    Conservative — when in doubt, no guidance. Bad guidance would
+    bias proposals more than no guidance.
+    """
+    values = [_fitness_value(r, target) for r in history if not r.regressed]
+    values = [v for v in values if v is not None]
+    if len(values) < 2:
+        return []
+    pct_delta = (values[-1] - values[0]) / values[0] * 100
+    out: list[str] = []
+    if target == "size":
+        if pct_delta > 1.0:
+            out.append("Kernel has GROWN — please favor proposals that reduce binary size:")
+            out.append("trim more drivers (=m → =n), drop optional features, prefer smaller")
+            out.append("choice options. Do NOT re-enable symbols that were already trimmed.")
+        elif pct_delta < -1.0:
+            out.append("Kernel is shrinking — keep going. Look for additional trims that")
+            out.append("haven't been considered yet.")
+        else:
+            out.append("Kernel size is stable. Convergence near. Consider whether further")
+            out.append("trims are safe; otherwise stop proposing changes.")
+    elif target == "boot-time":
+        if pct_delta > 5.0:
+            out.append("Boot time has INCREASED. Favor =y over =m for boot-path drivers,")
+            out.append("drop initramfs-only modules, prefer faster compression algorithms.")
+        elif pct_delta < -5.0:
+            out.append("Boot time is improving — keep going.")
+    elif target == "surface":
+        if pct_delta > 1.0:
+            out.append("Module count grew — propose more =m → =n trims.")
+        elif pct_delta < -1.0:
+            out.append("Module count shrinking — keep going.")
+    return out
 
 
 # ── auto-revert ───────────────────────────────────────────────────────────
