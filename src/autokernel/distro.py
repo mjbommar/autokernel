@@ -218,8 +218,13 @@ _SPECS: dict[Family, DistroSpec] = {
         apt_get_source_supported=True,
         build_deps=(
             "build-essential", "flex", "bison", "bc", "libssl-dev",
-            "libelf-dev", "libncurses-dev", "dwarves", "zstd", "kmod",
+            # libdw-dev provides <dwarf.h> for kernel >= 6.19's gendwarfksyms;
+            # libelf-dev is the long-standing requirement for the rest of the build.
+            "libelf-dev", "libdw-dev", "libncurses-dev", "dwarves", "zstd", "kmod",
             "cpio", "rsync",
+            # debhelper + libdw-dev:native are required by `make bindeb-pkg` to
+            # build the .deb packages (dpkg-checkbuilddeps enforces them).
+            "debhelper",
         ),
         build_target_default="bindeb-pkg",
         kernel_config_path_pattern="/boot/config-{release}",
@@ -233,8 +238,10 @@ _SPECS: dict[Family, DistroSpec] = {
         source_install_cmd=None,  # Fedora ships kernel-source via SRPM, not a binary pkg
         build_deps=(
             "gcc", "make", "flex", "bison", "bc", "openssl-devel",
-            "elfutils-libelf-devel", "ncurses-devel", "dwarves", "zstd",
-            "kmod", "cpio", "rsync", "perl",
+            # elfutils-devel provides <dwarf.h> (gendwarfksyms on 6.19+);
+            # elfutils-libelf-devel is the older libelf header set.
+            "elfutils-libelf-devel", "elfutils-devel", "ncurses-devel",
+            "dwarves", "zstd", "kmod", "cpio", "rsync", "perl",
         ),
         build_target_default="rpm-pkg",
         kernel_config_path_pattern="/boot/config-{release}",
@@ -249,7 +256,8 @@ _SPECS: dict[Family, DistroSpec] = {
         source_install_cmd=None,  # No bundled kernel-source pkg — use kernel.org
         build_deps=(
             "base-devel", "flex", "bison", "bc", "openssl",
-            "libelf", "ncurses", "pahole", "zstd", "kmod", "cpio", "rsync",
+            # libelf has libelf.h; libdw has <dwarf.h> for gendwarfksyms (6.19+).
+            "libelf", "libdw", "ncurses", "pahole", "zstd", "kmod", "cpio", "rsync",
         ),
         build_target_default="tarzst-pkg",  # closest to a "loose tarball" target
         kernel_config_path_pattern="/boot/config-{release}",
@@ -263,7 +271,8 @@ _SPECS: dict[Family, DistroSpec] = {
         source_install_cmd=("zypper", "install", "-y"),
         build_deps=(
             "gcc", "make", "flex", "bison", "bc", "libopenssl-devel",
-            "libelf-devel", "ncurses-devel", "dwarves", "zstd",
+            # libdw-devel adds <dwarf.h> for gendwarfksyms (6.19+).
+            "libelf-devel", "libdw-devel", "ncurses-devel", "dwarves", "zstd",
         ),
         build_target_default="rpm-pkg",
         kernel_config_path_pattern="/boot/config-{release}",
@@ -278,7 +287,9 @@ _SPECS: dict[Family, DistroSpec] = {
         build_deps=(
             "sys-devel/gcc", "sys-devel/make", "sys-devel/flex",
             "sys-devel/bison", "sys-devel/bc", "dev-libs/openssl",
-            "virtual/libelf", "sys-libs/ncurses", "dev-util/dwarves",
+            # dev-libs/elfutils provides <dwarf.h> for gendwarfksyms (6.19+).
+            "virtual/libelf", "dev-libs/elfutils", "sys-libs/ncurses",
+            "dev-util/dwarves",
         ),
         build_target_default="targz-pkg",
         kernel_config_path_pattern="/usr/src/linux/.config",
@@ -292,6 +303,8 @@ _SPECS: dict[Family, DistroSpec] = {
         source_install_cmd=None,
         build_deps=(
             "build-base", "flex", "bison", "bc", "openssl-dev",
+            # elfutils-dev on Alpine bundles libdw + libelf headers — covers
+            # <dwarf.h> for gendwarfksyms (6.19+) without a separate package.
             "elfutils-dev", "ncurses-dev", "zstd",
         ),
         build_target_default="targz-pkg",

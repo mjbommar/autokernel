@@ -211,6 +211,14 @@ def prepare(
     target = source_dir / ".config"
     shutil.copyfile(config_path, target)
 
+    # Distro-baked-in certificate paths (e.g. CONFIG_SYSTEM_TRUSTED_KEYS=
+    # "debian/canonical-certs.pem") only exist inside Ubuntu/Debian's own
+    # kernel source tree. Any autokernel-driven build uses kernel.org or
+    # apt-get-source or upstream — those paths don't exist and the build
+    # will fail with `No rule to make target 'debian/canonical-certs.pem'`.
+    # Auto-clear them in-place when the referenced files are absent.
+    _strip_missing_distro_cert_paths(target, source_dir)
+
     env = _build_env(use_ccache=False, env_overrides=env_overrides)
     step = _run_step(
         "olddefconfig",
@@ -227,6 +235,66 @@ def prepare(
         log_dir=log_dir,
         steps=[step],
     )
+
+
+_DISTRO_CERT_KEYS: tuple[str, ...] = (
+    "CONFIG_SYSTEM_TRUSTED_KEYS",
+    "CONFIG_SYSTEM_REVOCATION_KEYS",
+)
+
+
+def _strip_missing_distro_cert_paths(config_path: Path, source_dir: Path) -> None:
+    """Empty-out cert-path Kconfigs whose referenced .pem doesn't exist.
+
+    Ubuntu's running config carries
+    ``CONFIG_SYSTEM_TRUSTED_KEYS="debian/canonical-certs.pem"`` (and the
+    matching revocation path). Those files only exist inside Ubuntu's own
+    kernel source. Building from kernel.org or apt-get-source against this
+    config dies with::
+
+        make[3]: *** No rule to make target 'debian/canonical-certs.pem'
+
+    For any path-to-pem this helper hits, if the .pem isn't on disk
+    relative to ``source_dir``, replace it with the empty string. Leaves
+    intact any path that DOES exist (so e.g. a user's own signing key
+    survives), and leaves intact absolute paths that exist.
+    """
+    text = config_path.read_text()
+    out_lines: list[str] = []
+    changed = False
+    for line in text.splitlines(keepends=True):
+        stripped = line.lstrip()
+        if not any(stripped.startswith(f"{k}=") for k in _DISTRO_CERT_KEYS):
+            out_lines.append(line)
+            continue
+        # Parse: CONFIG_X="path"
+        eq = stripped.find("=")
+        if eq < 0 or '"' not in stripped:
+            out_lines.append(line)
+            continue
+        rhs = stripped[eq + 1 :].strip().rstrip("\n")
+        if not (rhs.startswith('"') and rhs.endswith('"')):
+            out_lines.append(line)
+            continue
+        path_str = rhs[1:-1]
+        if not path_str:
+            out_lines.append(line)
+            continue
+        candidate = Path(path_str)
+        if not candidate.is_absolute():
+            candidate = source_dir / candidate
+        if candidate.exists():
+            out_lines.append(line)
+            continue
+        # Replace with empty string; preserve key + indent + any trailing
+        # newline.
+        sym = stripped.split("=", 1)[0]
+        indent = line[: len(line) - len(stripped)]
+        nl = "\n" if line.endswith("\n") else ""
+        out_lines.append(f'{indent}{sym}=""{nl}')
+        changed = True
+    if changed:
+        config_path.write_text("".join(out_lines))
 
 
 # ── build ───────────────────────────────────────────────────────────────────

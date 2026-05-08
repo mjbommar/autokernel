@@ -248,10 +248,43 @@ def kconfig_symbol_for(arch: Microarch) -> str:
     """``Microarch.METEORLAKE`` → ``'CONFIG_MMETEORLAKE'``.
 
     For :attr:`Microarch.GENERIC` returns ``'CONFIG_GENERIC_CPU'``.
+
+    NOTE: this is the *legacy* per-microarch symbol form. Linux 6.16+
+    flattened the x86_64 CPU choice into a single
+    ``CONFIG_X86_NATIVE_CPU=y`` (uses ``-march=native``). For modern
+    target kernels prefer :func:`recommend_for_target`, which picks the
+    right form based on the kernel version being built.
     """
     if arch == Microarch.GENERIC:
         return "CONFIG_GENERIC_CPU"
     return f"CONFIG_M{arch.value}"
+
+
+# Kernel version where x86_64's per-microarch CONFIG_M* choice was
+# replaced by a single CONFIG_X86_NATIVE_CPU (using -march=native).
+# Verified: 6.19's arch/x86/Kconfig.cpu drops the x86-64 choice block
+# and exposes only X86_NATIVE_CPU. 6.15 and earlier still carry MZEN*,
+# MMETEORLAKE, etc. We pick 6.16 as the cutoff conservatively (Phoronix
+# reports X86_NATIVE_CPU was added in 6.16).
+_NATIVE_CPU_KERNEL_CUTOFF: tuple[int, int] = (6, 16)
+_NATIVE_CPU_SYMBOL = "CONFIG_X86_NATIVE_CPU"
+
+
+def kconfig_symbol_for_target(arch: Microarch, target_kernel: str | None) -> str:
+    """Pick the right CONFIG symbol for the *target* kernel being built.
+
+    For ``target_kernel`` >= 6.16 the kernel uses a single
+    ``CONFIG_X86_NATIVE_CPU=y`` (compiler ``-march=native``) regardless
+    of microarch — return that. For older targets, falls back to the
+    legacy per-microarch ``CONFIG_M*`` form.
+
+    Pass ``target_kernel=None`` to fall back to the legacy form.
+    """
+    if target_kernel is not None:
+        parsed = _parse_kernel_release(target_kernel)
+        if parsed is not None and parsed >= _NATIVE_CPU_KERNEL_CUTOFF:
+            return _NATIVE_CPU_SYMBOL
+    return kconfig_symbol_for(arch)
 
 
 def kernel_supports(arch: Microarch, kernel_release: str) -> bool:
@@ -291,10 +324,19 @@ def recommend(cpu: CpuInfo, kernel_release: str) -> tuple[Microarch, str] | None
     * the CPU isn't recognized (Microarch.GENERIC), or
     * the running kernel is too old for the detected microarch's symbol
       (and we'd just be downgrading to GENERIC_CPU anyway).
+
+    For target kernels >= 6.16 the legacy per-microarch CONFIG_M* was
+    replaced by ``CONFIG_X86_NATIVE_CPU`` (uses ``-march=native``); this
+    function returns that symbol regardless of microarch when the kernel
+    parses as >= 6.16. ``Microarch.GENERIC`` still returns ``None``
+    because there's nothing to set in either form.
     """
     arch = detect_microarch(cpu)
     if arch == Microarch.GENERIC:
         return None
+    parsed = _parse_kernel_release(kernel_release)
+    if parsed is not None and parsed >= _NATIVE_CPU_KERNEL_CUTOFF:
+        return arch, _NATIVE_CPU_SYMBOL
     if not kernel_supports(arch, kernel_release):
         return None
     return arch, kconfig_symbol_for(arch)

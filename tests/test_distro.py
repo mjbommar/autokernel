@@ -108,6 +108,10 @@ def test_debian_spec_uses_apt():
     assert spec.install_cmd[0] == "apt"
     assert spec.apt_get_source_supported is True
     assert "build-essential" in spec.build_deps
+    # libdw-dev provides <dwarf.h> for kernel >= 6.19's gendwarfksyms.
+    # debhelper is required by `make bindeb-pkg` (dpkg-checkbuilddeps).
+    assert "libdw-dev" in spec.build_deps
+    assert "debhelper" in spec.build_deps
     assert spec.build_target_default == "bindeb-pkg"
     assert spec.kernel_source_package_pattern == "linux-source-{version}"
 
@@ -116,6 +120,8 @@ def test_fedora_spec_uses_dnf():
     spec = spec_for(_load("fedora_41"))
     assert spec.package_manager == "dnf"
     assert "openssl-devel" in spec.build_deps
+    # elfutils-devel adds <dwarf.h> for kernel >= 6.19.
+    assert "elfutils-devel" in spec.build_deps
     assert spec.build_target_default == "rpm-pkg"
     # Fedora uses initramfs-<release>.img, not initrd.img-<release>
     assert "initramfs-" in spec.initramfs_image_path_pattern

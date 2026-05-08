@@ -436,6 +436,32 @@ def review(
         reviewer=reviewer,
     )
 
+    # Items that propose() already auto-applied (high-confidence
+    # deterministic + microarch tuning) bypass the review bulk-rules but
+    # MUST still flow into the kfrag — otherwise the CPU-tune and
+    # vendor-mismatch trims get silently dropped from final.config.
+    # Tag them with rule='propose-auto' so the audit trail distinguishes
+    # them from review-time decisions.
+    if diff.auto_applied:
+        from autokernel.models import ReviewDecision, ReviewedProposal
+        pre_accepted = [
+            ReviewedProposal(
+                proposal=p,
+                decision=ReviewDecision.ACCEPT,
+                reviewer=reviewer,
+                rule="propose-auto",
+            )
+            for p in diff.auto_applied
+        ]
+        # ReviewSet is frozen; rebuild with accepted prepended (so their
+        # provenance is visible first when the user inspects review.json).
+        review_set = ReviewSet(
+            base_diff_path=review_set.base_diff_path,
+            accepted=pre_accepted + list(review_set.accepted),
+            rejected=list(review_set.rejected),
+            deferred=list(review_set.deferred),
+        )
+
     # ── interactive review (TUI) ────────────────────────────────────────
     if interactive:
         from autokernel.tui import run_review

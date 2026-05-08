@@ -239,3 +239,87 @@ def test_build_failure_recorded(tmp_path: Path, monkeypatch):
     result = build(source_dir=src, snapshot_dir=snap, jobs=1)
     assert not result.ok
     assert result.steps[0].exit_code == 2
+
+
+# ── distro cert-path stripping (build.prepare auto-fix) ───────────────────
+
+
+def test_prepare_strips_missing_distro_cert_paths(tmp_path, monkeypatch):
+    """Ubuntu's running config bakes in
+    `CONFIG_SYSTEM_TRUSTED_KEYS="debian/canonical-certs.pem"`; that path
+    only exists inside Ubuntu's own kernel source. Building from
+    kernel.org or apt-get-source dies with `No rule to make target`.
+    Auto-strip when the .pem isn't there."""
+    src = _make_fake_kernel_source(tmp_path)
+    cfg = tmp_path / "final.config"
+    cfg.write_text(
+        'CONFIG_FOO=y\n'
+        'CONFIG_SYSTEM_TRUSTED_KEYS="debian/canonical-certs.pem"\n'
+        'CONFIG_SYSTEM_REVOCATION_KEYS="debian/canonical-revoked-certs.pem"\n'
+    )
+    snap = tmp_path / "snap"
+    snap.mkdir()
+
+    def _ok(argv, **kwargs):
+        for f in (kwargs.get("stdout"), kwargs.get("stderr")):
+            if hasattr(f, "write"):
+                f.write(b"")
+        return _FakeProcess(returncode=0)
+
+    monkeypatch.setattr(build_mod.subprocess, "run", _ok)
+    result = prepare(source_dir=src, config_path=cfg, snapshot_dir=snap)
+    assert result.ok
+    final = (src / ".config").read_text()
+    assert 'CONFIG_SYSTEM_TRUSTED_KEYS=""' in final
+    assert 'CONFIG_SYSTEM_REVOCATION_KEYS=""' in final
+    # The "real" path string should be gone.
+    assert "canonical-certs.pem" not in final
+    assert "canonical-revoked-certs.pem" not in final
+
+
+def test_prepare_keeps_existing_cert_paths(tmp_path, monkeypatch):
+    """If the user has a real signing key inside the source tree,
+    leave it alone."""
+    src = _make_fake_kernel_source(tmp_path)
+    real_key = src / "certs" / "my-signing.pem"
+    real_key.parent.mkdir(parents=True)
+    real_key.write_text("-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n")
+    cfg = tmp_path / "final.config"
+    cfg.write_text(
+        'CONFIG_FOO=y\n'
+        'CONFIG_SYSTEM_TRUSTED_KEYS="certs/my-signing.pem"\n'
+    )
+    snap = tmp_path / "snap"
+    snap.mkdir()
+
+    def _ok(argv, **kwargs):
+        for f in (kwargs.get("stdout"), kwargs.get("stderr")):
+            if hasattr(f, "write"):
+                f.write(b"")
+        return _FakeProcess(returncode=0)
+
+    monkeypatch.setattr(build_mod.subprocess, "run", _ok)
+    prepare(source_dir=src, config_path=cfg, snapshot_dir=snap)
+    final = (src / ".config").read_text()
+    assert 'CONFIG_SYSTEM_TRUSTED_KEYS="certs/my-signing.pem"' in final
+
+
+def test_prepare_leaves_already_empty_cert_paths(tmp_path, monkeypatch):
+    src = _make_fake_kernel_source(tmp_path)
+    cfg = tmp_path / "final.config"
+    cfg.write_text(
+        'CONFIG_FOO=y\nCONFIG_SYSTEM_TRUSTED_KEYS=""\n'
+    )
+    snap = tmp_path / "snap"
+    snap.mkdir()
+
+    def _ok(argv, **kwargs):
+        for f in (kwargs.get("stdout"), kwargs.get("stderr")):
+            if hasattr(f, "write"):
+                f.write(b"")
+        return _FakeProcess(returncode=0)
+
+    monkeypatch.setattr(build_mod.subprocess, "run", _ok)
+    prepare(source_dir=src, config_path=cfg, snapshot_dir=snap)
+    final = (src / ".config").read_text()
+    assert 'CONFIG_SYSTEM_TRUSTED_KEYS=""' in final

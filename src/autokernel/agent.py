@@ -63,7 +63,16 @@ class _ProposalDraft(BaseModel):
 
 
 class _ProposalBatch(BaseModel):
-    proposals: list[_ProposalDraft]
+    """Container the LLM populates with one entry per candidate.
+
+    ``proposals`` defaults to an empty list because some batches have no
+    actionable changes (every candidate should be kept) and the model
+    sometimes returns ``{}`` instead of ``{"proposals": []}``. With a
+    strict schema, pydantic-ai exhausts retries; with a default-empty
+    list we treat "no proposals" as a valid answer (== "keep all").
+    """
+
+    proposals: list[_ProposalDraft] = Field(default_factory=list)
 
 
 _SYSTEM_PROMPT = """\
