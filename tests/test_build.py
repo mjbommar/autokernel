@@ -383,3 +383,87 @@ def test_prepare_without_localmodconfig_runs_only_olddefconfig(tmp_path, monkeyp
     result = prepare(source_dir=src, config_path=cfg, snapshot_dir=snap)
     assert len(result.steps) == 1
     assert result.steps[0].name == "olddefconfig"
+
+
+# ── compiler + LTO env (v0.15) ────────────────────────────────────────────
+
+
+def test_build_env_clang_default(tmp_path):
+    from autokernel.build import _build_env
+    env = _build_env(use_ccache=False, env_overrides=None)
+    # Default is clang.
+    assert env.get("CC") == "clang"
+    assert env.get("HOSTCC") == "clang"
+    assert "LLVM" not in env
+
+
+def test_build_env_llvm_sets_llvm_flag():
+    from autokernel.build import _build_env
+    env = _build_env(use_ccache=False, env_overrides=None, compiler="llvm")
+    assert env["LLVM"] == "1"
+
+
+def test_build_env_gcc_explicit():
+    from autokernel.build import _build_env
+    env = _build_env(use_ccache=False, env_overrides=None, compiler="gcc")
+    assert env.get("CC") == "gcc"
+    assert env.get("HOSTCC") == "gcc"
+    assert "LLVM" not in env
+
+
+def test_build_env_unknown_compiler_raises():
+    from autokernel.build import _build_env
+    with pytest.raises(ValueError, match="unknown compiler"):
+        _build_env(use_ccache=False, env_overrides=None, compiler="msvc")
+
+
+def test_build_env_lto_thin_adds_kcflags():
+    from autokernel.build import _build_env
+    env = _build_env(use_ccache=False, env_overrides=None, lto="thin")
+    assert "-flto=thin" in env.get("KCFLAGS", "")
+
+
+def test_build_env_lto_full():
+    from autokernel.build import _build_env
+    env = _build_env(use_ccache=False, env_overrides=None, lto="full")
+    kcflags = env.get("KCFLAGS", "")
+    assert "-flto" in kcflags and "-flto=thin" not in kcflags
+
+
+def test_build_env_lto_none_no_kcflags_change():
+    from autokernel.build import _build_env
+    env = _build_env(use_ccache=False, env_overrides={"KCFLAGS": "existing"}, lto="none")
+    # env_overrides win; we don't add anything for lto=none.
+    assert env["KCFLAGS"] == "existing"
+
+
+def test_build_env_ccache_wraps_clang(tmp_path, monkeypatch):
+    from autokernel.build import _build_env
+    monkeypatch.setattr("shutil.which", lambda c: "/usr/bin/ccache" if c == "ccache" else None)
+    env = _build_env(use_ccache=True, env_overrides=None, compiler="clang")
+    # ccache wraps the active CC.
+    assert "ccache" in env["CC"]
+    assert "clang" in env["CC"]
+
+
+def test_prepare_passes_compiler_to_env(tmp_path, monkeypatch):
+    """`prepare(compiler='gcc')` should propagate to the make env."""
+    src = _make_fake_kernel_source(tmp_path)
+    cfg = _make_final_config(tmp_path)
+    snap = tmp_path / "snap"
+    snap.mkdir()
+
+    captured_envs: list[dict[str, str]] = []
+
+    def _ok(argv, **kwargs):
+        captured_envs.append(dict(kwargs.get("env") or {}))
+        for f in (kwargs.get("stdout"), kwargs.get("stderr")):
+            if hasattr(f, "write"):
+                f.write(b"")
+        return _FakeProcess(returncode=0)
+
+    monkeypatch.setattr(build_mod.subprocess, "run", _ok)
+    prepare(source_dir=src, config_path=cfg, snapshot_dir=snap, compiler="gcc")
+    assert captured_envs
+    assert captured_envs[0].get("CC") == "gcc"
+    assert captured_envs[0].get("HOSTCC") == "gcc"

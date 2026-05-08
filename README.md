@@ -8,15 +8,17 @@ Debian/Ubuntu, Fedora/RHEL, Arch, openSUSE, Gentoo, Alpine.
 Inspired by Gentoo's `localmodconfig`, FreeBSD's `include GENERIC` + diff
 style, and Debian's `make bindeb-pkg`.
 
-> **Status: 0.14.** Closed-loop optimizer. `autokernel iterate` runs
-> propose → config-check → apply → build → boot-test → measure for N
-> rounds, with each round's results feeding into the next propose call
-> as context. Auto-reverts regressions; converges on a stable size.
-> Four-axis intent (workload × threat × modules × aggression) composed
-> via `--preset=<name>` shortcuts (`gaming-desktop`, `paranoid-laptop`,
-> `hardened-server`, `cloud-vm`, `lean-static`, `hyperoptimize`, …)
-> or per-axis flags. Static config validation catches LLM
-> hallucinations and dead-letter choice options before the slow build.
+> **Status: 0.15.** Closed-loop optimizer with **clang as the default
+> compiler**, LTO opt-in via `--lto={thin,full}`, and a written-out
+> roadmap to "Linux from your hardware". The closed-loop runs propose
+> → check → apply → build → boot-test → measure for N rounds, feeding
+> each round's results into the next propose call as context. Four-axis
+> intent (workload × threat × modules × aggression) composed via
+> `--preset=NAME` or per-axis flags. See [docs/ROADMAP.md](docs/ROADMAP.md)
+> for the layer-by-layer arc, [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+> for how the pieces fit together, [docs/AGENTS.md](docs/AGENTS.md)
+> for the LLM agent reference, and [docs/PGO.md](docs/PGO.md) for the
+> v0.17 profile-guided optimization design.
 
 [![tests](https://github.com/mjbommar/autokernel/actions/workflows/test.yml/badge.svg)](https://github.com/mjbommar/autokernel/actions/workflows/test.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)

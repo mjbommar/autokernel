@@ -91,15 +91,66 @@ def _new_log_dir(snapshot_dir: Path) -> Path:
     return p
 
 
+_VALID_COMPILERS = ("clang", "gcc", "llvm")
+
+
 def _build_env(
     *,
     use_ccache: bool,
     env_overrides: dict[str, str] | None,
+    compiler: str = "clang",
+    lto: str = "none",
 ) -> dict[str, str]:
+    """Compose make's environment.
+
+    ``compiler``:
+
+    * ``"clang"`` — set ``CC=clang HOSTCC=clang`` so make uses clang.
+      Kernel-built modules use clang; LLD/binutils stay on GNU.
+    * ``"llvm"`` — set ``LLVM=1`` (the kernel build system's flag for
+      "use the entire LLVM toolchain": clang, lld, llvm-{ar,nm,objcopy,
+      readelf}). Required for clang-LTO and clang-CFI.
+    * ``"gcc"`` — set ``CC=gcc HOSTCC=gcc`` (explicit, in case the
+      system default is something else).
+
+    ``lto``:
+
+    * ``"none"`` — no LTO (default; fastest builds).
+    * ``"thin"`` — adds ``CONFIG_LTO_CLANG_THIN=y`` semantics by
+      injecting ``KCFLAGS=-flto=thin`` (caller is also expected to
+      enable the matching CONFIG via the propose path or directly).
+    * ``"full"`` — same with ``-flto``.
+
+    Note: this function only sets compiler/LTO env. The matching
+    ``CONFIG_*`` knobs (CFI_CLANG, LTO_CLANG_*) flow through propose
+    or are set directly in final.config.
+    """
+    if compiler not in _VALID_COMPILERS:
+        raise ValueError(
+            f"unknown compiler {compiler!r}; valid: {_VALID_COMPILERS}"
+        )
+
     env = os.environ.copy()
     env.setdefault("KBUILD_BUILD_TIMESTAMP", REPRO_TIMESTAMP_DEFAULT)
     env.setdefault("KBUILD_BUILD_USER", REPRO_USER_DEFAULT)
     env.setdefault("KBUILD_BUILD_HOST", REPRO_HOST_DEFAULT)
+
+    # Compiler selection.
+    if compiler == "llvm":
+        env["LLVM"] = "1"
+    elif compiler == "clang":
+        env["CC"] = "clang"
+        env["HOSTCC"] = "clang"
+    elif compiler == "gcc":
+        env["CC"] = "gcc"
+        env["HOSTCC"] = "gcc"
+
+    # LTO opt-in. Both flags are additive — the kernel's Kbuild
+    # respects KCFLAGS/HOSTCFLAGS for in-tree builds.
+    if lto in {"thin", "full"}:
+        flag = "-flto=thin" if lto == "thin" else "-flto"
+        existing = env.get("KCFLAGS", "")
+        env["KCFLAGS"] = (existing + " " + flag).strip()
 
     if use_ccache and shutil.which("ccache"):
         # Wrap CC; let the kernel's Kbuild detect HOSTCC similarly.
@@ -192,6 +243,8 @@ def prepare(
     olddefconfig_timeout: float = 60.0,
     localmodconfig: bool = False,
     lsmod_path: Path | None = None,
+    compiler: str = "clang",
+    lto: str = "none",
 ) -> PrepareResult:
     """Drop ``config_path`` into ``<source_dir>/.config`` and run
     ``make olddefconfig`` to canonicalize.
@@ -230,7 +283,10 @@ def prepare(
     # Auto-clear them in-place when the referenced files are absent.
     _strip_missing_distro_cert_paths(target, source_dir)
 
-    env = _build_env(use_ccache=False, env_overrides=env_overrides)
+    env = _build_env(
+        use_ccache=False, env_overrides=env_overrides,
+        compiler=compiler, lto=lto,
+    )
     steps: list[StepResult] = []
     steps.append(
         _run_step(
@@ -355,6 +411,8 @@ def build(
     log_dir: Path | None = None,
     target: str = "bindeb-pkg",
     timeout: float | None = None,
+    compiler: str = "clang",
+    lto: str = "none",
 ) -> BuildResult:
     """Run ``make -j N <target>`` in the prepared source tree.
 
@@ -372,7 +430,10 @@ def build(
         jobs = os.cpu_count() or 4
 
     log_dir = log_dir or _new_log_dir(snapshot_dir)
-    env = _build_env(use_ccache=use_ccache, env_overrides=env_overrides)
+    env = _build_env(
+        use_ccache=use_ccache, env_overrides=env_overrides,
+        compiler=compiler, lto=lto,
+    )
 
     step = _run_step(
         f"make-{target}",

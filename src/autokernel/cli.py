@@ -863,6 +863,8 @@ def build(
     target: Annotated[str, typer.Option(help="Make target for --execute. Default 'auto' picks per distro: bindeb-pkg (Debian/Ubuntu), rpm-pkg (Fedora/SUSE), targz-pkg (Arch/Gentoo/other).")] = "auto",
     force_dkms: Annotated[bool, typer.Option(help="Allow --execute even with DKMS modules present")] = False,
     localmodconfig: Annotated[bool, typer.Option("--localmodconfig", help="After dropping final.config, also run `make LSMOD=<snap>/lsmod localmodconfig` to disable every module not currently loaded on the host. Cuts module count ~6000→~250 on stock Ubuntu, build time 5-10× faster.")] = False,
+    compiler: Annotated[str, typer.Option("--compiler", help="Compiler toolchain. 'clang' (default; CC=clang), 'llvm' (LLVM=1: clang+lld+llvm-bin; required for clang-LTO/CFI), 'gcc'.")] = "clang",
+    lto: Annotated[str, typer.Option("--lto", help="Link-time optimization. 'none' (default, fastest builds), 'thin' (clang thin-LTO; +5-10% throughput, +30% build), 'full' (clang full-LTO; +5-12%, +200% build).")] = "none",
 ) -> None:
     """Drop final.config into a kernel source tree, run olddefconfig, optionally build."""
     _validate_snapshot_dir(snapshot_dir)
@@ -907,6 +909,8 @@ def build(
             snapshot_dir=snapshot_dir,
             localmodconfig=localmodconfig,
             lsmod_path=lsmod_path,
+            compiler=compiler,
+            lto=lto,
         )
     except FileNotFoundError as e:
         err_console.print(f"[red]{e}[/red]")
@@ -946,6 +950,8 @@ def build(
         use_ccache=not no_ccache,
         target=target,
         log_dir=prep.log_dir,
+        compiler=compiler,
+        lto=lto,
     )
 
     _render_step_results("build", bres.steps, bres.log_dir)

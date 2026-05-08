@@ -225,6 +225,9 @@ _SPECS: dict[Family, DistroSpec] = {
             # debhelper + libdw-dev:native are required by `make bindeb-pkg` to
             # build the .deb packages (dpkg-checkbuilddeps enforces them).
             "debhelper",
+            # v0.15: clang/lld/llvm — required for the default compiler;
+            # also required for CFI_CLANG, LTO_CLANG_*, and KCSAN.
+            "clang", "lld", "llvm",
         ),
         build_target_default="bindeb-pkg",
         kernel_config_path_pattern="/boot/config-{release}",
@@ -242,6 +245,8 @@ _SPECS: dict[Family, DistroSpec] = {
             # elfutils-libelf-devel is the older libelf header set.
             "elfutils-libelf-devel", "elfutils-devel", "ncurses-devel",
             "dwarves", "zstd", "kmod", "cpio", "rsync", "perl",
+            # v0.15: clang as default compiler.
+            "clang", "lld", "llvm",
         ),
         build_target_default="rpm-pkg",
         kernel_config_path_pattern="/boot/config-{release}",
@@ -258,6 +263,8 @@ _SPECS: dict[Family, DistroSpec] = {
             "base-devel", "flex", "bison", "bc", "openssl",
             # libelf has libelf.h; libdw has <dwarf.h> for gendwarfksyms (6.19+).
             "libelf", "libdw", "ncurses", "pahole", "zstd", "kmod", "cpio", "rsync",
+            # v0.15: clang/lld/llvm.
+            "clang", "lld", "llvm",
         ),
         build_target_default="tarzst-pkg",  # closest to a "loose tarball" target
         kernel_config_path_pattern="/boot/config-{release}",
