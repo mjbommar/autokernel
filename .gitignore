@@ -20,8 +20,11 @@ dist/
 snapshots/
 snapshot-*/
 *.kfrag.local
-# Runtime caches written next to fixtures during tests; regenerable.
+# Runtime caches written next to snapshots during interactive use.
+# Test fixtures explicitly check in their own caches so tests are
+# deterministic across hosts (CI runners lack the relevant /lib/modules).
 loadable_modinfo_cache
+!tests/fixtures/**/loadable_modinfo_cache
 
 # editors / OS
 .vscode/

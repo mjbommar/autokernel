@@ -1,0 +1,17 @@
+aesni_intel	arch/x86/crypto/aesni-intel	0
+amd64_edac	drivers/edac/amd64_edac	0
+edac_mce_amd	drivers/edac/edac_mce_amd	0
+ext4		1
+ghash_clmulni_intel	arch/x86/crypto/ghash-clmulni-intel	0
+k10temp	drivers/hwmon/k10temp	0
+nvidia	nvidia-580/nvidia	0
+nvidia_drm	nvidia-580/nvidia-drm	0
+nvidia_modeset	nvidia-580/nvidia-modeset	0
+nvidia_uvm	nvidia-580/nvidia-uvm	0
+nvme	drivers/nvme/host/nvme	0
+nvme_core	drivers/nvme/host/nvme-core	0
+r8169	drivers/net/ethernet/realtek/r8169	0
+snd_hda_codec_hdmi	sound/hda/codecs/hdmi/snd-hda-codec-hdmi	0
+snd_hda_intel	sound/hda/controllers/snd-hda-intel	0
+xhci_hcd		1
+xhci_pci		1
