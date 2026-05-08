@@ -1696,6 +1696,69 @@ def _render_install_deps_plan(plan_obj, *, distro) -> None:
 # ── boot-test ─────────────────────────────────────────────────────────────
 
 
+@app.command()
+def minitram(
+    snapshot_dir: Annotated[Path, typer.Argument(help="Snapshot directory from `autokernel scan`")],
+    out: Annotated[Path | None, typer.Option(help="Output path. Default: <snap>/initramfs.cpio.zst")] = None,
+    include_dropbear: Annotated[bool, typer.Option("--dropbear", help="Include static dropbear for headless rescue SSH (~700 KB).")] = False,
+    execute: Annotated[bool, typer.Option("--execute", help="Actually build the cpio.zst archive (default is dry-run, just print the plan).")] = False,
+) -> None:
+    """Generate a minimal initramfs from snapshot evidence.
+
+    Today Ubuntu's update-initramfs builds a 40 MB initramfs containing
+    every module that *might* be needed across all hosts. autokernel
+    knows what's actually load-bearing for THIS host (LUKS in the boot
+    chain? LVM? RAID? DKMS modules?) and packs only those — typically
+    3-5 MB total.
+
+    Without --execute, prints the plan; pass --execute to actually
+    pack the cpio.zst archive.
+    """
+    from autokernel import minitram as minitram_mod
+    _validate_snapshot_dir(snapshot_dir)
+    snap = snap_mod.load(snapshot_dir)
+
+    p = minitram_mod.plan(snap, include_dropbear=include_dropbear)
+
+    # Render the plan.
+    console.rule("autokernel minitram — plan")
+    console.print(f"  kernel:    {p.kernel_release}")
+    console.print(f"  busybox:   {p.busybox} (always; provides /bin/sh + applets)")
+    console.print(f"  tools:     {len(p.tools)}")
+    for t in p.tools:
+        console.print(f"    · [yellow]{t.name}[/yellow] ({t.host_path}): {t.rationale}")
+        if t.libs:
+            console.print(f"        deps: {', '.join(Path(l).name for l in t.libs[:5])}")
+    console.print(f"  modules:   {len(p.modules)}")
+    for m in p.modules[:15]:
+        console.print(f"    · [cyan]{m.name}[/cyan]: {m.rationale}")
+    if len(p.modules) > 15:
+        console.print(f"    · … {len(p.modules) - 15} more")
+    console.print()
+    if not execute:
+        console.print("[dim]dry-run; pass --execute to actually build initramfs.cpio.zst[/dim]")
+        return
+
+    out_path = out or (snapshot_dir / "initramfs.cpio.zst")
+    console.print(f"[cyan]packing {out_path}…[/cyan]")
+    try:
+        result = minitram_mod.build(p, out_path=out_path)
+    except RuntimeError as e:
+        err_console.print(f"[red]minitram build failed: {e}[/red]")
+        raise typer.Exit(1) from None
+    size_mb = result.bytes / (1024 * 1024)
+    console.print(Panel.fit(
+        f"[green]✓ built[/green]\n"
+        f"  archive:   {result.archive_path}\n"
+        f"  size:      {size_mb:.2f} MB ({result.bytes:,} bytes)\n"
+        f"  modules:   {result.n_modules}\n"
+        f"  tools:     {result.n_tools}\n"
+        f"  plan:      {result.plan_path}",
+        title="autokernel minitram",
+        border_style="green",
+    ))
+
+
 @app.command("boot-test")
 def boot_test(
     snapshot_dir: Annotated[Path, typer.Argument(help="Snapshot directory")],
