@@ -1,0 +1,4 @@
+/sys/devices/pci0000:00/0000:00:02.0	i915
+/sys/devices/pci0000:00/0000:00:14.0	xhci_hcd
+/sys/devices/pci0000:00/0000:00:14.3	iwlwifi
+/sys/devices/pci0000:00/0000:01:00.0	nvme

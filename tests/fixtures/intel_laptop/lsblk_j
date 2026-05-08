@@ -1,0 +1,1 @@
+{"blockdevices":[{"name":"nvme0n1","fstype":null,"type":"disk","children":[{"name":"nvme0n1p1","fstype":"vfat","type":"part"},{"name":"nvme0n1p2","fstype":"ext4","type":"part"},{"name":"nvme0n1p3","fstype":"crypto_LUKS","type":"part","children":[{"name":"cryptroot","fstype":"btrfs","type":"crypt"}]}]}]}

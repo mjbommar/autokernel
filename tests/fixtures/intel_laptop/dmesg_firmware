@@ -1,0 +1,4 @@
+[    2.451237] iwlwifi 0000:00:14.3: loaded firmware version 89.f15c4f70.0 ty-a0-gf-a0-89.ucode op_mode iwlmvm
+[    2.987432] i915 0000:00:02.0: [drm] Finished loading DMC firmware i915/mtl_dmc.bin (v2.23)
+[    3.211045] microcode: Microcode Update Driver: v2.2.
+[   12.443210] Bluetooth: hci0: Loading Intel firmware file (intel/ibt-0291-0291.sfi)

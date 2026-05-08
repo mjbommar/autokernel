@@ -1,0 +1,241 @@
+"""Tests for the build module — subprocess invocations are mocked.
+
+We can't run a real kernel build in CI / a unit-test loop. Instead we
+verify the *contract*: argv shape, CWD, environment variables, log file
+locations, and result objects.
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from autokernel import build as build_mod
+from autokernel.build import (
+    BuildResult,
+    PrepareResult,
+    StepResult,
+    build,
+    prepare,
+)
+
+
+def _make_fake_kernel_source(tmp_path: Path) -> Path:
+    src = tmp_path / "linux-source"
+    src.mkdir()
+    (src / "Makefile").write_text("# fake kernel Makefile\n")
+    return src
+
+
+def _make_final_config(tmp_path: Path) -> Path:
+    p = tmp_path / "final.config"
+    p.write_text("CONFIG_FOO=y\n# CONFIG_BAR is not set\n")
+    return p
+
+
+class _FakeProcess:
+    def __init__(self, returncode: int = 0):
+        self.returncode = returncode
+
+
+@pytest.fixture
+def captured_runs(monkeypatch):
+    """Replace subprocess.run with a recorder; return the list of calls."""
+    calls: list[dict[str, Any]] = []
+
+    def _fake(argv, **kwargs):
+        # Drain stdout/stderr like the real subprocess does so the
+        # caller doesn't notice the difference.
+        for f in (kwargs.get("stdout"), kwargs.get("stderr")):
+            if hasattr(f, "write"):
+                f.write(b"")
+        calls.append({"argv": argv, **kwargs})
+        return _FakeProcess(returncode=0)
+
+    monkeypatch.setattr(build_mod.subprocess, "run", _fake)
+    return calls
+
+
+# ── prepare ─────────────────────────────────────────────────────────────────
+
+
+def test_prepare_copies_config_and_runs_olddefconfig(
+    tmp_path: Path, captured_runs: list[dict[str, Any]]
+):
+    src = _make_fake_kernel_source(tmp_path)
+    cfg = _make_final_config(tmp_path)
+    snap = tmp_path / "snap"
+    snap.mkdir()
+
+    result = prepare(source_dir=src, config_path=cfg, snapshot_dir=snap)
+
+    assert isinstance(result, PrepareResult)
+    assert (src / ".config").exists()
+    assert (src / ".config").read_text() == cfg.read_text()
+
+    # exactly one subprocess call: make olddefconfig
+    assert len(captured_runs) == 1
+    call = captured_runs[0]
+    assert call["argv"] == ["make", "olddefconfig"]
+    assert Path(call["cwd"]) == src.resolve()
+
+
+def test_prepare_sets_reproducibility_env(tmp_path: Path, captured_runs):
+    src = _make_fake_kernel_source(tmp_path)
+    cfg = _make_final_config(tmp_path)
+    snap = tmp_path / "snap"
+    snap.mkdir()
+
+    prepare(source_dir=src, config_path=cfg, snapshot_dir=snap)
+    env = captured_runs[0]["env"]
+    assert env["KBUILD_BUILD_TIMESTAMP"] == build_mod.REPRO_TIMESTAMP_DEFAULT
+    assert env["KBUILD_BUILD_USER"] == build_mod.REPRO_USER_DEFAULT
+    assert env["KBUILD_BUILD_HOST"] == build_mod.REPRO_HOST_DEFAULT
+
+
+def test_prepare_env_overrides(tmp_path: Path, captured_runs):
+    src = _make_fake_kernel_source(tmp_path)
+    cfg = _make_final_config(tmp_path)
+    snap = tmp_path / "snap"
+    snap.mkdir()
+
+    prepare(
+        source_dir=src,
+        config_path=cfg,
+        snapshot_dir=snap,
+        env_overrides={"KBUILD_BUILD_USER": "alice"},
+    )
+    assert captured_runs[0]["env"]["KBUILD_BUILD_USER"] == "alice"
+
+
+def test_prepare_writes_log_files(tmp_path: Path, captured_runs):
+    src = _make_fake_kernel_source(tmp_path)
+    cfg = _make_final_config(tmp_path)
+    snap = tmp_path / "snap"
+    snap.mkdir()
+
+    result = prepare(source_dir=src, config_path=cfg, snapshot_dir=snap)
+    assert result.log_dir.exists()
+    assert (result.log_dir / "olddefconfig.argv.log").exists()
+    assert (result.log_dir / "olddefconfig.env.log").exists()
+    argv_log = (result.log_dir / "olddefconfig.argv.log").read_text()
+    assert "make" in argv_log
+    assert "olddefconfig" in argv_log
+
+
+def test_prepare_rejects_non_kernel_dir(tmp_path: Path):
+    not_a_kernel = tmp_path / "notkernel"
+    not_a_kernel.mkdir()
+    cfg = _make_final_config(tmp_path)
+    snap = tmp_path / "snap"
+    snap.mkdir()
+    with pytest.raises(FileNotFoundError, match="Makefile"):
+        prepare(source_dir=not_a_kernel, config_path=cfg, snapshot_dir=snap)
+
+
+def test_prepare_rejects_missing_config(tmp_path: Path):
+    src = _make_fake_kernel_source(tmp_path)
+    snap = tmp_path / "snap"
+    snap.mkdir()
+    with pytest.raises(FileNotFoundError, match="final.config"):
+        prepare(source_dir=src, config_path=tmp_path / "missing", snapshot_dir=snap)
+
+
+# ── build ───────────────────────────────────────────────────────────────────
+
+
+def test_build_invokes_bindeb_pkg(tmp_path: Path, captured_runs):
+    src = _make_fake_kernel_source(tmp_path)
+    (src / ".config").write_text("CONFIG_X=y\n")
+    snap = tmp_path / "snap"
+    snap.mkdir()
+
+    result = build(source_dir=src, snapshot_dir=snap, jobs=8)
+
+    assert len(captured_runs) == 1
+    assert captured_runs[0]["argv"] == ["make", "-j8", "bindeb-pkg"]
+    assert isinstance(result, BuildResult)
+    assert result.steps[0].ok is True
+
+
+def test_build_default_jobs_uses_cpu_count(tmp_path: Path, captured_runs, monkeypatch):
+    src = _make_fake_kernel_source(tmp_path)
+    (src / ".config").write_text("CONFIG_X=y\n")
+    snap = tmp_path / "snap"
+    snap.mkdir()
+    monkeypatch.setattr(build_mod.os, "cpu_count", lambda: 16)
+
+    build(source_dir=src, snapshot_dir=snap)
+    assert captured_runs[0]["argv"] == ["make", "-j16", "bindeb-pkg"]
+
+
+def test_build_ccache_wraps_cc_when_available(tmp_path: Path, captured_runs, monkeypatch):
+    src = _make_fake_kernel_source(tmp_path)
+    (src / ".config").write_text("CONFIG_X=y\n")
+    snap = tmp_path / "snap"
+    snap.mkdir()
+    monkeypatch.setattr(build_mod.shutil, "which", lambda c: "/usr/bin/ccache" if c == "ccache" else None)
+
+    build(source_dir=src, snapshot_dir=snap, jobs=2)
+    env = captured_runs[0]["env"]
+    assert env["CC"].startswith("ccache ")
+    assert env["HOSTCC"].startswith("ccache ")
+
+
+def test_build_no_ccache_when_disabled(tmp_path: Path, captured_runs, monkeypatch):
+    src = _make_fake_kernel_source(tmp_path)
+    (src / ".config").write_text("CONFIG_X=y\n")
+    snap = tmp_path / "snap"
+    snap.mkdir()
+    monkeypatch.setattr(build_mod.shutil, "which", lambda c: "/usr/bin/ccache" if c == "ccache" else None)
+
+    build(source_dir=src, snapshot_dir=snap, jobs=2, use_ccache=False)
+    env = captured_runs[0]["env"]
+    assert "ccache" not in env.get("CC", "cc")
+
+
+def test_build_picks_up_deb_artifacts(tmp_path: Path, captured_runs):
+    src = _make_fake_kernel_source(tmp_path)
+    (src / ".config").write_text("CONFIG_X=y\n")
+    # Simulate make output: .debs land in the parent of source_dir
+    deb1 = tmp_path / "linux-image-6.13.0-12-generic_amd64.deb"
+    deb2 = tmp_path / "linux-headers-6.13.0-12-generic_amd64.deb"
+    deb1.write_text("")
+    deb2.write_text("")
+    snap = tmp_path / "snap"
+    snap.mkdir()
+
+    result = build(source_dir=src, snapshot_dir=snap, jobs=1)
+    assert deb1 in result.deb_paths
+    assert deb2 in result.deb_paths
+    assert result.ok
+
+
+def test_build_rejects_unprepared_source(tmp_path: Path):
+    src = _make_fake_kernel_source(tmp_path)
+    snap = tmp_path / "snap"
+    snap.mkdir()
+    with pytest.raises(FileNotFoundError, match=".config"):
+        build(source_dir=src, snapshot_dir=snap, jobs=1)
+
+
+def test_build_failure_recorded(tmp_path: Path, monkeypatch):
+    src = _make_fake_kernel_source(tmp_path)
+    (src / ".config").write_text("CONFIG_X=y\n")
+    snap = tmp_path / "snap"
+    snap.mkdir()
+
+    def _fail(argv, **kwargs):
+        for f in (kwargs.get("stdout"), kwargs.get("stderr")):
+            if hasattr(f, "write"):
+                f.write(b"build broke\n")
+        return _FakeProcess(returncode=2)
+
+    monkeypatch.setattr(build_mod.subprocess, "run", _fail)
+    result = build(source_dir=src, snapshot_dir=snap, jobs=1)
+    assert not result.ok
+    assert result.steps[0].exit_code == 2

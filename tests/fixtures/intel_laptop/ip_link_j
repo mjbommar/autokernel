@@ -1,0 +1,1 @@
+[{"ifindex":1,"ifname":"lo","operstate":"UNKNOWN","linkinfo":{"info_kind":"loopback"}},{"ifindex":2,"ifname":"wlp0s20f3","operstate":"UP","linkinfo":{"info_kind":"iwlwifi"}},{"ifindex":3,"ifname":"docker0","operstate":"DOWN","linkinfo":{"info_kind":"bridge"}}]

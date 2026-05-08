@@ -1,0 +1,46 @@
+Slot:	00:00.0
+Class:	0600
+Vendor:	1022
+Device:	1480
+SVendor:	1022
+SDevice:	1480
+
+Slot:	0a:00.0
+Class:	0300
+Vendor:	10de
+Device:	2204
+SVendor:	1462
+SDevice:	3915
+Rev:	a1
+Driver:	nvidia
+Module:	nvidia
+
+Slot:	0a:00.1
+Class:	0403
+Vendor:	10de
+Device:	1aef
+SVendor:	1462
+SDevice:	3915
+Rev:	a1
+Driver:	snd_hda_intel
+Module:	snd_hda_intel
+
+Slot:	0c:00.0
+Class:	0200
+Vendor:	10ec
+Device:	8125
+SVendor:	1462
+SDevice:	7c84
+Rev:	05
+Driver:	r8169
+Module:	r8169
+
+Slot:	0d:00.0
+Class:	0108
+Vendor:	144d
+Device:	a80a
+SVendor:	144d
+SDevice:	a801
+Rev:	00
+Driver:	nvme
+Module:	nvme

@@ -1,0 +1,29 @@
+# env / secrets
+.env
+.env~
+.env.*
+!.env.example
+
+# python / uv
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+
+# autokernel artifacts
+.autokernel/
+snapshots/
+snapshot-*/
+*.kfrag.local
+# Runtime caches written next to fixtures during tests; regenerable.
+loadable_modinfo_cache
+
+# editors / OS
+.vscode/
+.idea/
+.DS_Store

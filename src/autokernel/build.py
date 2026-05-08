@@ -1,0 +1,292 @@
+"""Drive the kernel build pipeline.
+
+Two phases:
+
+* :func:`prepare` — drops ``final.config`` into a kernel source tree as
+  ``<source>/.config`` and runs ``make olddefconfig`` to canonicalize it.
+  Fast (~1s), idempotent, no compilation.
+
+* :func:`build` — runs ``make -j N bindeb-pkg`` (Debian/Ubuntu .deb
+  output) inside the prepared source tree. Slow (15-60 min), produces
+  ``linux-image-*.deb`` and ``linux-headers-*.deb`` siblings of the source.
+
+Both phases capture every subprocess invocation's stdout/stderr to dated
+log files under ``<log_dir>/<step>.{out,err,argv,env}.log``. The ``.argv``
+file records the literal argv list and CWD; ``.env`` records the
+reproducibility-relevant environment variables. This makes a build
+reproducible (or at least diagnosable) after the fact.
+
+Reproducibility:
+
+* ``KBUILD_BUILD_TIMESTAMP``, ``KBUILD_BUILD_USER``, ``KBUILD_BUILD_HOST``
+  are pinned by default. The user can override via ``env_overrides``.
+* ``SOURCE_DATE_EPOCH`` is set when given so debianize timestamps are
+  deterministic.
+* If ``ccache`` is on PATH and not disabled, ``CC`` and ``HOSTCC`` are
+  wrapped: ``CC="ccache cc"``.
+"""
+
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from pathlib import Path
+
+
+REPRO_TIMESTAMP_DEFAULT = "1970-01-01T00:00:00Z"
+REPRO_USER_DEFAULT = "autokernel"
+REPRO_HOST_DEFAULT = "autokernel"
+
+
+@dataclass
+class StepResult:
+    name: str
+    argv: list[str]
+    cwd: Path
+    env: dict[str, str]
+    exit_code: int
+    duration_s: float
+    stdout_path: Path
+    stderr_path: Path
+
+    @property
+    def ok(self) -> bool:
+        return self.exit_code == 0
+
+
+@dataclass
+class PrepareResult:
+    source_dir: Path
+    config_path: Path  # path to <source>/.config
+    log_dir: Path
+    steps: list[StepResult] = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        return all(s.ok for s in self.steps)
+
+
+@dataclass
+class BuildResult:
+    source_dir: Path
+    log_dir: Path
+    deb_paths: list[Path] = field(default_factory=list)
+    steps: list[StepResult] = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        return all(s.ok for s in self.steps) and bool(self.deb_paths)
+
+
+# ── helpers ─────────────────────────────────────────────────────────────────
+
+
+def _new_log_dir(snapshot_dir: Path) -> Path:
+    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    p = snapshot_dir / "build" / ts
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _build_env(
+    *,
+    use_ccache: bool,
+    env_overrides: dict[str, str] | None,
+) -> dict[str, str]:
+    env = os.environ.copy()
+    env.setdefault("KBUILD_BUILD_TIMESTAMP", REPRO_TIMESTAMP_DEFAULT)
+    env.setdefault("KBUILD_BUILD_USER", REPRO_USER_DEFAULT)
+    env.setdefault("KBUILD_BUILD_HOST", REPRO_HOST_DEFAULT)
+
+    if use_ccache and shutil.which("ccache"):
+        # Wrap CC; let the kernel's Kbuild detect HOSTCC similarly.
+        existing_cc = env.get("CC", "cc")
+        if "ccache" not in existing_cc.split():
+            env["CC"] = f"ccache {existing_cc}"
+        existing_hostcc = env.get("HOSTCC", "cc")
+        if "ccache" not in existing_hostcc.split():
+            env["HOSTCC"] = f"ccache {existing_hostcc}"
+
+    if env_overrides:
+        env.update(env_overrides)
+    return env
+
+
+def _run_step(
+    name: str,
+    argv: list[str],
+    *,
+    cwd: Path,
+    env: dict[str, str],
+    log_dir: Path,
+    timeout: float | None = None,
+) -> StepResult:
+    """Run a subprocess, persisting argv/env/stdout/stderr to log_dir."""
+    log_dir.mkdir(parents=True, exist_ok=True)
+    out_path = log_dir / f"{name}.out.log"
+    err_path = log_dir / f"{name}.err.log"
+    argv_path = log_dir / f"{name}.argv.log"
+    env_path = log_dir / f"{name}.env.log"
+
+    argv_path.write_text(
+        f"# cwd: {cwd}\n"
+        f"# timeout: {timeout}\n"
+        + " ".join(repr(a) for a in argv)
+        + "\n"
+    )
+    env_path.write_text(
+        "\n".join(
+            f"{k}={v}"
+            for k, v in sorted(env.items())
+            if k.startswith("KBUILD_") or k in {"CC", "HOSTCC", "ARCH", "CROSS_COMPILE", "SOURCE_DATE_EPOCH"}
+        )
+        + "\n"
+    )
+
+    started = datetime.now(UTC)
+    try:
+        with out_path.open("wb") as outf, err_path.open("wb") as errf:
+            proc = subprocess.run(
+                argv,
+                cwd=str(cwd),
+                env=env,
+                stdout=outf,
+                stderr=errf,
+                timeout=timeout,
+                check=False,
+            )
+        rc = proc.returncode
+    except subprocess.TimeoutExpired:
+        rc = -1
+        err_path.write_bytes(b"TIMEOUT\n")
+    except FileNotFoundError as e:
+        rc = -2
+        err_path.write_text(f"command not found: {e}\n")
+
+    duration = (datetime.now(UTC) - started).total_seconds()
+    return StepResult(
+        name=name,
+        argv=argv,
+        cwd=cwd,
+        env=env,
+        exit_code=rc,
+        duration_s=duration,
+        stdout_path=out_path,
+        stderr_path=err_path,
+    )
+
+
+# ── prepare ─────────────────────────────────────────────────────────────────
+
+
+def prepare(
+    *,
+    source_dir: Path,
+    config_path: Path,
+    snapshot_dir: Path,
+    log_dir: Path | None = None,
+    env_overrides: dict[str, str] | None = None,
+    olddefconfig_timeout: float = 60.0,
+) -> PrepareResult:
+    """Drop ``config_path`` into ``<source_dir>/.config`` and run
+    ``make olddefconfig`` to canonicalize.
+
+    Idempotent: re-running with the same inputs produces the same .config.
+    """
+    source_dir = Path(source_dir).resolve()
+    config_path = Path(config_path).resolve()
+    if not source_dir.is_dir():
+        raise FileNotFoundError(f"kernel source dir not found: {source_dir}")
+    if not (source_dir / "Makefile").exists():
+        raise FileNotFoundError(
+            f"{source_dir} does not look like a kernel source tree (no Makefile)"
+        )
+    if not config_path.exists():
+        raise FileNotFoundError(f"final.config not found: {config_path}")
+
+    log_dir = log_dir or _new_log_dir(snapshot_dir)
+    target = source_dir / ".config"
+    shutil.copyfile(config_path, target)
+
+    env = _build_env(use_ccache=False, env_overrides=env_overrides)
+    step = _run_step(
+        "olddefconfig",
+        ["make", "olddefconfig"],
+        cwd=source_dir,
+        env=env,
+        log_dir=log_dir,
+        timeout=olddefconfig_timeout,
+    )
+
+    return PrepareResult(
+        source_dir=source_dir,
+        config_path=target,
+        log_dir=log_dir,
+        steps=[step],
+    )
+
+
+# ── build ───────────────────────────────────────────────────────────────────
+
+
+def build(
+    *,
+    source_dir: Path,
+    snapshot_dir: Path,
+    jobs: int | None = None,
+    use_ccache: bool = True,
+    env_overrides: dict[str, str] | None = None,
+    log_dir: Path | None = None,
+    target: str = "bindeb-pkg",
+    timeout: float | None = None,
+) -> BuildResult:
+    """Run ``make -j N <target>`` in the prepared source tree.
+
+    Returns a :class:`BuildResult` with ``deb_paths`` populated for any
+    ``linux-*.deb`` files produced as siblings of the source dir (where
+    Debian/Ubuntu's ``bindeb-pkg`` puts them).
+    """
+    source_dir = Path(source_dir).resolve()
+    if not (source_dir / ".config").exists():
+        raise FileNotFoundError(
+            f"{source_dir} has no .config — run prepare() first."
+        )
+
+    if jobs is None:
+        jobs = os.cpu_count() or 4
+
+    log_dir = log_dir or _new_log_dir(snapshot_dir)
+    env = _build_env(use_ccache=use_ccache, env_overrides=env_overrides)
+
+    step = _run_step(
+        f"make-{target}",
+        ["make", f"-j{jobs}", target],
+        cwd=source_dir,
+        env=env,
+        log_dir=log_dir,
+        timeout=timeout,
+    )
+
+    # Output package layout differs per target. bindeb-pkg lands .debs in
+    # the parent of source_dir; rpm-pkg lands .rpms in
+    # ~/rpmbuild/RPMS/<arch>/; targz-pkg writes a tarball into the parent.
+    deb_dir = source_dir.parent
+    deb_paths: list[Path] = []
+    deb_paths.extend(sorted(deb_dir.glob("linux-*.deb")))
+    deb_paths.extend(sorted(deb_dir.glob("kernel-*.tar.gz")))
+    deb_paths.extend(sorted(deb_dir.glob("linux-*.tar.gz")))
+    deb_paths.extend(sorted(deb_dir.glob("linux-*.tar.zst")))
+
+    rpm_root = Path.home() / "rpmbuild" / "RPMS"
+    if rpm_root.is_dir():
+        deb_paths.extend(sorted(rpm_root.glob("*/kernel-*.rpm")))
+
+    return BuildResult(
+        source_dir=source_dir,
+        log_dir=log_dir,
+        deb_paths=deb_paths,
+        steps=[step],
+    )

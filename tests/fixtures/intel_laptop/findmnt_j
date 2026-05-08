@@ -1,0 +1,1 @@
+{"filesystems":[{"target":"/","source":"/dev/mapper/cryptroot","fstype":"btrfs","options":"rw,relatime"}]}

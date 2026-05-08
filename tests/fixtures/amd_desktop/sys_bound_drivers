@@ -1,0 +1,4 @@
+/sys/devices/pci0000:00/0000:0a:00.0	nvidia
+/sys/devices/pci0000:00/0000:0a:00.1	snd_hda_intel
+/sys/devices/pci0000:00/0000:0c:00.0	r8169
+/sys/devices/pci0000:00/0000:0d:00.0	nvme

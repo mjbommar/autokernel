@@ -1,0 +1,5 @@
+schema_version=1
+collected_at=2026-05-08T12:00:00Z
+host=intel-laptop-fixture
+user=tester
+uid=1000

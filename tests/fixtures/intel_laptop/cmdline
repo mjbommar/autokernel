@@ -1,0 +1,1 @@
+BOOT_IMAGE=/vmlinuz-6.13.0-12-generic root=UUID=11111111-2222-3333-4444-555555555555 ro rootfstype=btrfs cryptdevice=UUID=aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee:cryptroot resume=UUID=99999999-0000-1111-2222-333333333333 quiet splash module_blacklist=nouveau

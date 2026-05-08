@@ -1,0 +1,270 @@
+# autokernel
+
+LLM-assisted minimal Linux kernel builder. Probe a host, propose a trim,
+review with bulk rules, merge into a final `.config`, and build a
+distro-native kernel package — all from one CLI. Multi-distro:
+Debian/Ubuntu, Fedora/RHEL, Arch, openSUSE, Gentoo, Alpine.
+
+Inspired by Gentoo's `localmodconfig`, FreeBSD's `include GENERIC` + diff
+style, and Debian's `make bindeb-pkg`.
+
+> **Status: 0.6.** Verbs implemented: `preflight`, `scan`, `propose`,
+> `review`, `apply`, `fetch-source`, `build`. `install --probation` and
+> `rollback` are designed but not yet built — see [Roadmap](#roadmap).
+
+## Install
+
+```bash
+# One command — installs uv if needed, clones, syncs, drops a shim on PATH.
+curl -LsSf https://raw.githubusercontent.com/mjbommar/autokernel/master/install.sh | bash
+
+# After it finishes:
+~/.local/bin/autokernel preflight
+```
+
+The installer is non-destructive: never `sudo`s, never touches `/etc` or
+`/boot`, everything lands under `$HOME`.
+
+For development, clone and `uv sync`:
+
+```bash
+git clone https://github.com/mjbommar/autokernel
+cd autokernel
+uv sync
+cp .env.example .env  # add ANTHROPIC_API_KEY or OPENAI_API_KEY
+uv run autokernel preflight
+```
+
+## Quick start
+
+```bash
+# 0. Confirm the host has what it needs (~0.5s; distro-aware fix hints):
+$ autokernel preflight --for build
+host: Ubuntu 26.04 LTS (family=debian)
+  ✓ python_version, cpu_cores, free_ram, secure_boot
+  ✗ build_tools     missing: flex, bison      → sudo apt install -y bison flex
+  ✗ kernel_dev_libs missing: libssl-dev, libelf-dev, libncurses-dev
+
+# 1. Snapshot the host (writes a typed Snapshot to /tmp/myhost):
+$ autokernel scan /tmp/myhost
+✓ snapshot saved
+  pci: 35   usb: 7   modaliases: 331   loaded modules: 259   firmware loads: 195
+
+# 2. LLM-judged trim proposal (deterministic rules + pydantic-ai agent):
+$ autokernel propose /tmp/myhost --autonomy advise
+auto-applied (8): …      # high-confidence deterministic trims
+needs review (17): …     # LLM proposals — tagged risk + confidence
+9818 candidate symbol(s) deferred (re-run with --max-candidates higher to widen)
+wrote /tmp/myhost/proposal.json
+
+# 3. Bulk-review the proposal — keep crypto/security at current values, accept rest:
+$ autokernel review /tmp/myhost \
+    --reject-subsystem crypto --reject-subsystem security \
+    --accept-recommended
+accepted: 12   rejected: 3   deferred: 2
+wrote /tmp/myhost/auto.kfrag
+
+# 4. Merge the kfrag into your running .config; refuses to write if a
+#    load-bearing symbol would be disabled:
+$ autokernel apply /tmp/myhost
+  override: 12 symbols (kfrag wins)
+wrote /tmp/myhost/final.config
+
+# 5. Acquire kernel source (auto-picks per distro: apt-get source / kernel.org / SRPM / …):
+$ autokernel fetch-source --kernel-version 6.13.5
+✓ source ready at ~/.cache/autokernel/kernels/linux-6.13.5
+
+# 6a. Prepare the source tree (drop config + run olddefconfig; ~1s):
+$ autokernel build /tmp/myhost --kernel-source ~/.cache/autokernel/kernels/linux-6.13.5
+✓ prepared
+
+# 6b. Compile (slow — 15-60 min; auto-target = bindeb-pkg / rpm-pkg / targz-pkg):
+$ autokernel build /tmp/myhost --kernel-source … --execute
+✓ built — linux-image-6.13.5_amd64.deb
+```
+
+Cost-sensitive runs: `autokernel propose --skip-llm` produces a deterministic-only
+proposal. LLM batches are content-addressed and cached at `<snapshot>/batches/`,
+so reruns are free.
+
+## Verbs
+
+| Verb | What it does | Output |
+|---|---|---|
+| `preflight [DIR] --for=...` | Distro detection + system checks (tools, libs, disk, RAM, snapshot health) | exit code; rendered table |
+| `scan [DIR]` | Run bash collectors → typed Snapshot | `DIR/snapshot.json` |
+| `propose DIR` | Resolver + deterministic trim + LLM agent → typed proposals | `DIR/proposal.json` |
+| `review DIR --rules…` | Bulk-decision rules over `needs_review` | `DIR/review.json` + `DIR/auto.kfrag` |
+| `apply DIR` | Merge kfrag into running `.config`, validate load-bearing | `DIR/final.config` |
+| `fetch-source [--method=…]` | Distro-aware kernel source acquisition | a kernel source tree |
+| `build DIR --kernel-source PATH [--execute]` | Drop config + olddefconfig; with `--execute`, compile | logs + (`--execute`) `.deb`/`.rpm`/`.tar.zst` |
+
+## Pipeline
+
+```
+bash collectors  ──>  pydantic Snapshot  ──>  deterministic resolver
+   │                                                    │
+   │  /proc/cmdline, /sys, lspci, lsusb, lsinitramfs    │  modules.builtin.modinfo +
+   │  modinfo per-module firmware                       │    modinfo --filename →
+   │  journalctl -k (dmesg fallback)                    │    path-aware CONFIG mapping
+   │  DKMS, mokutil, /sys/firmware/efi                  ▼
+   │                              required modules + required configs
+   │                                                    │
+   │                        running .config ─ required ─> candidate trims
+   │                                                          │
+   │                  ┌── deterministic rules (CPU vendor, GPU) ──┤
+   │                  │                                            │
+   │                  └── pydantic-ai agent (per-batch cached) ────┘
+   │                                                  │
+   │                                          policy filter
+   │                                          (autonomy + load-bearing
+   │                                          blocklist + arch + DKMS gate)
+   ▼                                                  ▼
+   not_considered                              proposal.json
+   (deferred, surfaced — never silently dropped)
+                                              │
+                       review rules ──────────┘
+                                              │
+                                    auto.kfrag ── apply ──> final.config
+                                                              │
+                                                            build
+                                                              │
+                                                          .deb / .rpm / .tar.zst
+```
+
+## Architecture
+
+```
+scripts/collect.sh             ── bash; dumb data dumper, no JSON deps
+src/autokernel/
+    models.py                  ── pydantic types (Snapshot, RemovalProposal, ReviewSet, …)
+    snapshot.py                ── parse collector output → Snapshot
+    modinfo.py                 ── modules.builtin.modinfo + modinfo --filename
+    kconfig_map.py             ── path-aware module → CONFIG_* candidate generator
+    resolve.py                 ── modalias→module→CONFIG_* (deterministic)
+    policy.py                  ── autonomy levels + load-bearing blocklist
+    agent.py                   ── pydantic-ai ConfigMinimizer + per-batch cache
+    subsystem.py               ── classify CONFIG_* into ~50 subsystem buckets
+    review.py                  ── composable bulk-decision rules → ReviewSet
+    kfrag.py                   ── emit/parse Kconfig fragments (.kfrag)
+    merge.py                   ── pure-Python kfrag → .config merge + load-bearing check
+    build.py                   ── prepare (config + olddefconfig) + build (make <target>)
+    distro.py                  ── parse /etc/os-release; per-family DistroSpec
+    preflight.py               ── system checks: tools, libs, disk, RAM, snapshot health
+    fetch.py                   ── kernel-source acquisition (per-family + kernel.org tarball)
+    cli.py                     ── typer CLI: preflight, scan, propose, review, apply, fetch-source, build
+install.sh                     ── one-line bootstrap (curl | bash)
+.claude/skills/autokernel/     ── thin Claude skill driving the CLI
+tests/                         ── 317 tests, fixture-driven, no host coupling
+    fixtures/os_release/       ── synthetic distro samples (Ubuntu, Debian, Fedora, RHEL, Arch, …)
+    fixtures/intel_laptop/     ── synthetic full-host snapshot
+    fixtures/amd_desktop/      ── synthetic NVIDIA + DKMS host
+```
+
+### Why this split
+
+| Layer | Form | Reason |
+|---|---|---|
+| Hardware/sys probe | bash | Native — `lspci`, `lsusb`, `find /sys`. Stable text files; no `jq` dep. |
+| Snapshot model | pydantic | Typed boundary between bash and the rest of the world. |
+| Module → CONFIG mapping | python (no kernel sources) | Path-aware prefix table + running-config check. Avoids `linux-source-*` dep. |
+| Modalias resolution | python | Bus-prefix bucketing → ~10× speedup vs naive fnmatch. |
+| Policy / blocklist | python | Determinism > prompts. The hard "don't brick the box" rules are code. |
+| Config minimization advice | pydantic-ai agent | Judgment, not arithmetic. Structured output forces calibration. Per-batch cache makes interrupted runs cheap to resume. |
+| Distro adaptation | python (`distro.py` + `DistroSpec`) | Per-family knowledge in one table; verbs dispatch on family. |
+| Orchestration | typer + Claude skill | Skill stays thin; Python carries the logic. |
+
+## Autonomy levels
+
+| Level | Behavior |
+|---|---|
+| `explain` | LLM annotates only. No actionable changes. Proposals appear in `annotations`. |
+| `advise` *(default)* | LLM proposes; user/Claude approves each. Deterministic proposals at confidence ≥ 0.95 are auto-applied. |
+| `auto-safe` | Auto-applies proposals where `risk=low ∧ confidence≥0.9`. |
+| `auto-bold` | Auto-applies everything except `risk=high` and a per-snapshot **load-bearing blocklist** (root fs, active NIC, EFI, microcode, LUKS, architecture fundamentals). |
+
+The load-bearing blocklist is enforced regardless of level. **DKMS gate**:
+when DKMS modules are present, `auto-safe`/`auto-bold` refuse to run
+unless `--force-dkms`.
+
+## review decision rules
+
+Rules are applied in order; the first match decides each proposal.
+Anything unmatched stays in `deferred`.
+
+| Flag | Effect |
+|---|---|
+| `--accept-recommended` | Accept everything not `risk=high`. |
+| `--accept-low-risk` | Accept only `risk=low`. |
+| `--accept-deterministic` | Accept only `source=deterministic` proposals. |
+| `--reject-subsystem X` (repeatable) | Veto a whole subsystem (`crypto`, `security`, `kasan`, `debug`, …). |
+| `--reject-pattern GLOB` (repeatable) | Veto by glob (`'CONFIG_DEBUG_*'`). |
+
+`autokernel apply` enforces an additional **load-bearing safety check**:
+if the merge would disable a working symbol that's load-bearing, it
+refuses to write `final.config` and reports which symbol would brick.
+
+## Multi-distro support
+
+| Family | Detected `ID` / `ID_LIKE` | Default build target | Default fetch method |
+|---|---|---|---|
+| **Debian** | `debian`, `ubuntu`, `linuxmint`, `pop`, `kali`, `mx`, … | `bindeb-pkg` | `apt-get source linux` (no root) |
+| **Fedora** | `fedora`, `rhel`, `centos`, `rocky`, `almalinux`, `ol`, `amzn` | `rpm-pkg` | kernel.org tarball |
+| **Arch** | `arch`, `manjaro`, `endeavouros`, `garuda`, `artix` | `tarzst-pkg` | kernel.org tarball |
+| **openSUSE** | `opensuse-*`, `sles`, `sled` | `rpm-pkg` | `zypper install kernel-source` |
+| **Gentoo** | `gentoo` | `targz-pkg` | `emerge sys-kernel/gentoo-sources` |
+| **Alpine** | `alpine` | `targz-pkg` | kernel.org tarball |
+| **Other / unknown** | — | `targz-pkg` | kernel.org tarball |
+
+The package-name knowledge per family lives in `src/autokernel/distro.py`'s
+`DistroSpec`. PRs welcome to refine the per-family build-deps list or
+add families.
+
+## Pre-flight
+
+`autokernel preflight --for=VERB` runs the relevant subset of checks:
+
+- **Always** — distro recognized, Python ≥ 3.12.
+- **`scan`** — `dmesg` readability (degrades to `journalctl -k`).
+- **`propose`** — running `.config` and `modules.builtin.modinfo` reachable.
+- **`build`** — disk, RAM, build tools (`gcc make flex bison bc ld perl awk tar`), recommended (`ccache pahole`), dev libs (`libssl-dev libelf-dev libncurses-dev` or distro equivalents), Secure Boot.
+- **`install`** *(future)* — GRUB tools, root/sudo, `/boot` writable.
+
+Each check returns PASS/WARN/FAIL/SKIP. The CLI exits non-zero on any
+FAIL; `--strict` also fails on WARN. Every FAIL/WARN includes a
+distro-specific fix hint phrased in the local family's package manager.
+
+## proposal.json / review.json shape
+
+```json
+{
+  "base_config_path": "/path/to/running_config",
+  "autonomy": "advise",
+  "auto_applied":   [RemovalProposal, ...],
+  "needs_review":   [RemovalProposal, ...],
+  "annotations":    [RemovalProposal, ...],
+  "blocked":        [[RemovalProposal, "load-bearing reason"], ...],
+  "not_considered": ["CONFIG_FOO", ...]
+}
+```
+
+Buckets are mutually exclusive; together they account for every candidate
+symbol. `RemovalProposal` carries `config`, `current_value` /
+`proposed_value`, `reason`, `risk` (low/medium/high), `confidence`
+(0..1), `source` (deterministic/llm/user), and `evidence`.
+
+## Roadmap
+
+- [x] `scan`, `propose`, `review`, `apply`, `build`, `preflight`, `fetch-source` *(0.1–0.6)*
+- [ ] `autokernel install --probation` — `dpkg -i` (or distro equivalent) + `grub-reboot` one-shot + systemd-on-success default-flip; auto-rollback on failed boot.
+- [ ] `autokernel rollback` — restore previous default kernel.
+- [ ] Interactive review TUI — step through `deferred` items with full evidence.
+- [ ] PEP 723 single-file scripts for kernel-dev workflows: bisect, patch series, Kconfig fragment composer.
+
+## Known limits
+
+- Module → CONFIG_ symbol mapping resolves ~60% of modules on a stock Ubuntu kernel via the path-aware prefix table; the rest fall back to "load-bearing by default" (conservative).
+- Hot-pluggable hardware never connected won't appear in `/sys/devices/**/modalias`. Mitigation lives in the agent prompt.
+- `lsinitramfs` requires read access to `/boot/initrd.img-*`, typically root-only on Ubuntu. The collector degrades gracefully.
+- The path-prefix table is a maintained heuristic, not a Kbuild parser. PRs welcome for missing subsystems.
+- Subsystem classifier has ~50 buckets; symbols not matched are bucketed as `misc`. Misclassification is a UX paper-cut only — every proposal still receives the same policy treatment.

@@ -1,0 +1,65 @@
+Slot:	00:00.0
+Class:	0600
+Vendor:	8086
+Device:	7d12
+SVendor:	17aa
+SDevice:	232d
+Rev:	04
+
+Slot:	00:02.0
+Class:	0300
+Vendor:	8086
+Device:	7d55
+SVendor:	17aa
+SDevice:	232d
+Rev:	04
+Driver:	i915
+Module:	i915
+
+Slot:	00:08.0
+Class:	1180
+Vendor:	8086
+Device:	7d0d
+SVendor:	17aa
+SDevice:	232d
+Rev:	04
+
+Slot:	00:14.0
+Class:	0c03
+Vendor:	8086
+Device:	7e7d
+SVendor:	17aa
+SDevice:	232d
+Rev:	20
+Driver:	xhci_hcd
+Module:	xhci_pci
+
+Slot:	00:14.3
+Class:	0280
+Vendor:	8086
+Device:	7e40
+SVendor:	8086
+SDevice:	0094
+Rev:	20
+Driver:	iwlwifi
+Module:	iwlwifi
+
+Slot:	00:1f.3
+Class:	0401
+Vendor:	8086
+Device:	7e50
+SVendor:	17aa
+SDevice:	232d
+Rev:	20
+Driver:	sof-audio-pci-intel-mtl
+Module:	snd_sof_pci_intel_mtl
+
+Slot:	01:00.0
+Class:	0108
+Vendor:	144d
+Device:	a80c
+SVendor:	144d
+SDevice:	a801
+Rev:	00
+Driver:	nvme
+Module:	nvme

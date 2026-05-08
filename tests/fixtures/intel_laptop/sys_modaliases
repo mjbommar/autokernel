@@ -1,0 +1,6 @@
+/sys/devices/pci0000:00/0000:00:02.0/modalias	pci:v00008086d00007D55sv000017AAsd0000232Dbc03sc00i00
+/sys/devices/pci0000:00/0000:00:14.3/modalias	pci:v00008086d00007E40sv00008086sd00000094bc02sc80i00
+/sys/devices/pci0000:00/0000:01:00.0/modalias	pci:v0000144Dd0000A80Csv0000144Dsd0000A801bc01sc08i02
+/sys/devices/pci0000:00/0000:00:14.0/modalias	pci:v00008086d00007E7Dsv000017AAsd0000232Dbc0Csc03i30
+/sys/devices/pci0000:00/0000:00:1f.3/modalias	pci:v00008086d00007E50sv000017AAsd0000232Dbc04sc01i00
+/sys/devices/platform/i8042/serio0/modalias	serio:ty01pr00id00ex00

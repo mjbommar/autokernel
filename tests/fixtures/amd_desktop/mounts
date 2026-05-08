@@ -1,0 +1,8 @@
+proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0
+sys /sys sysfs rw,nosuid,nodev,noexec,relatime 0 0
+udev /dev devtmpfs rw,nosuid,relatime,size=16434500k,nr_inodes=4108625,mode=755,inode64 0 0
+tmpfs /run tmpfs rw,nosuid,nodev,noexec,relatime,size=3294444k,mode=755,inode64 0 0
+/dev/nvme0n1p2 / ext4 rw,relatime,errors=remount-ro 0 0
+cgroup2 /sys/fs/cgroup cgroup2 rw,nosuid,nodev,noexec,relatime,nsdelegate,memory_recursiveprot 0 0
+/dev/nvme0n1p1 /boot/efi vfat rw,relatime,fmask=0077,dmask=0077,codepage=437,iocharset=ascii,shortname=mixed,utf8,errors=remount-ro 0 0
+tmpfs /dev/shm tmpfs rw,nosuid,nodev,inode64 0 0

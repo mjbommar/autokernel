@@ -1,0 +1,20 @@
+Module                  Size  Used by
+nvidia              66453504  64
+nvidia_uvm           1622016  4
+nvidia_drm             86016  16
+nvidia_modeset       1421312  29 nvidia_drm,nvidia
+r8169                 110592  0
+nvme                   65536  3
+nvme_core             253952  4 nvme
+xhci_pci               24576  0
+xhci_hcd              335872  1 xhci_pci
+ext4                  995328  1
+crc32_pclmul           16384  0
+ghash_clmulni_intel    16384  0
+aesni_intel           376832  4
+crypto_simd            16384  1 aesni_intel
+snd_hda_intel          61440  4
+snd_hda_codec_hdmi     94208  1
+amd64_edac             40960  0
+edac_mce_amd           36864  0
+k10temp                16384  0
