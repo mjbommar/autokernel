@@ -52,7 +52,17 @@ from autokernel.models import (
     ProposalSource,
     Snapshot,
 )
+from autokernel.optimize_context import (
+    Aggression,
+    ModuleStrategy,
+    OptimizationContext,
+    ThreatModel,
+)
 from autokernel.workload import WorkloadProfile
+
+
+def _ctx(workload: WorkloadProfile = WorkloadProfile.DESKTOP, **kwargs) -> OptimizationContext:
+    return OptimizationContext(workload=workload, **kwargs)
 
 
 def _bare_snap() -> Snapshot:
@@ -129,7 +139,6 @@ def _surface_with_choices_and_toggles() -> KconfigSurface:
 def test_propose_choices_emits_proposal_when_selection_changes(monkeypatch):
     surface = _surface_with_choices_and_toggles()
     snap = _bare_snap()
-    workload = WorkloadProfile.DESKTOP
 
     # Mock the agent: return PREEMPT (change!) for preempt, HZ_1000 for hz.
     def _fake_agent(model, service_tier):
@@ -144,7 +153,7 @@ def test_propose_choices_emits_proposal_when_selection_changes(monkeypatch):
         return _Agent()
 
     monkeypatch.setattr("autokernel.agent_dims._build_choice_agent", _fake_agent)
-    out = propose_choices(snap, surface, workload)
+    out = propose_choices(snap, surface, _ctx())
     assert len(out) == 2
     syms = {p.config for p in out}
     assert syms == {"CONFIG_PREEMPT", "CONFIG_HZ_1000"}
@@ -171,7 +180,7 @@ def test_propose_choices_skips_unchanged_selections(monkeypatch):
         return _Agent()
 
     monkeypatch.setattr("autokernel.agent_dims._build_choice_agent", _fake_agent)
-    out = propose_choices(snap, surface, WorkloadProfile.DESKTOP)
+    out = propose_choices(snap, surface, _ctx())
     assert out == []
 
 
@@ -190,14 +199,14 @@ def test_propose_choices_skips_hallucinated_options(monkeypatch):
         return _Agent()
 
     monkeypatch.setattr("autokernel.agent_dims._build_choice_agent", _fake_agent)
-    out = propose_choices(snap, surface, WorkloadProfile.DESKTOP)
+    out = propose_choices(snap, surface, _ctx())
     assert out == []
 
 
 def test_propose_choices_returns_empty_when_no_choices():
     surface = KconfigSurface(arch="x86_64", source_dir=Path("/tmp"), choices=[])
     snap = _bare_snap()
-    out = propose_choices(snap, surface, WorkloadProfile.DESKTOP)
+    out = propose_choices(snap, surface, _ctx())
     assert out == []
 
 
@@ -222,7 +231,7 @@ def test_propose_toggles_emits_only_when_value_flips(monkeypatch):
         return _Agent()
 
     monkeypatch.setattr("autokernel.agent_dims._build_toggle_agent", _fake_agent)
-    out = propose_toggles(snap, surface, WorkloadProfile.DESKTOP)
+    out = propose_toggles(snap, surface, _ctx())
     assert len(out) == 1
     assert out[0].config == "CONFIG_BPF_JIT_ALWAYS_ON"
     assert out[0].proposed_value == "y"
@@ -238,7 +247,7 @@ def test_propose_toggles_eligibility_filter_uses_allowlist():
             BoolToggle("OBSCURE_INTERNAL_FLAG", "X", None, "y", "y", ""),  # not
         ],
     )
-    eligible = _eligible_toggles(surface, WorkloadProfile.DESKTOP)
+    eligible = _eligible_toggles(surface, _ctx())
     assert any(t.name == "BPF_JIT_ALWAYS_ON" for t in eligible)
     assert all(t.name != "OBSCURE_INTERNAL_FLAG" for t in eligible)
 
@@ -254,7 +263,7 @@ def test_propose_toggles_eligibility_includes_workload_recipe_symbols():
             BoolToggle("ACPI_DOCK", "Dock", None, "n", "x", ""),
         ],
     )
-    eligible = _eligible_toggles(surface, WorkloadProfile.LAPTOP)
+    eligible = _eligible_toggles(surface, _ctx(WorkloadProfile.LAPTOP))
     assert any(t.name == "ACPI_DOCK" for t in eligible)
 
 
@@ -277,7 +286,7 @@ def test_propose_tunables_emits_when_value_changes(monkeypatch):
         return _Agent()
 
     monkeypatch.setattr("autokernel.agent_dims._build_tunable_agent", _fake_agent)
-    out = propose_tunables(snap, surface, WorkloadProfile.DESKTOP)
+    out = propose_tunables(snap, surface, _ctx())
     assert len(out) == 1
     assert out[0].config == "CONFIG_NR_CPUS"
     assert out[0].proposed_value == "32"
@@ -299,7 +308,7 @@ def test_propose_tunables_skips_unchanged(monkeypatch):
         return _Agent()
 
     monkeypatch.setattr("autokernel.agent_dims._build_tunable_agent", _fake_agent)
-    out = propose_tunables(snap, surface, WorkloadProfile.DESKTOP)
+    out = propose_tunables(snap, surface, _ctx())
     assert out == []
 
 
@@ -339,11 +348,73 @@ def test_propose_choices_uses_cache_dir(tmp_path, monkeypatch):
         return _Agent()
 
     monkeypatch.setattr("autokernel.agent_dims._build_choice_agent", _fake_agent)
-    propose_choices(snap, surface, WorkloadProfile.DESKTOP, cache_dir=cache_dir)
+    propose_choices(snap, surface, _ctx(), cache_dir=cache_dir)
     assert call_count["n"] == 1
     # Re-run — cached, no second call.
-    propose_choices(snap, surface, WorkloadProfile.DESKTOP, cache_dir=cache_dir)
+    propose_choices(snap, surface, _ctx(), cache_dir=cache_dir)
     assert call_count["n"] == 1
     # Cache should have at least one file.
     cached_files = list(cache_dir.glob("choice-*.json"))
     assert len(cached_files) >= 1
+
+
+# ── history flow (v0.14 closed-loop) ─────────────────────────────────────
+
+
+def test_evidence_block_includes_history_text(monkeypatch):
+    """When history_text is provided, it must appear in the prompt."""
+    from autokernel.agent_dims import _evidence_block
+    snap = _bare_snap()
+    text = _evidence_block(snap, _ctx(), history_text="# i=1: bzImage=18MB, boot PASS")
+    assert "i=1: bzImage" in text
+    assert "boot PASS" in text
+
+
+def test_cache_key_changes_with_history():
+    """Different history → different cache key, so the LLM is re-queried
+    each iteration even though the static evidence is the same."""
+    from autokernel.agent_dims import _batch_cache_key
+    base = _batch_cache_key("anthropic:claude-sonnet-4-6", None, "sym1|sym2")
+    with_h1 = _batch_cache_key(
+        "anthropic:claude-sonnet-4-6", None, "sym1|sym2",
+        history_text="i=1 baseline",
+    )
+    with_h2 = _batch_cache_key(
+        "anthropic:claude-sonnet-4-6", None, "sym1|sym2",
+        history_text="i=2 second pass",
+    )
+    assert base != with_h1
+    assert with_h1 != with_h2
+
+
+def test_cache_key_stable_when_history_omitted():
+    """Without history (the v0.13 trim path), cache keys are stable so
+    existing batches remain valid."""
+    from autokernel.agent_dims import _batch_cache_key
+    a = _batch_cache_key("m", None, "sig")
+    b = _batch_cache_key("m", None, "sig", history_text=None)
+    assert a == b
+
+
+def test_propose_choices_history_flows_into_prompt(monkeypatch):
+    """Mocked agent receives a prompt containing the history block."""
+    surface = _surface_with_choices_and_toggles()
+    snap = _bare_snap()
+    captured_prompts: list[str] = []
+
+    def _fake_agent(model, service_tier):
+        class _Agent:
+            def run_sync(self, prompt: str):
+                captured_prompts.append(prompt)
+                class _R:
+                    output = _ChoiceBatch(decisions=[])
+                return _R()
+        return _Agent()
+
+    monkeypatch.setattr("autokernel.agent_dims._build_choice_agent", _fake_agent)
+    propose_choices(
+        snap, surface, _ctx(),
+        history_text="# i=1: 12 proposals, 8 landed; bzImage=18.2MB; PASS",
+    )
+    assert len(captured_prompts) > 0
+    assert "i=1: 12 proposals" in captured_prompts[0]

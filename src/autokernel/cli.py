@@ -29,6 +29,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 from pathlib import Path
 from typing import Annotated
@@ -135,10 +136,16 @@ def _run_dimension_passes(
     snapshot_dir: Path,
     requested: set[str],
     workload_override: str | None,
+    threat: str | None = None,
+    modules_strategy: str | None = None,
+    aggression: str | None = None,
+    preset: str | None = None,
     kernel_source: Path | None,
     llm_spec: str,
     service_tier: str | None,
     skip_llm: bool,
+    history_text: str | None = None,
+    base_config_path: Path | None = None,
 ) -> list:
     """Run propose_choices / propose_toggles / propose_tunables as
     requested. Returns the merged list of RemovalProposals; each
@@ -176,16 +183,41 @@ def _run_dimension_passes(
                 f"unknown --workload {workload_override!r}. "
                 f"Valid: {sorted(p.value for p in WorkloadProfile if p.is_user_facing)}"
             )
-        console.print(f"[cyan]workload:[/cyan] [bold]{workload.value}[/bold] (user-supplied)")
         detection = detect_workload(snap, explicit=workload)
     else:
         detection = detect_workload(snap)
         console.print(
-            f"[cyan]workload:[/cyan] [bold]{detection.profile.value}[/bold] "
-            f"(detected, conf={detection.confidence:.2f})"
+            f"[cyan]detected workload:[/cyan] [bold]{detection.profile.value}[/bold] "
+            f"(conf={detection.confidence:.2f})"
         )
         for r in detection.reasons[:3]:
             console.print(f"  [dim]{r}[/dim]")
+
+    # Compose the four-axis context.
+    from autokernel.optimize_context import context_from_flags
+    try:
+        ctx = context_from_flags(
+            preset=preset,
+            workload=workload_override,
+            threat=threat,
+            modules=modules_strategy,
+            aggression=aggression,
+            detected_workload=detection.profile,
+        )
+    except KeyError as e:
+        from autokernel.optimize_context import PRESETS
+        raise typer.BadParameter(
+            f"unknown --preset {e.args[0]!r}. Valid: {sorted(PRESETS)}"
+        )
+    except ValueError as e:
+        raise typer.BadParameter(str(e))
+    console.print(
+        f"[cyan]context:[/cyan] workload=[bold]{ctx.workload.value}[/bold] "
+        f"threat=[bold]{ctx.threat.value}[/bold] "
+        f"modules=[bold]{ctx.modules.value}[/bold] "
+        f"aggression=[bold]{ctx.aggression.value}[/bold]"
+        + (f"  [dim](preset={preset})[/dim]" if preset else "")
+    )
 
     # Resolve LLM model (same as the trim path).
     try:
@@ -199,12 +231,15 @@ def _run_dimension_passes(
         )
 
     # Walk the kernel's Kconfig surface — slow on first call but cached
-    # by Python's import.
+    # by Python's import. When --base-config was passed, we walk against
+    # THAT instead of the original snapshot's running config so each
+    # iteration's propose builds on top of the previous round.
     console.print(f"[dim]walking Kconfig under {kernel_source}…[/dim]")
+    config_for_surface = base_config_path or snap.running_config_path
     surface = walk_kconfig(
         kernel_source,
         arch=snap.kernel.arch,
-        config_path=snap.running_config_path,
+        config_path=config_for_surface,
     )
     console.print(
         f"  choices: {len(surface.choices)}  "
@@ -224,7 +259,7 @@ def _run_dimension_passes(
                 tag = "[dim](cached)[/dim]" if cached else ""
                 console.log(f"  choice batch {i}/{n} ({sz}) {tag}")
             ch = propose_choices(
-                snap, surface, detection.profile,
+                snap, surface, ctx, history_text=history_text,
                 cache_dir=cache_root / "dim-choices",
                 progress=_p, **kwargs,
             )
@@ -237,7 +272,7 @@ def _run_dimension_passes(
                 tag = "[dim](cached)[/dim]" if cached else ""
                 console.log(f"  toggle batch {i}/{n} ({sz}) {tag}")
             tg = propose_toggles(
-                snap, surface, detection.profile,
+                snap, surface, ctx, history_text=history_text,
                 cache_dir=cache_root / "dim-toggles",
                 progress=_p, **kwargs,
             )
@@ -250,7 +285,7 @@ def _run_dimension_passes(
                 tag = "[dim](cached)[/dim]" if cached else ""
                 console.log(f"  tunable batch {i}/{n} ({sz}) {tag}")
             tn = propose_tunables(
-                snap, surface, detection.profile,
+                snap, surface, ctx, history_text=history_text,
                 cache_dir=cache_root / "dim-tunables",
                 progress=_p, **kwargs,
             )
@@ -327,7 +362,13 @@ def propose(
     # ── v0.13: multi-dimensional optimization ─────────────────────────────
     dimension: Annotated[str, typer.Option("--dimension", help="Which optimization dimensions to run. 'modules' = the existing trim path. 'choices' = pick PREEMPT/HZ/IOSCHED/etc. 'toggles' = bool perf/security knobs. 'tunables' = NR_CPUS, LOG_BUF_SHIFT etc. 'all' = run every dimension. Comma-separate to pick a subset (e.g. 'modules,toggles').")] = "modules",
     workload: Annotated[str | None, typer.Option("--workload", help="Override the auto-detected workload profile. One of: desktop, laptop, server, vm-guest, realtime, embedded.")] = None,
+    threat: Annotated[str | None, typer.Option("--threat", help="Security threat model. One of: permissive, balanced, paranoid. Default: balanced.")] = None,
+    modules_strategy: Annotated[str | None, typer.Option("--modules", help="Module composition strategy. One of: distro, monolithic, modular. Default: distro.")] = None,
+    aggression: Annotated[str | None, typer.Option("--aggression", help="Confidence threshold for proposals. One of: conservative (≥0.85), balanced (≥0.65, default), aggressive (≥0.40).")] = None,
+    preset: Annotated[str | None, typer.Option("--preset", help="Named four-axis combination shortcut (e.g. 'gaming-desktop', 'paranoid-laptop', 'hardened-server', 'cloud-vm', 'lean-static', 'hyperoptimize'). Per-axis flags override.")] = None,
     kernel_source: Annotated[Path | None, typer.Option("--kernel-source", help="Path to a kernel source tree. Required for --dimension={choices,toggles,tunables,all} so we can walk Kconfig and see what's available on the target kernel.")] = None,
+    history_from: Annotated[Path | None, typer.Option("--history-from", help="(closed-loop) Path to a prompt-ready iteration-history block. Prepended to dim-agent prompts so they reason about prior rounds.")] = None,
+    base_config: Annotated[Path | None, typer.Option("--base-config", help="(closed-loop) Override the .config we compare against. Default: snapshot's running_config. Pass iterations/i<N-1>/final.config to chain rounds.")] = None,
 ) -> None:
     """Generate a proposed kernel config trim from a snapshot.
 
@@ -373,7 +414,11 @@ def propose(
     console.print(f"  candidate trims: {len(candidate_syms)}")
 
     from autokernel.resolve import _running_config_symbols
-    running = _running_config_symbols(snap.running_config_path)
+    # Closed-loop: when --base-config is given, we compare against THAT
+    # so iteration N proposes on top of iteration N-1's accepted changes
+    # rather than the original snapshot's running config.
+    running_cfg_path = base_config or snap.running_config_path
+    running = _running_config_symbols(running_cfg_path)
     candidates = [(s, running.get(s, "y")) for s in candidate_syms]
 
     # ── deterministic proposals ─────────────────────────────────────────
@@ -456,16 +501,41 @@ def propose(
     # ── v0.13 multi-dimensional passes ─────────────────────────────────
     extra_proposals: list = []
     extra_dims = requested_dims - {"modules"}
+    # Read closed-loop history from disk once if provided.
+    history_text: str | None = None
+    if history_from is not None:
+        if not history_from.exists():
+            raise typer.BadParameter(
+                f"--history-from path does not exist: {history_from}"
+            )
+        history_text = history_from.read_text()
+        console.print(
+            f"[dim]closed-loop: history-from={history_from} "
+            f"({len(history_text)} chars)[/dim]"
+        )
+    if base_config is not None:
+        if not base_config.exists():
+            raise typer.BadParameter(
+                f"--base-config path does not exist: {base_config}"
+            )
+        console.print(f"[dim]closed-loop: base-config={base_config}[/dim]")
+
     if extra_dims:
         extra_proposals = _run_dimension_passes(
             snap=snap,
             snapshot_dir=snapshot_dir,
             requested=extra_dims,
             workload_override=workload,
+            threat=threat,
+            modules_strategy=modules_strategy,
+            aggression=aggression,
+            preset=preset,
             kernel_source=kernel_source,
             llm_spec=model if model else llm_mode,
             service_tier=service_tier,
             skip_llm=skip_llm,
+            history_text=history_text,
+            base_config_path=base_config,
         )
 
     # ── policy filter ───────────────────────────────────────────────────
@@ -1704,6 +1774,389 @@ def _render_boot_test_result(result) -> None:
             title="boot-test",
             border_style="red",
         ))
+
+
+# ── iterate (closed-loop) ─────────────────────────────────────────────────
+
+
+@app.command()
+def iterate(
+    snapshot_dir: Annotated[Path, typer.Argument(help="Snapshot directory from `autokernel scan`")],
+    kernel_source: Annotated[Path, typer.Option("--kernel-source", help="Kernel source tree (must contain Makefile + Kconfig)")],
+    max_iterations: Annotated[int, typer.Option("--max-iterations", help="Stop after N rounds even if not converged")] = 3,
+    target: Annotated[str, typer.Option("--target", help="Fitness function: size | boot-time | surface | balanced")] = "size",
+    converge: Annotated[str, typer.Option("--converge", help="Stop early when: stable-size | no-new-proposals | max-iter")] = "stable-size",
+    auto_revert: Annotated[bool, typer.Option("--auto-revert/--no-auto-revert", help="Revert + continue when an iteration regresses")] = True,
+    execute: Annotated[bool, typer.Option("--execute", help="Actually run the build for each iteration. Without --execute, runs propose+check+apply only (dry).")] = False,
+    # Pass-through to propose:
+    dimension: Annotated[str, typer.Option("--dimension", help="Which optimization dimensions to run.")] = "all",
+    workload: Annotated[str | None, typer.Option("--workload")] = None,
+    threat: Annotated[str | None, typer.Option("--threat")] = None,
+    modules_strategy: Annotated[str | None, typer.Option("--modules")] = None,
+    aggression: Annotated[str | None, typer.Option("--aggression")] = None,
+    preset: Annotated[str | None, typer.Option("--preset")] = None,
+    autonomy: Annotated[AutonomyLevel, typer.Option(help="propose autonomy level")] = AutonomyLevel.ADVISE,
+    llm_mode: Annotated[str, typer.Option("--llm-mode")] = "auto",
+    model: Annotated[str | None, typer.Option("--model")] = None,
+    service_tier: Annotated[str | None, typer.Option()] = None,
+) -> None:
+    """Run the closed-loop optimizer: propose → check → apply → build →
+    boot-test → measure, for up to ``--max-iterations`` rounds.
+
+    Each round's results feed into the next propose call as context, so
+    the LLM learns from regressions and stops re-proposing things that
+    failed.
+
+    Without ``--execute`` this runs propose+check+apply only — useful
+    to see how the proposals evolve before committing to a slow build.
+    With ``--execute`` it goes the full distance per round.
+    """
+    from autokernel.iteration import (
+        IterationRecord,
+        auto_revert_set,
+        has_converged,
+        iteration_dir,
+        load_history,
+        save_record,
+        summarize_history_for_prompt,
+    )
+    from autokernel.measurements import measure
+    from autokernel.optimize_context import context_from_flags
+    from autokernel.workload import detect as detect_workload
+
+    _validate_snapshot_dir(snapshot_dir)
+    snap = snap_mod.load(snapshot_dir)
+
+    # Compose the context once; passed to every iteration's propose.
+    detection = detect_workload(snap)
+    try:
+        ctx = context_from_flags(
+            preset=preset, workload=workload, threat=threat,
+            modules=modules_strategy, aggression=aggression,
+            detected_workload=detection.profile,
+        )
+    except (KeyError, ValueError) as e:
+        raise typer.BadParameter(str(e))
+
+    console.rule(f"iterate — target={target}, converge={converge}, max={max_iterations}")
+    console.print(
+        f"context: workload=[bold]{ctx.workload.value}[/bold] "
+        f"threat=[bold]{ctx.threat.value}[/bold] "
+        f"modules=[bold]{ctx.modules.value}[/bold] "
+        f"aggression=[bold]{ctx.aggression.value}[/bold]"
+    )
+
+    history = load_history(snapshot_dir)
+    if history:
+        console.print(f"[dim]loaded {len(history)} prior iteration(s)[/dim]")
+
+    start_iter = (history[-1].iteration + 1) if history else 1
+    end_iter = start_iter + max_iterations
+
+    for iter_n in range(start_iter, end_iter):
+        console.rule(f"iteration {iter_n}")
+        record = _run_one_iteration(
+            iter_n=iter_n,
+            snap=snap,
+            snapshot_dir=snapshot_dir,
+            kernel_source=kernel_source,
+            ctx=ctx,
+            dimension=dimension,
+            autonomy=autonomy,
+            llm_mode=llm_mode,
+            model=model,
+            service_tier=service_tier,
+            execute=execute,
+            auto_revert=auto_revert,
+            history=history,
+        )
+        save_record(snapshot_dir, record)
+        history.append(record)
+
+        # Convergence check.
+        if converge == "stable-size" and has_converged(history, window=2, size_delta_pct=1.0):
+            console.print(f"[green]converged on size at iteration {iter_n} — stopping.[/green]")
+            break
+        if converge == "no-new-proposals" and not record.proposals:
+            console.print(f"[green]no new proposals at iteration {iter_n} — converged.[/green]")
+            break
+
+    # Summary.
+    console.rule("iterate summary")
+    if history:
+        sizes = [r.measurements.bzimage_bytes for r in history if r.measurements.bzimage_bytes]
+        if len(sizes) >= 2:
+            delta = (sizes[-1] - sizes[0]) / sizes[0] * 100
+            console.print(
+                f"  iterations: {len(history)}"
+                f"  bzImage: {sizes[0]/1e6:.2f}MB → {sizes[-1]/1e6:.2f}MB "
+                f"({delta:+.1f}%)"
+            )
+        passes = sum(1 for r in history if r.measurements.boot_test_passed)
+        fails = sum(1 for r in history if r.measurements.boot_test_passed is False)
+        console.print(f"  boot-test: {passes} passed, {fails} failed")
+
+
+def _run_one_iteration(
+    *,
+    iter_n: int,
+    snap,
+    snapshot_dir: Path,
+    kernel_source: Path,
+    ctx,
+    dimension: str,
+    autonomy: AutonomyLevel,
+    llm_mode: str,
+    model: str | None,
+    service_tier: str | None,
+    execute: bool,
+    auto_revert: bool,
+    history: list,
+):
+    """One iteration of the closed loop. Returns an IterationRecord."""
+    import sys
+    import time
+    from autokernel.iteration import IterationRecord, iteration_dir, summarize_history_for_prompt
+    from autokernel.measurements import measure
+    from autokernel.config_check import check as check_config
+    from autokernel.kconfig_walk import walk as walk_kconfig
+
+    iter_dir = iteration_dir(snapshot_dir, iter_n)
+    iter_dir.mkdir(parents=True, exist_ok=True)
+
+    # Tail-able progress log on disk — one line per step transition,
+    # always flushed. Lets the user run
+    # ``tail -f <snap>/iterations/i<NNN>/progress.log`` to see where we
+    # are without depending on subprocess buffering.
+    progress_path = iter_dir / "progress.log"
+    progress_f = progress_path.open("w", buffering=1)  # line-buffered
+
+    def _step(label: str, *, done: bool = False, extra: str = "") -> None:
+        ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        marker = "✓" if done else "→"
+        msg = f"[{ts}] i={iter_n} {marker} {label}{(' ' + extra) if extra else ''}"
+        # Always flush — both to terminal and to the progress log.
+        print(msg, flush=True, file=sys.stderr)
+        progress_f.write(msg + "\n")
+
+    _step("starting iteration")
+
+    # 1. propose — invoke the propose verb's logic with our ctx.
+    _step(f"propose --dimension={dimension}")
+    history_block = summarize_history_for_prompt(history) if history else None
+    if history_block:
+        console.print("[dim]" + history_block + "[/dim]")
+
+    # Closed-loop wiring: write the history block to disk so the propose
+    # subprocess can read it via --history-from. For iteration N>1, also
+    # point --base-config at the previous round's final.config so this
+    # round proposes on top of the prior round's accepted changes.
+    history_path: Path | None = None
+    if history_block:
+        history_path = iter_dir / "history.txt"
+        history_path.write_text(history_block)
+
+    base_config_path: Path | None = None
+    if history:
+        prev = iteration_dir(snapshot_dir, history[-1].iteration)
+        candidate = prev / "final.config"
+        if candidate.exists():
+            base_config_path = candidate
+
+    # NOTE: we call the propose function directly, not through Typer.
+    # This requires reusing the workhorse logic. For brevity and to
+    # avoid duplicating the entire 250-line propose function, we just
+    # invoke `autokernel propose` as a subprocess in this iteration's
+    # output dir. That keeps each iteration's artifacts separate and
+    # keeps this orchestrator small.
+    import subprocess
+    proposal_argv = [
+        "uv", "run", "autokernel", "propose",
+        str(snapshot_dir),
+        f"--autonomy={autonomy.value}",
+        f"--dimension={dimension}",
+        f"--workload={ctx.workload.value}",
+        f"--threat={ctx.threat.value}",
+        f"--modules={ctx.modules.value}",
+        f"--aggression={ctx.aggression.value}",
+        f"--kernel-source={kernel_source}",
+        f"--out={iter_dir / 'proposal.json'}",
+        f"--llm-mode={llm_mode}",
+    ]
+    if history_path is not None:
+        proposal_argv += [f"--history-from={history_path}"]
+    if base_config_path is not None:
+        proposal_argv += [f"--base-config={base_config_path}"]
+    if model:
+        proposal_argv += [f"--model={model}"]
+    if service_tier:
+        proposal_argv += [f"--service-tier={service_tier}"]
+
+    t0 = time.time()
+    # PYTHONUNBUFFERED=1 + FORCE_COLOR=1 keep the propose subprocess's
+    # per-batch progress flushing through Rich/typer without TTY
+    # buffering. Otherwise users see nothing for ~10 minutes during the
+    # LLM batch loop.
+    propose_env = {**os.environ, "PYTHONUNBUFFERED": "1"}
+    rc = subprocess.run(proposal_argv, cwd=Path.cwd(), env=propose_env).returncode
+    _step(f"propose done", done=True, extra=f"({time.time() - t0:.1f}s, rc={rc})")
+    if rc != 0:
+        return IterationRecord(
+            iteration=iter_n,
+            ctx_summary={
+                "workload": ctx.workload.value, "threat": ctx.threat.value,
+                "modules": ctx.modules.value, "aggression": ctx.aggression.value,
+            },
+            proposals=[],
+            measurements=__import__("autokernel.measurements", fromlist=["BuildMeasurements"]).BuildMeasurements(),
+            regressed=True,
+            revert_reason=f"propose returned {rc}",
+        )
+
+    # Read what was proposed.
+    proposal_path = iter_dir / "proposal.json"
+    proposal = json.loads(proposal_path.read_text()) if proposal_path.exists() else {}
+    proposed_syms = [
+        p["config"]
+        for p in (proposal.get("auto_applied", []) + proposal.get("needs_review", []))
+    ]
+    console.print(f"[dim]i={iter_n}: {len(proposed_syms)} proposals[/dim]")
+
+    if not execute:
+        # Dry run: still run review + apply (both fast — no LLM, just
+        # data merging) so iteration N+1 has a real final.config to
+        # chain off of via --base-config. Skip the slow build.
+        import subprocess
+        _step("review (--accept-recommended)")
+        t0 = time.time()
+        subprocess.run(
+            ["uv", "run", "autokernel", "review", str(snapshot_dir),
+             "--accept-recommended"],
+            cwd=Path.cwd(),
+        )
+        _step("review done", done=True, extra=f"({time.time() - t0:.1f}s)")
+        _step("apply")
+        t0 = time.time()
+        subprocess.run(
+            ["uv", "run", "autokernel", "apply", str(snapshot_dir)],
+            cwd=Path.cwd(),
+        )
+        _step("apply done", done=True, extra=f"({time.time() - t0:.1f}s)")
+        # Chain artifact for the next round.
+        final_cfg_src = snapshot_dir / "final.config"
+        if final_cfg_src.exists():
+            (iter_dir / "final.config").write_text(final_cfg_src.read_text())
+            _step("snapshotted final.config to iter dir for chaining", done=True)
+        progress_f.close()
+
+        from autokernel.measurements import BuildMeasurements
+        return IterationRecord(
+            iteration=iter_n,
+            ctx_summary={
+                "workload": ctx.workload.value, "threat": ctx.threat.value,
+                "modules": ctx.modules.value, "aggression": ctx.aggression.value,
+            },
+            proposals=proposed_syms,
+            measurements=BuildMeasurements(proposed_count=len(proposed_syms)),
+            note="dry run (no --execute)",
+        )
+
+    # 2. review + apply via subprocess (same reuse pattern).
+    _step("review (--accept-recommended)")
+    t0 = time.time()
+    review_argv = [
+        "uv", "run", "autokernel", "review", str(snapshot_dir),
+        "--accept-recommended",
+    ]
+    subprocess.run(review_argv, cwd=Path.cwd())
+    _step("review done", done=True, extra=f"({time.time() - t0:.1f}s)")
+    _step("apply")
+    t0 = time.time()
+    apply_argv = ["uv", "run", "autokernel", "apply", str(snapshot_dir)]
+    subprocess.run(apply_argv, cwd=Path.cwd())
+    _step("apply done", done=True, extra=f"({time.time() - t0:.1f}s)")
+
+    # Snapshot iteration N's final.config into the iter dir so iter N+1
+    # can chain off of it via --base-config (closed-loop).
+    final_cfg_src = snapshot_dir / "final.config"
+    if final_cfg_src.exists():
+        (iter_dir / "final.config").write_text(final_cfg_src.read_text())
+
+    # 3. build prepare + execute.
+    _step("build --execute --localmodconfig (slow — see iter dir build.log)")
+    t0 = time.time()
+    build_log_path = iter_dir / "build.log"
+    build_argv = [
+        "uv", "run", "autokernel", "build", str(snapshot_dir),
+        f"--kernel-source={kernel_source}",
+        "--localmodconfig",
+        "--execute",
+    ]
+    with build_log_path.open("w") as f:
+        rc = subprocess.run(build_argv, cwd=Path.cwd(), stdout=f, stderr=subprocess.STDOUT).returncode
+    build_failed = rc != 0
+    _step(
+        "build done" if not build_failed else "build FAILED",
+        done=True,
+        extra=f"({time.time() - t0:.0f}s, rc={rc})",
+    )
+
+    # 4. boot-test (if build passed).
+    if not build_failed:
+        _step("boot-test")
+        t0 = time.time()
+        bt_argv = [
+            "uv", "run", "autokernel", "boot-test", str(snapshot_dir),
+            f"--kernel-source={kernel_source}",
+        ]
+        subprocess.run(bt_argv, cwd=Path.cwd())
+        _step("boot-test done", done=True, extra=f"({time.time() - t0:.1f}s)")
+
+    # 5. measure.
+    final_cfg = (snapshot_dir / "final.config").read_text() if (snapshot_dir / "final.config").exists() else None
+    actual_cfg = (kernel_source / ".config").read_text() if (kernel_source / ".config").exists() else None
+    measurements = measure(
+        snapshot_dir=snapshot_dir,
+        source_dir=kernel_source,
+        proposed_config_text=final_cfg,
+        actual_config_text=actual_cfg,
+        build_log=build_log_path.read_text() if build_log_path.exists() else None,
+    )
+
+    # 6. detect regression.
+    regressed = build_failed or (measurements.boot_test_passed is False)
+    revert_reason = None
+    if regressed and auto_revert:
+        revert_reason = (
+            "build failed" if build_failed
+            else f"boot test failed: {measurements.boot_failure_mode or 'unknown'}"
+        )
+        # Restore previous final.config from history if available.
+        if history:
+            prev_dir = iteration_dir(snapshot_dir, history[-1].iteration)
+            prev_final = prev_dir / "final.config"
+            if prev_final.exists():
+                (snapshot_dir / "final.config").write_text(prev_final.read_text())
+                console.print(f"[yellow]reverted to i={history[-1].iteration}'s final.config[/yellow]")
+
+    _step(
+        f"iteration done — bzImage={measurements.bzimage_bytes}, "
+        f"boot_passed={measurements.boot_test_passed}",
+        done=True,
+    )
+    progress_f.close()
+
+    return IterationRecord(
+        iteration=iter_n,
+        ctx_summary={
+            "workload": ctx.workload.value, "threat": ctx.threat.value,
+            "modules": ctx.modules.value, "aggression": ctx.aggression.value,
+        },
+        proposals=proposed_syms,
+        measurements=measurements,
+        regressed=regressed,
+        revert_reason=revert_reason,
+    )
 
 
 def _main() -> None:

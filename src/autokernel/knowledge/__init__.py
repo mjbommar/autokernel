@@ -21,9 +21,28 @@ time. Tests in ``tests/test_knowledge_*`` smoke-check the data shape
 to catch typos.
 """
 
+from autokernel.knowledge.module_recipes import (
+    ModuleStrategySpec,
+    STRATEGY_HINTS,
+    module_strategies,
+)
+from autokernel.knowledge.threat_recipes import (
+    ThreatProfileSpec,
+    ThreatRecipe,
+    threat_recipes,
+)
 from autokernel.knowledge.workload_recipes import (
     WorkloadRecipe,
     workload_recipes,
 )
 
-__all__ = ["WorkloadRecipe", "workload_recipes"]
+__all__ = [
+    "ModuleStrategySpec",
+    "STRATEGY_HINTS",
+    "ThreatProfileSpec",
+    "ThreatRecipe",
+    "WorkloadRecipe",
+    "module_strategies",
+    "threat_recipes",
+    "workload_recipes",
+]

@@ -42,13 +42,18 @@ from autokernel.kconfig_walk import (
     KconfigSurface,
     NumericTunable,
 )
-from autokernel.knowledge import workload_recipes
+from autokernel.knowledge import (
+    module_strategies,
+    threat_recipes,
+    workload_recipes,
+)
 from autokernel.models import (
     ProposalSource,
     RemovalProposal,
     RiskLevel,
     Snapshot,
 )
+from autokernel.optimize_context import OptimizationContext
 from autokernel.workload import WorkloadProfile
 
 
@@ -194,13 +199,36 @@ Rules:
 # ── shared helpers ────────────────────────────────────────────────────────
 
 
-def _evidence_block(snap: Snapshot, workload: WorkloadProfile) -> str:
-    """Compose the evidence + workload context shared by every dim agent."""
+def _evidence_block(
+    snap: Snapshot,
+    ctx: OptimizationContext,
+    *,
+    history_text: str | None = None,
+) -> str:
+    """Compose the evidence + four-axis context shared by every dim agent.
+
+    When ``history_text`` is given (a prompt-ready summary of prior
+    iterations from :func:`autokernel.iteration.summarize_history_for_prompt`),
+    it's prepended to the block. The agents then reason about prior
+    rounds' outcomes — what was proposed, what landed, which iteration
+    regressed — and avoid re-proposing things that broke prior boots.
+    """
     lines: list[str] = []
-    lines.append(f"# Workload: {workload.value}")
-    if workload.value in workload_recipes:
-        spec = workload_recipes[workload.value]
-        lines.append(f"# Profile: {spec.description}")
+    if history_text:
+        lines.append(history_text)
+        lines.append("")
+    lines.append(ctx.render_for_prompt())
+    lines.append("")
+    if ctx.workload.value in workload_recipes:
+        spec = workload_recipes[ctx.workload.value]
+        lines.append(f"# Workload profile: {spec.description}")
+    if ctx.threat.value in threat_recipes:
+        spec = threat_recipes[ctx.threat.value]
+        lines.append(f"# Threat profile:   {spec.description}")
+    if ctx.modules.value in module_strategies:
+        spec = module_strategies[ctx.modules.value]
+        lines.append(f"# Module strategy:  {spec.description}")
+        lines.append(f"#   policy:         {spec.policy}")
     lines.append(f"# Host: {snap.host}  Kernel: {snap.kernel.release}  Arch: {snap.kernel.arch}")
     lines.append(f"# CPU: {snap.cpu.vendor_id} {snap.cpu.model_name or ''} ({snap.cpu.cores} cores)")
     if snap.cpu.flags:
@@ -220,23 +248,58 @@ def _evidence_block(snap: Snapshot, workload: WorkloadProfile) -> str:
     return "\n".join(lines)
 
 
-def _workload_recipe_block(workload: WorkloadProfile, symbols: set[str]) -> str:
-    """Pull the slice of the workload recipe that matches symbols in
-    this batch. Helps the LLM align with community consensus without
-    drowning the prompt."""
-    spec = workload_recipes.get(workload.value)
-    if spec is None:
-        return ""
-    relevant = [r for r in spec.recipes if r.symbol in symbols]
-    if not relevant:
-        return ""
-    lines = ["# ── workload recipe (community consensus) ────────────"]
-    for r in relevant:
-        lines.append(f"#   CONFIG_{r.symbol}={r.value}  ({r.axis}): {r.rationale}  [{r.source}]")
-    return "\n".join(lines)
+def _recipe_block(ctx: OptimizationContext, symbols: set[str]) -> str:
+    """Pull the slices of the workload + threat recipes that match
+    symbols in this batch. Helps the LLM align with community
+    consensus without drowning the prompt.
+
+    Conflict-resolution intent:
+
+    * Workload recipe entries are *perf-axis* recommendations.
+    * Threat recipe entries are *security-axis* recommendations.
+    * When the same symbol appears in both, render both — the LLM
+      reasons about the trade.
+    """
+    out: list[str] = []
+
+    wspec = workload_recipes.get(ctx.workload.value)
+    if wspec is not None:
+        wrel = [r for r in wspec.recipes if r.symbol in symbols]
+        if wrel:
+            out.append("# ── workload recipe (perf axis) ────────────")
+            for r in wrel:
+                out.append(
+                    f"#   CONFIG_{r.symbol}={r.value}  ({r.axis}): {r.rationale}  [{r.source}]"
+                )
+
+    tspec = threat_recipes.get(ctx.threat.value)
+    if tspec is not None:
+        trel = [r for r in tspec.recipes if r.symbol in symbols]
+        if trel:
+            out.append("# ── threat recipe (security axis) ────────────")
+            for r in trel:
+                out.append(
+                    f"#   CONFIG_{r.symbol}={r.value}: {r.rationale}  [{r.source}]"
+                )
+
+    return "\n".join(out)
 
 
-def _batch_cache_key(model: str, service_tier: str | None, batch_signature: str) -> str:
+def _batch_cache_key(
+    model: str,
+    service_tier: str | None,
+    batch_signature: str,
+    *,
+    history_text: str | None = None,
+) -> str:
+    """Content-address a batch.
+
+    Salts in ``history_text`` so closed-loop iterations don't share
+    cached answers across rounds — i=2's prompt has different prior
+    context than i=1's, so it should re-query the LLM. Without history
+    (the default trim/dim run), cache key is unchanged so first-time
+    runs benefit from existing caches.
+    """
     h = hashlib.sha256()
     h.update(SYSTEM_PROMPT_VERSION.encode())
     h.update(b"\x00")
@@ -245,6 +308,9 @@ def _batch_cache_key(model: str, service_tier: str | None, batch_signature: str)
     h.update((service_tier or "").encode())
     h.update(b"\x00")
     h.update(batch_signature.encode())
+    if history_text:
+        h.update(b"\x00")
+        h.update(history_text.encode())
     return h.hexdigest()[:16]
 
 
@@ -290,7 +356,7 @@ def _format_choice_batch(choices: list[ChoiceGroup]) -> str:
 def propose_choices(
     snap: Snapshot,
     surface: KconfigSurface,
-    workload: WorkloadProfile,
+    ctx: OptimizationContext,
     *,
     model: str = DEFAULT_MODEL,
     service_tier: str | None = DEFAULT_SERVICE_TIER,
@@ -298,6 +364,7 @@ def propose_choices(
     cache_dir: Path | None = None,
     progress: callable | None = None,
     max_choices: int | None = None,
+    history_text: str | None = None,
 ) -> list[RemovalProposal]:
     """Pick one option for each Kconfig choice group on the host's surface.
 
@@ -309,7 +376,8 @@ def propose_choices(
     * ``source`` is ``ProposalSource.CHOICE``
 
     Choices whose current selection equals what the LLM would pick are
-    skipped (no proposal emitted).
+    skipped (no proposal emitted). Proposals below the
+    ``ctx.aggression`` confidence floor are also dropped.
     """
     choices = surface.choices
     if max_choices is not None:
@@ -317,7 +385,8 @@ def propose_choices(
     if not choices:
         return []
 
-    evidence = _evidence_block(snap, workload)
+    evidence = _evidence_block(snap, ctx, history_text=history_text)
+    floor = ctx.aggression.confidence_floor
     out: list[RemovalProposal] = []
     agent: Agent[None, _ChoiceBatch] | None = None
     n_batches = (len(choices) + batch_size - 1) // batch_size
@@ -332,7 +401,7 @@ def propose_choices(
             for c in chunk
         )
         cache_path = (
-            cache_dir / f"choice-{_batch_cache_key(model, service_tier, batch_sig)}.json"
+            cache_dir / f"choice-{_batch_cache_key(model, service_tier, batch_sig, history_text=history_text)}.json"
             if cache_dir is not None
             else None
         )
@@ -349,7 +418,7 @@ def propose_choices(
             agent = _build_choice_agent(model, service_tier)
 
         recipe_syms = {o.name for c in chunk for o in c.options}
-        recipe_block = _workload_recipe_block(workload, recipe_syms)
+        recipe_block = _recipe_block(ctx, recipe_syms)
         prompt = (
             f"{evidence}\n\n{recipe_block}\n\n"
             f"# Pick one option for each of the {len(chunk)} choice group(s) below.\n\n"
@@ -378,6 +447,8 @@ def propose_choices(
                 continue  # hallucinated option
             if opt.is_current:
                 continue  # no change
+            if d.confidence < floor:
+                continue  # below aggression floor
             current_opt = next((o for o in choice.options if o.is_current), None)
             current_str = current_opt.name if current_opt else "?"
             batch_out.append(
@@ -471,14 +542,21 @@ TOGGLE_ALLOWLIST: tuple[str, ...] = (
 
 
 def _eligible_toggles(
-    surface: KconfigSurface, workload: WorkloadProfile
+    surface: KconfigSurface, ctx: OptimizationContext
 ) -> list[BoolToggle]:
-    """Filter to high-signal toggles worth LLM tokens. Combines the
-    static allowlist with whatever the workload recipe references."""
+    """Filter to high-signal toggles worth LLM tokens.
+
+    Allowlist combines: the static :data:`TOGGLE_ALLOWLIST`, every
+    symbol in the active workload recipe, AND every symbol in the
+    active threat recipe (so paranoid users see KSPP+ knobs the LLM
+    can adjust)."""
     extra: set[str] = set()
-    spec = workload_recipes.get(workload.value)
-    if spec is not None:
-        extra = {r.symbol for r in spec.recipes}
+    wspec = workload_recipes.get(ctx.workload.value)
+    if wspec is not None:
+        extra |= {r.symbol for r in wspec.recipes}
+    tspec = threat_recipes.get(ctx.threat.value)
+    if tspec is not None:
+        extra |= {r.symbol for r in tspec.recipes}
     allow = set(TOGGLE_ALLOWLIST) | extra
     return [t for t in surface.toggles if t.name in allow]
 
@@ -499,25 +577,27 @@ def _format_toggle_batch(toggles: list[BoolToggle]) -> str:
 def propose_toggles(
     snap: Snapshot,
     surface: KconfigSurface,
-    workload: WorkloadProfile,
+    ctx: OptimizationContext,
     *,
     model: str = DEFAULT_MODEL,
     service_tier: str | None = DEFAULT_SERVICE_TIER,
     batch_size: int = TOGGLE_BATCH_SIZE,
     cache_dir: Path | None = None,
     progress: callable | None = None,
+    history_text: str | None = None,
 ) -> list[RemovalProposal]:
-    """Judge bool feature toggles against the workload + evidence.
+    """Judge bool feature toggles against the four-axis context.
 
     Only emits proposals for toggles where the LLM picks a value
     DIFFERENT from the current — no-change decisions are silently
-    dropped.
+    dropped — AND that meet the aggression confidence floor.
     """
-    toggles = _eligible_toggles(surface, workload)
+    toggles = _eligible_toggles(surface, ctx)
     if not toggles:
         return []
 
-    evidence = _evidence_block(snap, workload)
+    evidence = _evidence_block(snap, ctx, history_text=history_text)
+    floor = ctx.aggression.confidence_floor
     out: list[RemovalProposal] = []
     agent: Agent[None, _ToggleBatch] | None = None
     n_batches = (len(toggles) + batch_size - 1) // batch_size
@@ -528,7 +608,7 @@ def propose_toggles(
 
         batch_sig = "|".join(f"{t.name}={t.current_value}" for t in chunk)
         cache_path = (
-            cache_dir / f"toggle-{_batch_cache_key(model, service_tier, batch_sig)}.json"
+            cache_dir / f"toggle-{_batch_cache_key(model, service_tier, batch_sig, history_text=history_text)}.json"
             if cache_dir is not None
             else None
         )
@@ -544,7 +624,7 @@ def propose_toggles(
         if agent is None:
             agent = _build_toggle_agent(model, service_tier)
 
-        recipe_block = _workload_recipe_block(workload, {t.name for t in chunk})
+        recipe_block = _recipe_block(ctx, {t.name for t in chunk})
         prompt = (
             f"{evidence}\n\n{recipe_block}\n\n"
             f"# Decide y or n for each of the {len(chunk)} toggle(s) below.\n\n"
@@ -560,6 +640,8 @@ def propose_toggles(
                 continue
             if d.value == t.current_value:
                 continue  # no change
+            if d.confidence < floor:
+                continue  # below aggression floor
             batch_out.append(
                 RemovalProposal(
                     config=f"CONFIG_{t.name}",
@@ -618,20 +700,22 @@ def _format_tunable_batch(tunables: list[NumericTunable]) -> str:
 def propose_tunables(
     snap: Snapshot,
     surface: KconfigSurface,
-    workload: WorkloadProfile,
+    ctx: OptimizationContext,
     *,
     model: str = DEFAULT_MODEL,
     service_tier: str | None = DEFAULT_SERVICE_TIER,
     batch_size: int = TUNABLE_BATCH_SIZE,
     cache_dir: Path | None = None,
     progress: callable | None = None,
+    history_text: str | None = None,
 ) -> list[RemovalProposal]:
     """Pick numeric/string values for whitelisted tunables."""
     tunables = _eligible_tunables(surface)
     if not tunables:
         return []
 
-    evidence = _evidence_block(snap, workload)
+    evidence = _evidence_block(snap, ctx, history_text=history_text)
+    floor = ctx.aggression.confidence_floor
     out: list[RemovalProposal] = []
     agent: Agent[None, _TunableBatch] | None = None
     n_batches = (len(tunables) + batch_size - 1) // batch_size
@@ -642,7 +726,7 @@ def propose_tunables(
 
         batch_sig = "|".join(f"{t.name}={t.current_value}" for t in chunk)
         cache_path = (
-            cache_dir / f"tunable-{_batch_cache_key(model, service_tier, batch_sig)}.json"
+            cache_dir / f"tunable-{_batch_cache_key(model, service_tier, batch_sig, history_text=history_text)}.json"
             if cache_dir is not None
             else None
         )
@@ -658,7 +742,7 @@ def propose_tunables(
         if agent is None:
             agent = _build_tunable_agent(model, service_tier)
 
-        recipe_block = _workload_recipe_block(workload, {t.name for t in chunk})
+        recipe_block = _recipe_block(ctx, {t.name for t in chunk})
         prompt = (
             f"{evidence}\n\n{recipe_block}\n\n"
             f"# Pick a value for each of the {len(chunk)} tunable(s) below.\n\n"
@@ -678,6 +762,8 @@ def propose_tunables(
             new_norm = d.value.strip().strip('"')
             if cur_norm == new_norm:
                 continue
+            if d.confidence < floor:
+                continue  # below aggression floor
             batch_out.append(
                 RemovalProposal(
                     config=f"CONFIG_{t.name}",

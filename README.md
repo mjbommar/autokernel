@@ -8,16 +8,15 @@ Debian/Ubuntu, Fedora/RHEL, Arch, openSUSE, Gentoo, Alpine.
 Inspired by Gentoo's `localmodconfig`, FreeBSD's `include GENERIC` + diff
 style, and Debian's `make bindeb-pkg`.
 
-> **Status: 0.13.** Full pipeline now optimizes **four Kconfig
-> dimensions** with the LLM, not just one: tristate trims (existing),
-> **choice groups** (PREEMPT, HZ, IOSCHED, TCP cong, kernel
-> compression…), **bool feature toggles** (THP, BPF_JIT, NUMA_BALANCING,
-> KVM_GUEST, mitigations), and **numeric tunables** (NR_CPUS,
-> LOG_BUF_SHIFT). Workload-aware: pass `--workload=desktop|laptop|
-> server|vm-guest|realtime|embedded` (or auto-detect from chassis_type
-> + battery + hypervisor signals). Plus `autokernel build
-> --localmodconfig` to drop module count ~6000 → ~250 from the host's
-> live `lsmod`.
+> **Status: 0.14.** Closed-loop optimizer. `autokernel iterate` runs
+> propose → config-check → apply → build → boot-test → measure for N
+> rounds, with each round's results feeding into the next propose call
+> as context. Auto-reverts regressions; converges on a stable size.
+> Four-axis intent (workload × threat × modules × aggression) composed
+> via `--preset=<name>` shortcuts (`gaming-desktop`, `paranoid-laptop`,
+> `hardened-server`, `cloud-vm`, `lean-static`, `hyperoptimize`, …)
+> or per-axis flags. Static config validation catches LLM
+> hallucinations and dead-letter choice options before the slow build.
 
 [![tests](https://github.com/mjbommar/autokernel/actions/workflows/test.yml/badge.svg)](https://github.com/mjbommar/autokernel/actions/workflows/test.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -185,6 +184,7 @@ so reruns are free.
 | `apply DIR` | Merge kfrag into running `.config`, validate load-bearing | `DIR/final.config` |
 | `fetch-source [--method=…]` | Distro-aware kernel source acquisition | a kernel source tree |
 | `build DIR --kernel-source PATH [--localmodconfig] [--execute]` | Drop config + olddefconfig; `--localmodconfig` trims modules to host's lsmod; `--execute` compiles | logs + (`--execute`) `.deb`/`.rpm`/`.tar.zst` |
+| `iterate DIR --kernel-source PATH [--preset=NAME] [--max-iterations=N] [--target=size]` | Closed-loop optimizer — propose → check → apply → build → boot-test for N rounds, with results feeding the next round's prompt | `DIR/iterations/i<NNN>/` per round |
 
 ## Pipeline
 
@@ -281,6 +281,52 @@ tests/                         ── 426 tests, fixture-driven, no host couplin
 | Config minimization advice | pydantic-ai agent | Judgment, not arithmetic. Structured output forces calibration. Per-batch cache makes interrupted runs cheap to resume. |
 | Distro adaptation | python (`distro.py` + `DistroSpec`) | Per-family knowledge in one table; verbs dispatch on family. |
 | Orchestration | typer + Claude skill | Skill stays thin; Python carries the logic. |
+
+## Closed-loop iteration *(v0.14)*
+
+`autokernel iterate` runs the full pipeline as a loop: propose →
+config-check → apply → build → boot-test → measure → record. Each
+round's measurements feed back into the next propose call as prompt
+context, so the LLM stops re-proposing things that broke prior boots
+and converges on a stable, smaller, faster kernel.
+
+```bash
+autokernel iterate ~/build/snap \
+    --kernel-source ~/.cache/autokernel/kernels/linux-6.19 \
+    --preset=lean-static --workload=desktop \
+    --max-iterations=3 --target=size --execute
+```
+
+Each iteration's artifacts land in `~/build/snap/iterations/i<NNN>/`
+(proposal.json, final.config, build.log, record.json). When an
+iteration regresses (build fails or boot-test fails), `--auto-revert`
+*(default)* restores the prior `final.config` and feeds the failed
+proposals into the next round's prompt as do-not-repeat rules.
+
+### Four-axis intent
+
+| Axis | Levels | What it controls |
+|---|---|---|
+| `--workload` | desktop / laptop / server / vm-guest / realtime / embedded | Perf-axis recipes (PREEMPT, HZ, IOSCHED, NUMA_BALANCING) |
+| `--threat` | permissive / balanced / paranoid | KSPP-aligned hardening (PTI, RETPOLINE, INIT_ON_FREE, KFENCE) |
+| `--modules` | distro / monolithic / modular | =y vs =m composition (initramfs vs built-in) |
+| `--aggression` | conservative / balanced / aggressive | Confidence floor for proposals (0.85 / 0.65 / 0.40) |
+
+### Presets
+
+Common combinations have short names. Per-axis flags override the preset.
+
+```bash
+autokernel propose ~/build/snap --preset=gaming-desktop ...
+# = --workload=desktop --threat=permissive --modules=monolithic --aggression=aggressive
+
+autokernel propose ~/build/snap --preset=hardened-server ...
+# = --workload=server --threat=paranoid --modules=monolithic --aggression=balanced
+```
+
+Available: `desktop`, `gaming-desktop`, `paranoid-desktop`, `laptop`,
+`paranoid-laptop`, `server`, `hardened-server`, `cloud-vm`, `realtime`,
+`embedded`, `lean-static`, `lean-module`, `hyperoptimize`.
 
 ## Autonomy levels
 
