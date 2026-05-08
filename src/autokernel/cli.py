@@ -986,6 +986,15 @@ def build(
             f"[bold]artifacts[/bold]\n{body}",
             title="autokernel build",
         ))
+    elif bres.target == "kernel-only" and bres.bzimage_path:
+        bz_size_mb = bres.bzimage_path.stat().st_size / (1024 * 1024)
+        console.print(Panel.fit(
+            f"[green]✓ built (kernel-only)[/green]\n"
+            f"  source:  {bres.source_dir}\n"
+            f"  logs:    {bres.log_dir}\n"
+            f"  bzImage: {bres.bzimage_path} ({bz_size_mb:.2f} MB)",
+            title="autokernel build",
+        ))
     else:
         err_console.print(
             "[yellow]build returned 0 but no linux-*.deb found in source parent[/yellow]"

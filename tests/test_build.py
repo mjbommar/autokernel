@@ -80,7 +80,7 @@ def test_prepare_copies_config_and_runs_olddefconfig(
     # exactly one subprocess call: make olddefconfig
     assert len(captured_runs) == 1
     call = captured_runs[0]
-    assert call["argv"] == ["make", "olddefconfig"]
+    assert call["argv"] == ["make", "CC=clang", "HOSTCC=clang", "olddefconfig"]
     assert Path(call["cwd"]) == src.resolve()
 
 
@@ -157,7 +157,7 @@ def test_build_invokes_bindeb_pkg(tmp_path: Path, captured_runs):
     result = build(source_dir=src, snapshot_dir=snap, jobs=8)
 
     assert len(captured_runs) == 1
-    assert captured_runs[0]["argv"] == ["make", "-j8", "bindeb-pkg"]
+    assert captured_runs[0]["argv"] == ["make", "-j8", "CC=clang", "HOSTCC=clang", "bindeb-pkg"]
     assert isinstance(result, BuildResult)
     assert result.steps[0].ok is True
 
@@ -170,7 +170,7 @@ def test_build_default_jobs_uses_cpu_count(tmp_path: Path, captured_runs, monkey
     monkeypatch.setattr(build_mod.os, "cpu_count", lambda: 16)
 
     build(source_dir=src, snapshot_dir=snap)
-    assert captured_runs[0]["argv"] == ["make", "-j16", "bindeb-pkg"]
+    assert captured_runs[0]["argv"] == ["make", "-j16", "CC=clang", "HOSTCC=clang", "bindeb-pkg"]
 
 
 def test_build_ccache_wraps_cc_when_available(tmp_path: Path, captured_runs, monkeypatch):
@@ -481,7 +481,7 @@ def test_build_kernel_only_target_runs_bzImage_modules(tmp_path, captured_runs):
 
     build(source_dir=src, snapshot_dir=snap, jobs=8, target="kernel-only")
     assert len(captured_runs) == 1
-    assert captured_runs[0]["argv"] == ["make", "-j8", "bzImage", "modules"]
+    assert captured_runs[0]["argv"] == ["make", "-j8", "CC=clang", "HOSTCC=clang", "bzImage", "modules"]
 
 
 # ── compiler binary pre-flight in build verb (v0.16.1) ───────────────────
@@ -545,3 +545,105 @@ def test_build_cli_passes_preflight_when_compiler_on_path(tmp_path, monkeypatch)
         ["build", str(snap), "--kernel-source", str(src), "--execute"],
     )
     assert "install-deps" not in result.output
+
+
+# ── compiler vars on argv (v0.16.3) ───────────────────────────────────────
+
+
+def test_compiler_make_vars_for_clang():
+    from autokernel.build import _compiler_make_vars
+    assert _compiler_make_vars("clang") == ["CC=clang", "HOSTCC=clang"]
+
+
+def test_compiler_make_vars_for_llvm():
+    from autokernel.build import _compiler_make_vars
+    assert _compiler_make_vars("llvm") == ["LLVM=1"]
+
+
+def test_compiler_make_vars_for_gcc():
+    from autokernel.build import _compiler_make_vars
+    assert _compiler_make_vars("gcc") == ["CC=gcc", "HOSTCC=gcc"]
+
+
+def test_build_argv_includes_compiler_vars(tmp_path, captured_runs):
+    """`build(compiler='clang')` must put CC=clang on the make argv,
+    not just in the env — otherwise the kernel's Makefile shadows it
+    and gcc wins."""
+    src = _make_fake_kernel_source(tmp_path)
+    (src / ".config").write_text("CONFIG_X=y\n")
+    snap = tmp_path / "snap"
+    snap.mkdir()
+
+    build(source_dir=src, snapshot_dir=snap, jobs=8, compiler="clang", target="kernel-only")
+    assert len(captured_runs) == 1
+    argv = captured_runs[0]["argv"]
+    assert "CC=clang" in argv
+    assert "HOSTCC=clang" in argv
+
+
+def test_prepare_olddefconfig_includes_compiler_vars(tmp_path, monkeypatch):
+    """olddefconfig also needs to know the compiler — if make
+    olddefconfig defaults to gcc, downstream invocations might pick
+    a different toolchain than expected."""
+    src = _make_fake_kernel_source(tmp_path)
+    cfg = _make_final_config(tmp_path)
+    snap = tmp_path / "snap"
+    snap.mkdir()
+    captured = []
+    def _ok(argv, **kwargs):
+        captured.append(list(argv))
+        for f in (kwargs.get("stdout"), kwargs.get("stderr")):
+            if hasattr(f, "write"):
+                f.write(b"")
+        return _FakeProcess(returncode=0)
+    monkeypatch.setattr(build_mod.subprocess, "run", _ok)
+
+    prepare(source_dir=src, config_path=cfg, snapshot_dir=snap, compiler="clang")
+    # First call is olddefconfig.
+    assert "CC=clang" in captured[0]
+    assert "HOSTCC=clang" in captured[0]
+
+
+# ── BuildResult.ok for kernel-only target ────────────────────────────────
+
+
+def test_build_result_ok_when_kernel_only_with_bzimage(tmp_path, captured_runs):
+    """`--target=kernel-only` succeeds when bzImage exists, even with
+    no .deb in deb_paths."""
+    src = _make_fake_kernel_source(tmp_path)
+    (src / ".config").write_text("CONFIG_X=y\n")
+    bz = src / "arch/x86/boot/bzImage"
+    bz.parent.mkdir(parents=True)
+    bz.write_text("fake bzImage")
+    snap = tmp_path / "snap"
+    snap.mkdir()
+
+    result = build(source_dir=src, snapshot_dir=snap, jobs=2, target="kernel-only")
+    assert result.ok  # must be True even with empty deb_paths
+    assert result.target == "kernel-only"
+    assert result.bzimage_path == bz
+
+
+def test_build_result_not_ok_kernel_only_without_bzimage(tmp_path, captured_runs):
+    src = _make_fake_kernel_source(tmp_path)
+    (src / ".config").write_text("CONFIG_X=y\n")
+    snap = tmp_path / "snap"
+    snap.mkdir()
+    # No bzImage produced.
+    result = build(source_dir=src, snapshot_dir=snap, jobs=2, target="kernel-only")
+    assert not result.ok
+
+
+def test_build_result_ok_traditional_target_requires_deb(tmp_path, captured_runs):
+    """`--target=bindeb-pkg` (default) must produce a .deb to count."""
+    src = _make_fake_kernel_source(tmp_path)
+    (src / ".config").write_text("CONFIG_X=y\n")
+    bz = src / "arch/x86/boot/bzImage"
+    bz.parent.mkdir(parents=True)
+    bz.write_text("")
+    # No .debs in parent.
+    snap = tmp_path / "snap"
+    snap.mkdir()
+
+    result = build(source_dir=src, snapshot_dir=snap, jobs=2, target="bindeb-pkg")
+    assert not result.ok  # deb_paths empty AND target != kernel-only

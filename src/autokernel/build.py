@@ -75,10 +75,19 @@ class BuildResult:
     log_dir: Path
     deb_paths: list[Path] = field(default_factory=list)
     steps: list[StepResult] = field(default_factory=list)
+    target: str = "bindeb-pkg"  # what was built — affects success criterion
+    bzimage_path: Path | None = None  # populated for kernel-only
 
     @property
     def ok(self) -> bool:
-        return all(s.ok for s in self.steps) and bool(self.deb_paths)
+        if not all(s.ok for s in self.steps):
+            return False
+        # `kernel-only` target deliberately skips packaging — success
+        # = bzImage actually got built. `auto`/`bindeb-pkg`/`rpm-pkg`/
+        # `targz-pkg` need a packaged artifact in deb_paths to count.
+        if self.target == "kernel-only":
+            return self.bzimage_path is not None and self.bzimage_path.exists()
+        return bool(self.deb_paths)
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────
@@ -92,6 +101,29 @@ def _new_log_dir(snapshot_dir: Path) -> Path:
 
 
 _VALID_COMPILERS = ("clang", "gcc", "llvm")
+
+
+def _compiler_make_vars(compiler: str) -> list[str]:
+    """Make-variable assignments to inject onto the `make` argv.
+
+    The kernel's top-level Makefile reassigns CC unconditionally, so
+    setting ``CC=clang`` only in the env doesn't take effect — gcc
+    ends up doing the actual compile. We have to pass these as
+    command-line make variables so Kbuild honors them.
+
+    Returns a list like ``["CC=clang", "HOSTCC=clang"]`` to splice
+    into the argv between ``make`` and the targets.
+    """
+    if compiler == "llvm":
+        # LLVM=1 in env already works because kernel Makefile reads
+        # the env LLVM variable. Adding it on argv is harmless and
+        # explicit.
+        return ["LLVM=1"]
+    if compiler == "clang":
+        return ["CC=clang", "HOSTCC=clang"]
+    if compiler == "gcc":
+        return ["CC=gcc", "HOSTCC=gcc"]
+    return []
 
 
 def _build_env(
@@ -287,11 +319,12 @@ def prepare(
         use_ccache=False, env_overrides=env_overrides,
         compiler=compiler, lto=lto,
     )
+    compiler_vars = _compiler_make_vars(compiler)
     steps: list[StepResult] = []
     steps.append(
         _run_step(
             "olddefconfig",
-            ["make", "olddefconfig"],
+            ["make", *compiler_vars, "olddefconfig"],
             cwd=source_dir,
             env=env,
             log_dir=log_dir,
@@ -304,13 +337,15 @@ def prepare(
         lsmod = str(lsmod_path) if lsmod_path is not None else "/proc/modules"
         lmc_env = dict(env)
         lmc_env["LSMOD"] = lsmod
+        # Compose the make argv string: `make CC=clang HOSTCC=clang LSMOD=... localmodconfig`
+        make_argv_str = "make " + " ".join(compiler_vars + [f"LSMOD={lsmod}", "localmodconfig"])
         # `make localmodconfig` prompts for input on every "new" choice
         # — pipe blank stdin to accept Kconfig defaults uniformly.
         # _run_step doesn't take stdin so we run a small shell command.
         steps.append(
             _run_step(
                 "localmodconfig",
-                ["sh", "-c", f"yes '' | make LSMOD={lsmod} localmodconfig"],
+                ["sh", "-c", f"yes '' | {make_argv_str}"],
                 cwd=source_dir,
                 env=lmc_env,
                 log_dir=log_dir,
@@ -322,7 +357,7 @@ def prepare(
         steps.append(
             _run_step(
                 "olddefconfig-after-localmodconfig",
-                ["make", "olddefconfig"],
+                ["make", *compiler_vars, "olddefconfig"],
                 cwd=source_dir,
                 env=env,
                 log_dir=log_dir,
@@ -434,6 +469,7 @@ def build(
         use_ccache=use_ccache, env_overrides=env_overrides,
         compiler=compiler, lto=lto,
     )
+    compiler_vars = _compiler_make_vars(compiler)
 
     # Special-case "kernel-only" — runs `make bzImage modules` (no
     # packaging). Used by `iterate --execute` where we just need to
@@ -441,10 +477,10 @@ def build(
     # the install-time deps (debhelper-compat etc.) and is the
     # closest analog to what users do during interactive kernel work.
     if target == "kernel-only":
-        argv = ["make", f"-j{jobs}", "bzImage", "modules"]
+        argv = ["make", f"-j{jobs}", *compiler_vars, "bzImage", "modules"]
         step_name = "make-bzImage-modules"
     else:
-        argv = ["make", f"-j{jobs}", target]
+        argv = ["make", f"-j{jobs}", *compiler_vars, target]
         step_name = f"make-{target}"
 
     step = _run_step(
@@ -470,9 +506,19 @@ def build(
     if rpm_root.is_dir():
         deb_paths.extend(sorted(rpm_root.glob("*/kernel-*.rpm")))
 
+    # bzImage location for kernel-only success check.
+    bzimage_path: Path | None = None
+    for arch in ("x86", "arm64", "riscv", "powerpc"):
+        candidate = source_dir / "arch" / arch / "boot" / "bzImage"
+        if candidate.exists():
+            bzimage_path = candidate
+            break
+
     return BuildResult(
         source_dir=source_dir,
         log_dir=log_dir,
         deb_paths=deb_paths,
         steps=[step],
+        target=target,
+        bzimage_path=bzimage_path,
     )

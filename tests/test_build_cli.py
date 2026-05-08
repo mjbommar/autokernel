@@ -60,7 +60,7 @@ def test_build_prepare_only_default(tmp_path: Path, captured_runs):
     assert "prepared" in result.output.lower()
     # one call: make olddefconfig
     assert len(captured_runs) == 1
-    assert captured_runs[0]["argv"] == ["make", "olddefconfig"]
+    assert captured_runs[0]["argv"] == ["make", "CC=clang", "HOSTCC=clang", "olddefconfig"]
     # final.config dropped into source
     assert (src / ".config").exists()
     assert "CONFIG_FOO=y" in (src / ".config").read_text()
@@ -78,7 +78,7 @@ def test_build_execute_runs_make_bindeb_pkg(tmp_path: Path, captured_runs):
     assert result.exit_code == 0, result.output
     # two calls: olddefconfig, then make -j4 bindeb-pkg
     assert len(captured_runs) == 2
-    assert captured_runs[1]["argv"] == ["make", "-j4", "bindeb-pkg"]
+    assert captured_runs[1]["argv"] == ["make", "-j4", "CC=clang", "HOSTCC=clang", "bindeb-pkg"]
 
 
 def test_build_auto_target_picks_family_default(tmp_path: Path, captured_runs, monkeypatch):
@@ -100,7 +100,7 @@ def test_build_auto_target_picks_family_default(tmp_path: Path, captured_runs, m
     )
     assert result.exit_code == 0, result.output
     # Fedora's family default is rpm-pkg
-    assert captured_runs[1]["argv"] == ["make", "-j1", "rpm-pkg"]
+    assert captured_runs[1]["argv"] == ["make", "-j1", "CC=clang", "HOSTCC=clang", "rpm-pkg"]
 
 
 def test_build_refuses_execute_when_dkms_present(tmp_path: Path, captured_runs):
@@ -195,4 +195,4 @@ def test_build_target_override(tmp_path: Path, captured_runs):
         ],
     )
     assert result.exit_code == 0, result.output
-    assert captured_runs[1]["argv"] == ["make", "-j2", "deb-pkg"]
+    assert captured_runs[1]["argv"] == ["make", "-j2", "CC=clang", "HOSTCC=clang", "deb-pkg"]
