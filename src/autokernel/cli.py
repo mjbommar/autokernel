@@ -108,6 +108,158 @@ _SCRIPTS_DIR = Path(__file__).resolve().parents[2] / "scripts"
 _AUTO_LEVELS = {AutonomyLevel.AUTO_SAFE, AutonomyLevel.AUTO_BOLD}
 
 
+# ── v0.13 dimension dispatch helpers ──────────────────────────────────────
+
+
+_VALID_DIMENSIONS = {"modules", "choices", "toggles", "tunables", "all"}
+
+
+def _parse_dimensions(spec: str) -> set[str]:
+    """``"all"`` → every dimension; ``"modules,toggles"`` → those two;
+    raises if any token is unknown."""
+    raw = {tok.strip() for tok in spec.split(",") if tok.strip()}
+    unknown = raw - _VALID_DIMENSIONS
+    if unknown:
+        raise typer.BadParameter(
+            f"unknown --dimension(s): {sorted(unknown)}. "
+            f"Valid: {sorted(_VALID_DIMENSIONS)}"
+        )
+    if "all" in raw:
+        return {"modules", "choices", "toggles", "tunables"}
+    return raw
+
+
+def _run_dimension_passes(
+    *,
+    snap,
+    snapshot_dir: Path,
+    requested: set[str],
+    workload_override: str | None,
+    kernel_source: Path | None,
+    llm_spec: str,
+    service_tier: str | None,
+    skip_llm: bool,
+) -> list:
+    """Run propose_choices / propose_toggles / propose_tunables as
+    requested. Returns the merged list of RemovalProposals; each
+    sub-pass writes its cache under ``<snapshot_dir>/batches/dim-<n>/``.
+    """
+    from autokernel.agent_dims import (
+        propose_choices, propose_toggles, propose_tunables,
+    )
+    from autokernel.kconfig_walk import walk as walk_kconfig
+    from autokernel.workload import (
+        WorkloadProfile, detect as detect_workload,
+    )
+
+    if skip_llm:
+        console.print(
+            "[yellow]--skip-llm with non-modules dimensions skips ALL LLM passes; "
+            "no choice/toggle/tunable proposals will be generated.[/yellow]"
+        )
+        return []
+
+    if kernel_source is None:
+        raise err.fail(
+            f"--dimension={','.join(sorted(requested))} requires --kernel-source",
+            why="we need to walk the target kernel's Kconfig to know what's available",
+            fix=f"pass --kernel-source=<path-to-kernel-source> (e.g. ~/build/sources/linux-X.Y)",
+            exit_code=2,
+        )
+
+    # Workload — explicit override or detected from snapshot + /sys.
+    if workload_override is not None:
+        try:
+            workload = WorkloadProfile(workload_override)
+        except ValueError:
+            raise typer.BadParameter(
+                f"unknown --workload {workload_override!r}. "
+                f"Valid: {sorted(p.value for p in WorkloadProfile if p.is_user_facing)}"
+            )
+        console.print(f"[cyan]workload:[/cyan] [bold]{workload.value}[/bold] (user-supplied)")
+        detection = detect_workload(snap, explicit=workload)
+    else:
+        detection = detect_workload(snap)
+        console.print(
+            f"[cyan]workload:[/cyan] [bold]{detection.profile.value}[/bold] "
+            f"(detected, conf={detection.confidence:.2f})"
+        )
+        for r in detection.reasons[:3]:
+            console.print(f"  [dim]{r}[/dim]")
+
+    # Resolve LLM model (same as the trim path).
+    try:
+        cfg = llm_mod.resolve(spec=llm_spec, service_tier=service_tier)
+    except (llm_mod.NoProviderConfigured, llm_mod.ProviderNotAvailable) as e:
+        raise err.fail(
+            "no LLM provider configured for v0.13 dimension passes",
+            why=str(e),
+            fix="set ANTHROPIC_API_KEY or OPENAI_API_KEY in .env, or omit --dimension",
+            exit_code=1,
+        )
+
+    # Walk the kernel's Kconfig surface — slow on first call but cached
+    # by Python's import.
+    console.print(f"[dim]walking Kconfig under {kernel_source}…[/dim]")
+    surface = walk_kconfig(
+        kernel_source,
+        arch=snap.kernel.arch,
+        config_path=snap.running_config_path,
+    )
+    console.print(
+        f"  choices: {len(surface.choices)}  "
+        f"toggles: {len(surface.toggles)}  "
+        f"tunables: {len(surface.tunables)}"
+    )
+
+    cache_root = snapshot_dir / "batches"
+    out: list = []
+    kwargs = {"model": cfg.model}
+    if cfg.service_tier:
+        kwargs["service_tier"] = cfg.service_tier
+
+    if "choices" in requested:
+        with console.status("[cyan]choice groups…[/cyan]"):
+            def _p(i, n, sz, *, cached=False):
+                tag = "[dim](cached)[/dim]" if cached else ""
+                console.log(f"  choice batch {i}/{n} ({sz}) {tag}")
+            ch = propose_choices(
+                snap, surface, detection.profile,
+                cache_dir=cache_root / "dim-choices",
+                progress=_p, **kwargs,
+            )
+        console.print(f"[dim]choice proposals: {len(ch)}[/dim]")
+        out.extend(ch)
+
+    if "toggles" in requested:
+        with console.status("[cyan]bool toggles…[/cyan]"):
+            def _p(i, n, sz, *, cached=False):
+                tag = "[dim](cached)[/dim]" if cached else ""
+                console.log(f"  toggle batch {i}/{n} ({sz}) {tag}")
+            tg = propose_toggles(
+                snap, surface, detection.profile,
+                cache_dir=cache_root / "dim-toggles",
+                progress=_p, **kwargs,
+            )
+        console.print(f"[dim]toggle proposals: {len(tg)}[/dim]")
+        out.extend(tg)
+
+    if "tunables" in requested:
+        with console.status("[cyan]numeric tunables…[/cyan]"):
+            def _p(i, n, sz, *, cached=False):
+                tag = "[dim](cached)[/dim]" if cached else ""
+                console.log(f"  tunable batch {i}/{n} ({sz}) {tag}")
+            tn = propose_tunables(
+                snap, surface, detection.profile,
+                cache_dir=cache_root / "dim-tunables",
+                progress=_p, **kwargs,
+            )
+        console.print(f"[dim]tunable proposals: {len(tn)}[/dim]")
+        out.extend(tn)
+
+    return out
+
+
 @app.command()
 def scan(
     outdir: Annotated[Path | None, typer.Argument(help="Where to write the snapshot")] = None,
@@ -172,8 +324,19 @@ def propose(
     out: Annotated[Path | None, typer.Option(help="Write proposal JSON to this path")] = None,
     force_dkms: Annotated[bool, typer.Option(help="Allow auto-* autonomy even when DKMS modules are present (use only if you understand the rebuild risk)")] = False,
     no_cpu_tune: Annotated[bool, typer.Option("--no-cpu-tune", help="Don't propose CPU microarch tuning (CONFIG_M<arch>=y).")] = False,
+    # ── v0.13: multi-dimensional optimization ─────────────────────────────
+    dimension: Annotated[str, typer.Option("--dimension", help="Which optimization dimensions to run. 'modules' = the existing trim path. 'choices' = pick PREEMPT/HZ/IOSCHED/etc. 'toggles' = bool perf/security knobs. 'tunables' = NR_CPUS, LOG_BUF_SHIFT etc. 'all' = run every dimension. Comma-separate to pick a subset (e.g. 'modules,toggles').")] = "modules",
+    workload: Annotated[str | None, typer.Option("--workload", help="Override the auto-detected workload profile. One of: desktop, laptop, server, vm-guest, realtime, embedded.")] = None,
+    kernel_source: Annotated[Path | None, typer.Option("--kernel-source", help="Path to a kernel source tree. Required for --dimension={choices,toggles,tunables,all} so we can walk Kconfig and see what's available on the target kernel.")] = None,
 ) -> None:
-    """Generate a proposed kernel config trim from a snapshot."""
+    """Generate a proposed kernel config trim from a snapshot.
+
+    By default runs only the module-trim dimension (existing behavior).
+    Pass ``--dimension=all --kernel-source=PATH`` to also run the v0.13
+    LLM passes for choice groups (PREEMPT, HZ, IOSCHED, …),
+    bool feature toggles (TRANSPARENT_HUGEPAGE, BPF_JIT_ALWAYS_ON, …),
+    and numeric/string tunables (NR_CPUS, LOG_BUF_SHIFT, …).
+    """
     _validate_snapshot_dir(snapshot_dir)
     snap = snap_mod.load(snapshot_dir)
 
@@ -249,9 +412,10 @@ def propose(
         not_considered = [s for s, _ in llm_pool[max_candidates:]]
         llm_pool = llm_pool[:max_candidates]
 
-    # ── LLM proposals ───────────────────────────────────────────────────
+    # ── LLM proposals (modules dimension) ──────────────────────────────
+    requested_dims = _parse_dimensions(dimension)
     llm: list = []
-    if not skip_llm and llm_pool:
+    if "modules" in requested_dims and not skip_llm and llm_pool:
         # Resolve model + service tier via the LLM-config module so the user
         # gets a clear error when no provider is configured (instead of a
         # cryptic auth failure mid-batch).
@@ -289,8 +453,23 @@ def propose(
             )
         console.print(f"[dim]LLM proposals: {len(llm)}  cache: {cache_dir}[/dim]")
 
+    # ── v0.13 multi-dimensional passes ─────────────────────────────────
+    extra_proposals: list = []
+    extra_dims = requested_dims - {"modules"}
+    if extra_dims:
+        extra_proposals = _run_dimension_passes(
+            snap=snap,
+            snapshot_dir=snapshot_dir,
+            requested=extra_dims,
+            workload_override=workload,
+            kernel_source=kernel_source,
+            llm_spec=model if model else llm_mode,
+            service_tier=service_tier,
+            skip_llm=skip_llm,
+        )
+
     # ── policy filter ───────────────────────────────────────────────────
-    all_proposals = det + llm
+    all_proposals = det + llm + extra_proposals
     load_bearing = compute_load_bearing(snap, resolution)
     pr = apply_policy(all_proposals, autonomy, load_bearing)
     diff = to_diff(snap.running_config_path, autonomy, pr, not_considered=not_considered)
@@ -613,6 +792,7 @@ def build(
     no_ccache: Annotated[bool, typer.Option(help="Disable ccache wrapping even when available")] = False,
     target: Annotated[str, typer.Option(help="Make target for --execute. Default 'auto' picks per distro: bindeb-pkg (Debian/Ubuntu), rpm-pkg (Fedora/SUSE), targz-pkg (Arch/Gentoo/other).")] = "auto",
     force_dkms: Annotated[bool, typer.Option(help="Allow --execute even with DKMS modules present")] = False,
+    localmodconfig: Annotated[bool, typer.Option("--localmodconfig", help="After dropping final.config, also run `make LSMOD=<snap>/lsmod localmodconfig` to disable every module not currently loaded on the host. Cuts module count ~6000→~250 on stock Ubuntu, build time 5-10× faster.")] = False,
 ) -> None:
     """Drop final.config into a kernel source tree, run olddefconfig, optionally build."""
     _validate_snapshot_dir(snapshot_dir)
@@ -635,12 +815,28 @@ def build(
         raise typer.Exit(3)
 
     # ── prepare ──────────────────────────────────────────────────────────
-    console.print(f"[dim]preparing {kernel_source} with {final_config}…[/dim]")
+    if localmodconfig:
+        lsmod_path = snapshot_dir / "lsmod"
+        if not lsmod_path.exists():
+            err_console.print(
+                f"[red]--localmodconfig requested but {lsmod_path} not found[/red]\n"
+                f"  Re-run `autokernel scan {snapshot_dir}` to refresh the snapshot."
+            )
+            raise typer.Exit(2)
+        console.print(
+            f"[dim]preparing {kernel_source} with {final_config} "
+            f"+ localmodconfig from {lsmod_path}…[/dim]"
+        )
+    else:
+        console.print(f"[dim]preparing {kernel_source} with {final_config}…[/dim]")
+        lsmod_path = None
     try:
         prep = build_mod.prepare(
             source_dir=kernel_source,
             config_path=final_config,
             snapshot_dir=snapshot_dir,
+            localmodconfig=localmodconfig,
+            lsmod_path=lsmod_path,
         )
     except FileNotFoundError as e:
         err_console.print(f"[red]{e}[/red]")

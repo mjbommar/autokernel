@@ -185,8 +185,17 @@ class ProposalSource(str, Enum):
     MICROARCH = "microarch"  # CPU microarchitecture tuning (a deterministic
                               # rule, but distinguished so renderers can
                               # surface it under a "tuning" heading)
-    LLM = "llm"  # pydantic-ai agent
+    LLM = "llm"  # pydantic-ai agent (the existing tristate-trim path)
     USER = "user"  # explicit user override
+    # ── v0.13: multi-dimensional optimization ─────────────────────────
+    # Each new dimension records the LLM agent that decided it so the
+    # CLI can group / filter / explain by dimension. They flow through
+    # the same RemovalProposal struct but ``proposed_value`` is the
+    # selected choice option (CHOICE), 'y'/'n' (TOGGLE), or numeric/
+    # string literal (TUNABLE).
+    CHOICE = "choice"     # a Kconfig choice-group selection
+    TOGGLE = "toggle"     # a bool feature toggle (perf/security tradeoff)
+    TUNABLE = "tunable"   # int/string Kconfig value
 
 
 class ReviewDecision(str, Enum):

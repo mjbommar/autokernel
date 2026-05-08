@@ -8,10 +8,16 @@ Debian/Ubuntu, Fedora/RHEL, Arch, openSUSE, Gentoo, Alpine.
 Inspired by Gentoo's `localmodconfig`, FreeBSD's `include GENERIC` + diff
 style, and Debian's `make bindeb-pkg`.
 
-> **Status: 0.12.** Full pipeline + `autokernel install-deps` —
-> distro-aware system-package installer for build / boot-test / install
-> dependencies, idempotent and dry-run-by-default. One verb to set up
-> the host instead of copy-pasting `apt install …`.
+> **Status: 0.13.** Full pipeline now optimizes **four Kconfig
+> dimensions** with the LLM, not just one: tristate trims (existing),
+> **choice groups** (PREEMPT, HZ, IOSCHED, TCP cong, kernel
+> compression…), **bool feature toggles** (THP, BPF_JIT, NUMA_BALANCING,
+> KVM_GUEST, mitigations), and **numeric tunables** (NR_CPUS,
+> LOG_BUF_SHIFT). Workload-aware: pass `--workload=desktop|laptop|
+> server|vm-guest|realtime|embedded` (or auto-detect from chassis_type
+> + battery + hypervisor signals). Plus `autokernel build
+> --localmodconfig` to drop module count ~6000 → ~250 from the host's
+> live `lsmod`.
 
 [![tests](https://github.com/mjbommar/autokernel/actions/workflows/test.yml/badge.svg)](https://github.com/mjbommar/autokernel/actions/workflows/test.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -123,6 +129,18 @@ needs review (17): …     # LLM proposals — tagged risk + confidence
 9818 candidate symbol(s) deferred (re-run with --max-candidates higher to widen)
 wrote /tmp/myhost/proposal.json
 
+# 2b. (v0.13) ALL FOUR Kconfig dimensions, not just trims. Workload-aware:
+$ autokernel propose /tmp/myhost \
+    --dimension=all --workload=desktop \
+    --kernel-source ~/.cache/autokernel/kernels/linux-6.19
+CPU tune: Intel Core Ultra 7 165H → CONFIG_X86_NATIVE_CPU=y (microarch: METEORLAKE)
+deterministic proposals: 9
+LLM proposals: 19           # tristate trims (existing dimension)
+choice proposals:  24       # PREEMPT_VOLUNTARY → PREEMPT, HZ_250 → HZ_1000, …
+toggle proposals:  3        # X86_AMD_PSTATE: y→n (Intel host), HYPERV: y→n (bare metal), …
+tunable proposals: 3        # NR_CPUS: 8192 → 32, LOCALVERSION="", …
+wrote /tmp/myhost/proposal.json
+
 # 3. Bulk-review the proposal — keep crypto/security at current values, accept rest:
 $ autokernel review /tmp/myhost \
     --reject-subsystem crypto --reject-subsystem security \
@@ -141,12 +159,15 @@ $ autokernel fetch-source --kernel-version 6.13.5
 ✓ source ready at ~/.cache/autokernel/kernels/linux-6.13.5
 
 # 6a. Prepare the source tree (drop config + run olddefconfig; ~1s):
-$ autokernel build /tmp/myhost --kernel-source ~/.cache/autokernel/kernels/linux-6.13.5
-✓ prepared
+#     Add --localmodconfig to also disable every module not currently loaded
+#     (cuts module count ~6000 → ~250 on stock Ubuntu, build time ~5-10× faster):
+$ autokernel build /tmp/myhost --kernel-source ~/.cache/autokernel/kernels/linux-6.19 \
+    --localmodconfig
+✓ prepared (325 modules, was 6579)
 
-# 6b. Compile (slow — 15-60 min; auto-target = bindeb-pkg / rpm-pkg / targz-pkg):
+# 6b. Compile (slow — 15-60 min, ~3-5 min with --localmodconfig):
 $ autokernel build /tmp/myhost --kernel-source … --execute
-✓ built — linux-image-6.13.5_amd64.deb
+✓ built — linux-image-6.19.0_amd64.deb
 ```
 
 Cost-sensitive runs: `autokernel propose --skip-llm` produces a deterministic-only
@@ -159,11 +180,11 @@ so reruns are free.
 |---|---|---|
 | `preflight [DIR] --for=...` | Distro detection + system checks (tools, libs, disk, RAM, snapshot health) | exit code; rendered table |
 | `scan [DIR]` | Run bash collectors → typed Snapshot | `DIR/snapshot.json` |
-| `propose DIR` | Resolver + deterministic trim + LLM agent → typed proposals | `DIR/proposal.json` |
+| `propose DIR [--dimension=all] [--workload=…]` | Resolver + deterministic trim + LLM (4 dimensions: modules, choices, toggles, tunables) | `DIR/proposal.json` |
 | `review DIR --rules…` | Bulk-decision rules over `needs_review` | `DIR/review.json` + `DIR/auto.kfrag` |
 | `apply DIR` | Merge kfrag into running `.config`, validate load-bearing | `DIR/final.config` |
 | `fetch-source [--method=…]` | Distro-aware kernel source acquisition | a kernel source tree |
-| `build DIR --kernel-source PATH [--execute]` | Drop config + olddefconfig; with `--execute`, compile | logs + (`--execute`) `.deb`/`.rpm`/`.tar.zst` |
+| `build DIR --kernel-source PATH [--localmodconfig] [--execute]` | Drop config + olddefconfig; `--localmodconfig` trims modules to host's lsmod; `--execute` compiles | logs + (`--execute`) `.deb`/`.rpm`/`.tar.zst` |
 
 ## Pipeline
 
@@ -182,20 +203,31 @@ bash collectors  ──>  pydantic Snapshot  ──>  deterministic resolver
    │                  │                                            │
    │                  └── pydantic-ai agent (per-batch cached) ────┘
    │                                                  │
-   │                                          policy filter
-   │                                          (autonomy + load-bearing
-   │                                          blocklist + arch + DKMS gate)
-   ▼                                                  ▼
-   not_considered                              proposal.json
-   (deferred, surfaced — never silently dropped)
-                                              │
-                       review rules ──────────┘
-                                              │
-                                    auto.kfrag ── apply ──> final.config
-                                                              │
-                                                            build
-                                                              │
-                                                          .deb / .rpm / .tar.zst
+   │                  ┌── workload detection  ◄── kconfig walker ◄── kernel source
+   │                  │     ▼                                                 │
+   │                  │   v0.13 dimension agents (per-batch cached) ──────────┤
+   │                  │     ├─ propose_choices  (PREEMPT, HZ, IOSCHED, …)     │
+   │                  │     ├─ propose_toggles  (THP, BPF_JIT, NUMA_BALANCING)│
+   │                  │     └─ propose_tunables (NR_CPUS, LOG_BUF_SHIFT)      │
+   │                  │                                                       │
+   │                  │                                          policy filter│
+   │                  │                                          (autonomy +  │
+   │                  │                                          load-bearing │
+   │                  │                                          + DKMS gate) │
+   ▼                                                  ▼                       │
+   not_considered                              proposal.json ◄─────────────── │
+                                                       │
+                       review rules ──────────────────┤
+                                                       │
+                            auto.kfrag ── apply ──> final.config
+                                                       │
+                                              build (--localmodconfig)
+                                                       │
+                                                  bzImage + modules
+                                                       │
+                                              boot-test (QEMU/virtme)
+                                                       │
+                                                   .deb / .rpm / .tar.zst
 ```
 
 ## Architecture

@@ -142,3 +142,68 @@ def test_empty_review_set_writes_only_header(tmp_path: Path):
     assert parsed.assignments == {}
     assert header.n_disable == 0
     assert header.n_demote == 0
+
+
+# ── v0.13 multi-dimensional values (choice/toggle/tunable) ───────────────
+
+
+def test_kfrag_emits_choice_option_as_y(tmp_path: Path):
+    """A choice-option proposal sets the option's CONFIG to =y so
+    merge_config + olddefconfig flip the others to =n."""
+    rs = ReviewSet(
+        base_diff_path=tmp_path / "p.json",
+        accepted=[_accepted("CONFIG_PREEMPT_VOLUNTARY", proposed="PREEMPT_VOLUNTARY")],
+    )
+    out = tmp_path / "choice.kfrag"
+    header = write_kfrag(out, rs, snapshot_dir=tmp_path, autonomy="advise")
+    text = out.read_text()
+    assert "CONFIG_PREEMPT_VOLUNTARY=y" in text
+    assert header.n_other == 1
+
+
+def test_kfrag_emits_int_tunable_unquoted(tmp_path: Path):
+    rs = ReviewSet(
+        base_diff_path=tmp_path / "p.json",
+        accepted=[_accepted("CONFIG_NR_CPUS", proposed="64")],
+    )
+    out = tmp_path / "int.kfrag"
+    header = write_kfrag(out, rs, snapshot_dir=tmp_path, autonomy="advise")
+    text = out.read_text()
+    assert "CONFIG_NR_CPUS=64" in text
+    assert header.n_other == 1
+
+
+def test_kfrag_emits_string_tunable_quoted(tmp_path: Path):
+    rs = ReviewSet(
+        base_diff_path=tmp_path / "p.json",
+        accepted=[_accepted("CONFIG_LOCALVERSION", proposed="-autokernel")],
+    )
+    out = tmp_path / "str.kfrag"
+    header = write_kfrag(out, rs, snapshot_dir=tmp_path, autonomy="advise")
+    text = out.read_text()
+    assert 'CONFIG_LOCALVERSION="-autokernel"' in text
+    assert header.n_other == 1
+
+
+def test_kfrag_emits_hex_tunable(tmp_path: Path):
+    rs = ReviewSet(
+        base_diff_path=tmp_path / "p.json",
+        accepted=[_accepted("CONFIG_DEFAULT_MMAP_MIN_ADDR", proposed="0x10000")],
+    )
+    out = tmp_path / "hex.kfrag"
+    write_kfrag(out, rs, snapshot_dir=tmp_path, autonomy="advise")
+    text = out.read_text()
+    assert "CONFIG_DEFAULT_MMAP_MIN_ADDR=0x10000" in text
+
+
+def test_kfrag_preserves_already_quoted_string(tmp_path: Path):
+    rs = ReviewSet(
+        base_diff_path=tmp_path / "p.json",
+        accepted=[_accepted("CONFIG_LOCALVERSION", proposed='"-quoted"')],
+    )
+    out = tmp_path / "quoted.kfrag"
+    write_kfrag(out, rs, snapshot_dir=tmp_path, autonomy="advise")
+    text = out.read_text()
+    # The quotes are preserved verbatim — not double-quoted.
+    assert 'CONFIG_LOCALVERSION="-quoted"' in text
+    assert 'CONFIG_LOCALVERSION=""-quoted""' not in text

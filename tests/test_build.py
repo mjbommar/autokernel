@@ -323,3 +323,63 @@ def test_prepare_leaves_already_empty_cert_paths(tmp_path, monkeypatch):
     prepare(source_dir=src, config_path=cfg, snapshot_dir=snap)
     final = (src / ".config").read_text()
     assert 'CONFIG_SYSTEM_TRUSTED_KEYS=""' in final
+
+
+# ── localmodconfig integration (build.prepare --localmodconfig) ─────────
+
+
+def test_prepare_with_localmodconfig_runs_extra_steps(tmp_path, monkeypatch):
+    """When localmodconfig=True, prepare runs olddefconfig →
+    `yes '' | make LSMOD=<lsmod> localmodconfig` → olddefconfig again."""
+    src = _make_fake_kernel_source(tmp_path)
+    cfg = _make_final_config(tmp_path)
+    snap = tmp_path / "snap"
+    snap.mkdir()
+    lsmod = snap / "lsmod"
+    lsmod.write_text("Module Size Used by\nfoo 1024 0\n")
+
+    calls = []
+
+    def _ok(argv, **kwargs):
+        calls.append(list(argv))
+        for f in (kwargs.get("stdout"), kwargs.get("stderr")):
+            if hasattr(f, "write"):
+                f.write(b"")
+        return _FakeProcess(returncode=0)
+
+    monkeypatch.setattr(build_mod.subprocess, "run", _ok)
+    result = prepare(
+        source_dir=src,
+        config_path=cfg,
+        snapshot_dir=snap,
+        localmodconfig=True,
+        lsmod_path=lsmod,
+    )
+    assert result.ok
+    # Three steps: initial olddefconfig, localmodconfig, post-trim olddefconfig
+    assert len(result.steps) == 3
+    step_names = [s.name for s in result.steps]
+    assert step_names == ["olddefconfig", "localmodconfig", "olddefconfig-after-localmodconfig"]
+    # The localmodconfig step must invoke `yes '' | make LSMOD=...`
+    lmc_argv = calls[1]
+    assert lmc_argv[:2] == ["sh", "-c"]
+    assert "localmodconfig" in lmc_argv[2]
+    assert f"LSMOD={lsmod}" in lmc_argv[2]
+
+
+def test_prepare_without_localmodconfig_runs_only_olddefconfig(tmp_path, monkeypatch):
+    src = _make_fake_kernel_source(tmp_path)
+    cfg = _make_final_config(tmp_path)
+    snap = tmp_path / "snap"
+    snap.mkdir()
+
+    def _ok(argv, **kwargs):
+        for f in (kwargs.get("stdout"), kwargs.get("stderr")):
+            if hasattr(f, "write"):
+                f.write(b"")
+        return _FakeProcess(returncode=0)
+
+    monkeypatch.setattr(build_mod.subprocess, "run", _ok)
+    result = prepare(source_dir=src, config_path=cfg, snapshot_dir=snap)
+    assert len(result.steps) == 1
+    assert result.steps[0].name == "olddefconfig"

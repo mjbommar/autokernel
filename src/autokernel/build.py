@@ -190,11 +190,22 @@ def prepare(
     log_dir: Path | None = None,
     env_overrides: dict[str, str] | None = None,
     olddefconfig_timeout: float = 60.0,
+    localmodconfig: bool = False,
+    lsmod_path: Path | None = None,
 ) -> PrepareResult:
     """Drop ``config_path`` into ``<source_dir>/.config`` and run
     ``make olddefconfig`` to canonicalize.
 
     Idempotent: re-running with the same inputs produces the same .config.
+
+    When ``localmodconfig=True`` is passed, additionally runs
+    ``make LSMOD=<lsmod_path> localmodconfig`` after the initial
+    olddefconfig — this disables every tristate module that isn't
+    currently loaded on the host. Cuts module count from ~6000 → ~250
+    on a stock Ubuntu kernel and reduces build time ~5-10×. Pass
+    ``lsmod_path`` to point at the snapshot's lsmod file
+    (``<snapshot_dir>/lsmod``); falls back to ``/proc/modules`` when
+    ``None``.
     """
     source_dir = Path(source_dir).resolve()
     config_path = Path(config_path).resolve()
@@ -220,20 +231,54 @@ def prepare(
     _strip_missing_distro_cert_paths(target, source_dir)
 
     env = _build_env(use_ccache=False, env_overrides=env_overrides)
-    step = _run_step(
-        "olddefconfig",
-        ["make", "olddefconfig"],
-        cwd=source_dir,
-        env=env,
-        log_dir=log_dir,
-        timeout=olddefconfig_timeout,
+    steps: list[StepResult] = []
+    steps.append(
+        _run_step(
+            "olddefconfig",
+            ["make", "olddefconfig"],
+            cwd=source_dir,
+            env=env,
+            log_dir=log_dir,
+            timeout=olddefconfig_timeout,
+        )
     )
+
+    if localmodconfig:
+        # Use the snapshot's lsmod when given, else /proc/modules.
+        lsmod = str(lsmod_path) if lsmod_path is not None else "/proc/modules"
+        lmc_env = dict(env)
+        lmc_env["LSMOD"] = lsmod
+        # `make localmodconfig` prompts for input on every "new" choice
+        # — pipe blank stdin to accept Kconfig defaults uniformly.
+        # _run_step doesn't take stdin so we run a small shell command.
+        steps.append(
+            _run_step(
+                "localmodconfig",
+                ["sh", "-c", f"yes '' | make LSMOD={lsmod} localmodconfig"],
+                cwd=source_dir,
+                env=lmc_env,
+                log_dir=log_dir,
+                timeout=olddefconfig_timeout * 4,  # localmodconfig is heavier than olddefconfig
+            )
+        )
+        # Re-canonicalize after the trim — localmodconfig doesn't run
+        # olddefconfig itself.
+        steps.append(
+            _run_step(
+                "olddefconfig-after-localmodconfig",
+                ["make", "olddefconfig"],
+                cwd=source_dir,
+                env=env,
+                log_dir=log_dir,
+                timeout=olddefconfig_timeout,
+            )
+        )
 
     return PrepareResult(
         source_dir=source_dir,
         config_path=target,
         log_dir=log_dir,
-        steps=[step],
+        steps=steps,
     )
 
 
