@@ -31,6 +31,22 @@ run() {
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
+can_sudo_probe() {
+    [ "${AUTOKERNEL_SCAN_SUDO:-0}" = "1" ] || return 1
+    [ "$(id -u)" -eq 0 ] && return 0
+    have sudo && sudo -n true >/dev/null 2>&1
+}
+
+priv() {
+    if [ "$(id -u)" -eq 0 ]; then
+        "$@"
+    elif can_sudo_probe; then
+        sudo -n "$@"
+    else
+        "$@"
+    fi
+}
+
 software_feature() {
     # feature<TAB>source<TAB>name<TAB>detail
     local feature="$1" source="$2" name="$3" detail="${4:-}"
@@ -70,13 +86,13 @@ have lspci  && run lspci_vmmnk lspci -vmmnk
 have lspci  && run lspci_tree  lspci -tv
 have lsusb  && run lsusb       lsusb
 have lsusb  && run lsusb_t     lsusb -t
-have dmidecode && run dmidecode dmidecode    # may need root; degrades to err
+have dmidecode && run dmidecode priv dmidecode
 have lscpu  && run lscpu_j     lscpu -J
 have lsblk  && run lsblk_j     lsblk -J -O
 have findmnt && run findmnt_j  findmnt -J -A
 have ip     && run ip_link_j   ip -j link
 have ip     && run ip_addr_j   ip -j addr
-have lshw   && run lshw_j      lshw -json    # may need root
+have lshw   && run lshw_j      priv lshw -json
 
 # ── /sys: every modalias the kernel has ever registered for a device ────────
 # This catches devices that aren't currently bound to a driver but exist.
@@ -179,10 +195,10 @@ echo 0 >"$OUT/software_features.rc"
 # Firmware actually loaded — try multiple sources because dmesg may be
 # restricted on Ubuntu 22.04+ (kernel.dmesg_restrict=1).
 DMESG_OK=0
-if dmesg >/dev/null 2>&1; then
+if priv dmesg >/dev/null 2>&1; then
     DMESG_OK=1
-    run dmesg_firmware bash -c 'dmesg 2>/dev/null | grep -iE "firmware|loading.*\.bin|microcode" || true'
-    run dmesg_full     bash -c 'dmesg 2>/dev/null || true'
+    run dmesg_firmware priv bash -c 'dmesg 2>/dev/null | grep -iE "firmware|loading.*\.bin|microcode" || true'
+    run dmesg_full     priv bash -c 'dmesg 2>/dev/null || true'
 fi
 
 # Always try journalctl as a parallel source — `journalctl -k -b 0` reads
@@ -216,12 +232,12 @@ fi
 # The initramfs contains every module needed to mount /. These are by
 # definition load-bearing. lsinitramfs needs read access to /boot/initrd*.
 INITRD="/boot/initrd.img-$(uname -r)"
-if [ -r "$INITRD" ] && have lsinitramfs; then
-    run initramfs_modules bash -c "lsinitramfs '$INITRD' 2>/dev/null | grep -E '\.ko(\.|$)' | sed 's,^.*/,,;s,\\.ko.*$,,' | sort -u"
-    run initramfs_firmware bash -c "lsinitramfs '$INITRD' 2>/dev/null | grep -E 'lib/firmware/' | sed 's,^.*lib/firmware/,,' | sort -u"
-elif have unmkinitramfs && [ -r "$INITRD" ]; then
+if { [ -r "$INITRD" ] || can_sudo_probe; } && have lsinitramfs; then
+    run initramfs_modules priv bash -c "lsinitramfs '$INITRD' 2>/dev/null | grep -E '\.ko(\.|$)' | sed 's,^.*/,,;s,\\.ko.*$,,' | sort -u"
+    run initramfs_firmware priv bash -c "lsinitramfs '$INITRD' 2>/dev/null | grep -E 'lib/firmware/' | sed 's,^.*lib/firmware/,,' | sort -u"
+elif have unmkinitramfs && { [ -r "$INITRD" ] || can_sudo_probe; }; then
     # Fallback for hosts that have unmkinitramfs but no lsinitramfs in PATH.
-    run initramfs_modules bash -c "TMPD=\$(mktemp -d) && unmkinitramfs '$INITRD' \"\$TMPD\" 2>/dev/null; find \"\$TMPD\" -name '*.ko*' 2>/dev/null | sed 's,^.*/,,;s,\\.ko.*$,,' | sort -u; rm -rf \"\$TMPD\""
+    run initramfs_modules priv bash -c "TMPD=\$(mktemp -d) && unmkinitramfs '$INITRD' \"\$TMPD\" 2>/dev/null; find \"\$TMPD\" -name '*.ko*' 2>/dev/null | sed 's,^.*/,,;s,\\.ko.*$,,' | sort -u; rm -rf \"\$TMPD\""
 fi
 
 # ── input / sound / graphics — devices userspace is actually using ──────────

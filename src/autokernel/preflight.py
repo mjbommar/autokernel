@@ -422,8 +422,8 @@ def _query_packages_missing(family: Family, pkgs: list[str]) -> list[str]:
 
 def check_dmesg_readable(ctx: CheckContext) -> CheckResult:
     """Ubuntu sets ``kernel.dmesg_restrict=1`` by default, so unprivileged
-    users can't read dmesg. ``scan`` falls back to ``journalctl -k``, but
-    we surface this so the user knows."""
+    users can't read dmesg. ``scan`` requests sudo for read-only probes by
+    default and falls back to ``journalctl -k`` when sudo is unavailable."""
     try:
         with open("/proc/sys/kernel/dmesg_restrict") as f:
             restricted = f.read().strip() == "1"
@@ -442,8 +442,8 @@ def check_dmesg_readable(ctx: CheckContext) -> CheckResult:
     return CheckResult(
         name="dmesg_readable",
         severity=Severity.WARN,
-        message="kernel.dmesg_restrict=1 — `scan` falls back to journalctl -k",
-        fix_hint="run scan as root for richer firmware detection, or accept the journal fallback",
+        message="kernel.dmesg_restrict=1 — `scan` will request sudo for dmesg",
+        fix_hint="use `autokernel scan --no-sudo-probes` to skip privileged read-only probes",
     )
 
 

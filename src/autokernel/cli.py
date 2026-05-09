@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Annotated
@@ -319,6 +320,16 @@ def scan(
     outdir: Annotated[
         Path | None, typer.Argument(help="Where to write the snapshot")
     ] = None,
+    sudo_probes: Annotated[
+        bool,
+        typer.Option(
+            "--sudo-probes/--no-sudo-probes",
+            help=(
+                "Prompt once for sudo and use it only for read-only privileged "
+                "probes such as dmesg, dmidecode, lshw, and initramfs listing."
+            ),
+        ),
+    ] = True,
 ) -> None:
     """Collect hardware/system inventory into SNAPSHOT_DIR."""
     collector = _SCRIPTS_DIR / "collect.sh"
@@ -330,8 +341,12 @@ def scan(
     if outdir:
         args.append(str(outdir))
 
+    env = _scan_subprocess_env(sudo_probes=sudo_probes)
+
     try:
-        result = subprocess.run(args, capture_output=True, text=True, timeout=300)
+        result = subprocess.run(
+            args, capture_output=True, text=True, timeout=300, env=env
+        )
     except subprocess.TimeoutExpired:
         err_console.print("[red]collector timed out after 5 min[/red]")
         raise typer.Exit(1) from None
@@ -364,6 +379,35 @@ def scan(
             title="autokernel scan",
         )
     )
+
+
+def _scan_subprocess_env(*, sudo_probes: bool = True) -> dict[str, str]:
+    env = os.environ.copy()
+    if not sudo_probes:
+        env["AUTOKERNEL_SCAN_SUDO"] = "0"
+        return env
+
+    if os.geteuid() == 0:
+        env["AUTOKERNEL_SCAN_SUDO"] = "1"
+        return env
+
+    if shutil.which("sudo") is None:
+        console.print(
+            "[yellow]sudo not found; scan will use unprivileged probes only[/yellow]"
+        )
+        env["AUTOKERNEL_SCAN_SUDO"] = "0"
+        return env
+
+    console.print("[cyan]requesting sudo for read-only scan probes[/cyan]")
+    rc = subprocess.run(["sudo", "-v"], check=False).returncode
+    if rc == 0:
+        env["AUTOKERNEL_SCAN_SUDO"] = "1"
+    else:
+        console.print(
+            "[yellow]sudo authentication failed; scan will use unprivileged probes only[/yellow]"
+        )
+        env["AUTOKERNEL_SCAN_SUDO"] = "0"
+    return env
 
 
 def _validate_snapshot_dir(snapshot_dir: Path) -> None:

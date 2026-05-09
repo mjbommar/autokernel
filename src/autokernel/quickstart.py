@@ -233,7 +233,7 @@ def _maybe_skip_llm(*, console: Console) -> bool:
 
 def _run_scan(snapshot_dir: Path, *, console: Console, err_console: Console) -> None:
     """Reuse the same code path the scan verb uses, capturing errors."""
-    from autokernel.cli import _SCRIPTS_DIR
+    from autokernel.cli import _SCRIPTS_DIR, _scan_subprocess_env
     import subprocess
 
     collector = _SCRIPTS_DIR / "collect.sh"
@@ -245,7 +245,8 @@ def _run_scan(snapshot_dir: Path, *, console: Console, err_console: Console) -> 
         )
 
     args = ["bash", str(collector), str(snapshot_dir)]
-    result = subprocess.run(args, capture_output=True, text=True, timeout=300)
+    env = _scan_subprocess_env(sudo_probes=True)
+    result = subprocess.run(args, capture_output=True, text=True, timeout=300, env=env)
     if result.returncode != 0:
         raise err.fail(
             "collector failed",
