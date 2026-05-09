@@ -83,7 +83,9 @@ def test_virtme_plan_uses_virtme_ng_when_available(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(boottest_mod.shutil, "which", lambda c: "/usr/bin/virtme-ng")
     p = plan(method=Method.VIRTME, bzimage_path=bz, kernel_release="6.13.0")
     assert p.argv[0] == "virtme-ng"
-    assert "--kimg" in p.argv
+    assert "--run" in p.argv
+    assert str(bz) in p.argv
+    assert "--exec" in p.argv
     assert "AUTOKERNEL_BOOT_TEST_OK" in " ".join(p.argv)
 
 
@@ -97,6 +99,8 @@ def test_virtme_plan_falls_back_to_virtme_run(tmp_path: Path, monkeypatch):
     )
     p = plan(method=Method.VIRTME, bzimage_path=bz, kernel_release="6.13.0")
     assert p.argv[0] == "virtme-run"
+    assert "--kimg" in p.argv
+    assert "--mods" in p.argv
 
 
 def test_auto_method_resolves_at_plan_time(tmp_path: Path, monkeypatch):
@@ -281,6 +285,38 @@ def test_execute_propagates_failure_verdict(tmp_path: Path, monkeypatch):
     snap.mkdir()
     result = execute(p, snapshot_dir=snap)
     assert result.verdict.ok is False
+
+
+def test_execute_virtme_nonzero_exit_fails_even_if_argv_echoes_sentinel(
+    tmp_path: Path, monkeypatch
+):
+    bz = tmp_path / "bzImage"
+    bz.write_bytes(b"x")
+
+    def _fake(argv, **kwargs):
+        f = kwargs.get("stdout")
+        if hasattr(f, "write"):
+            f.write(
+                b"vng: error: unrecognized arguments: --exec true && echo "
+                b"AUTOKERNEL_BOOT_TEST_OK\n"
+            )
+
+        class _R:
+            returncode = 2
+
+        return _R()
+
+    monkeypatch.setattr(boottest_mod.subprocess, "run", _fake)
+    monkeypatch.setattr(boottest_mod.shutil, "which", lambda c: "/usr/bin/virtme-ng")
+
+    p = plan(method=Method.VIRTME, bzimage_path=bz, kernel_release="6.13.0")
+    snap = tmp_path / "snap"
+    snap.mkdir()
+
+    result = execute(p, snapshot_dir=snap)
+
+    assert result.verdict.ok is False
+    assert "status 2" in result.verdict.reason
 
 
 def test_execute_handles_timeout_gracefully(tmp_path: Path, monkeypatch):

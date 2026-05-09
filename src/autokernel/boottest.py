@@ -93,14 +93,20 @@ def detect_method() -> Method:
 def _virtme_argv(bzimage: Path, *, command: str = "true") -> list[str]:
     """virtme-ng exits with 0 when the in-VM command exits 0. We pick
     ``true`` so a successful boot ends cleanly without further work."""
-    binary = "virtme-ng" if shutil.which("virtme-ng") else "virtme-run"
+    script = f"{command} && echo AUTOKERNEL_BOOT_TEST_OK"
+    if shutil.which("virtme-ng"):
+        # Modern virtme-ng exposes the vng CLI: --run selects the kernel and
+        # --exec runs the in-guest command. Older virtme-run uses --kimg and
+        # --script-sh; keep that below as a fallback.
+        return ["virtme-ng", "--run", str(bzimage), "--exec", script]
     return [
-        binary,
+        "virtme-run",
         "--kimg",
         str(bzimage),
-        "--no-virt-net",  # no host network bleed-through
+        "--mods",
+        "none",
         "--script-sh",
-        f"{command} && echo AUTOKERNEL_BOOT_TEST_OK",
+        script,
     ]
 
 
@@ -319,6 +325,8 @@ def execute(plan: BootTestPlan, *, snapshot_dir: Path) -> BootTestResult:
     verdict = analyze_serial(
         text, method=plan.method, kernel_release=plan.kernel_release
     )
+    if plan.method == Method.VIRTME and rc != 0:
+        verdict = Verdict(False, f"virtme exited with status {rc}: {verdict.reason}")
     if rc == -1 and not captured:
         verdict = Verdict(False, f"timed out after {plan.timeout}s with no output")
 

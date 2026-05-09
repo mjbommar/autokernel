@@ -15,7 +15,12 @@ from __future__ import annotations
 from autokernel.kconfig_map import resolve_module_to_config
 from autokernel.models import Snapshot
 from autokernel.policy import compute_load_bearing
-from autokernel.resolve import _running_config_symbols, resolve
+from autokernel.resolve import (
+    _running_config_symbols,
+    candidate_trims,
+    focused_candidate_trims,
+    resolve,
+)
 
 
 # ── direct candidate-generator checks against fixture configs ───────────────
@@ -81,3 +86,24 @@ def test_unresolved_module_protected_via_candidates(intel_laptop: Snapshot):
     lb = compute_load_bearing(intel_laptop, res)
     # The naive candidate must be in the LB set.
     assert lb.contains("CONFIG_TOTALLY_MADE_UP_MODULE")[0]
+
+
+def test_focused_candidate_trims_uses_modules_dep(tmp_path, intel_laptop: Snapshot):
+    modules_dep = tmp_path / "modules.dep"
+    modules_dep.write_text(
+        "\n".join(
+            [
+                "kernel/drivers/counter/104-quad-8.ko.zst:",
+                "kernel/drivers/watchdog/60xx_wdt.ko.zst:",
+            ]
+        )
+        + "\n"
+    )
+    snap = intel_laptop.model_copy(update={"modules_dep_path": modules_dep})
+    res = resolve(snap)
+    broad = candidate_trims(snap, res)
+    focused = focused_candidate_trims(snap, res, broad_candidates=broad)
+
+    assert len(focused) < len(broad)
+    assert "CONFIG_104_QUAD_8" in focused
+    assert "CONFIG_60XX_WDT" in focused

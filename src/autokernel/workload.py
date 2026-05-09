@@ -134,6 +134,22 @@ def _probe_devicetree_present(sys_root: Path) -> bool:
     return (sys_root / "firmware/devicetree/base").is_dir()
 
 
+def _probe_hypervisor_sysfs(sys_root: Path) -> bool:
+    """Return true only when /sys/hypervisor contains real hypervisor data.
+
+    Some bare-metal kernels expose an empty /sys/hypervisor directory. The
+    directory existing by itself is therefore not evidence that the machine is
+    a VM guest.
+    """
+    hypervisor = sys_root / "hypervisor"
+    if not hypervisor.is_dir():
+        return False
+    try:
+        return any(hypervisor.iterdir())
+    except (PermissionError, OSError):
+        return False
+
+
 # ── classifiers ───────────────────────────────────────────────────────────
 
 
@@ -144,7 +160,7 @@ def _classify_vm_guest(snap: Snapshot, sys_root: Path) -> WorkloadDetection | No
     Evidence (any one suffices):
       1. ``hypervisor`` in cpu.flags (Intel/AMD CPUID 0x40000000 leaf)
       2. ``/sys/class/dmi/id/sys_vendor`` matches a known cloud/VM vendor
-      3. ``/sys/hypervisor/`` directory present (Xen/Hyper-V)
+      3. ``/sys/hypervisor/`` contains hypervisor data (Xen/Hyper-V)
 
     Confidence is high when both (1) and (2) match.
     """
@@ -167,8 +183,8 @@ def _classify_vm_guest(snap: Snapshot, sys_root: Path) -> WorkloadDetection | No
         )
         matched += 1
 
-    if (sys_root / "hypervisor").is_dir():
-        reasons.append("/sys/hypervisor/ exists (Xen/Hyper-V hint)")
+    if _probe_hypervisor_sysfs(sys_root):
+        reasons.append("/sys/hypervisor/ contains hypervisor data (Xen/Hyper-V hint)")
         matched += 1
 
     if matched == 0:

@@ -122,6 +122,22 @@ def test_detect_vm_guest_amazon_ec2_partial_match(tmp_path):
     assert res.profile == WorkloadProfile.VM_GUEST
 
 
+def test_empty_sys_hypervisor_is_not_vm_signal(tmp_path):
+    snap = _bare_snap()
+    sys_root = _make_sys(
+        tmp_path,
+        **{
+            "class/dmi/id/chassis_type": "10\n",  # Notebook
+        },
+    )
+    (sys_root / "hypervisor").mkdir()
+
+    res = detect(snap, sys_root=sys_root)
+
+    assert res.profile == WorkloadProfile.LAPTOP
+    assert not any("hypervisor" in r for r in res.reasons)
+
+
 def test_detect_vm_guest_wins_over_laptop_chassis(tmp_path):
     """Cloud images can claim portable chassis. VM-guest must win."""
     snap = _bare_snap(flags=["hypervisor"])

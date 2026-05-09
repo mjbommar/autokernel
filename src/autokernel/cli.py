@@ -67,7 +67,7 @@ from autokernel.policy import (
     compute_load_bearing,
     to_diff,
 )
-from autokernel.resolve import candidate_trims, resolve
+from autokernel.resolve import candidate_trims, focused_candidate_trims, resolve
 from autokernel.review import (
     apply_rules,
     preset_accept_deterministic,
@@ -382,8 +382,18 @@ def propose(
         bool, typer.Option(help="Skip the LLM stage; only run deterministic rules")
     ] = False,
     max_candidates: Annotated[
-        int, typer.Option(help="Cap the number of candidates passed to the LLM")
+        int,
+        typer.Option(
+            help="Cost guard for module-trim LLM candidates; 0 disables the cap"
+        ),
     ] = 600,
+    candidate_scope: Annotated[
+        str,
+        typer.Option(
+            "--candidate-scope",
+            help="Module-trim candidate pool: focused (modules.dep-backed, prioritized) or all (legacy broad complement).",
+        ),
+    ] = "focused",
     llm_mode: Annotated[
         str,
         typer.Option(
@@ -522,8 +532,28 @@ def propose(
         f"unresolved modaliases: {len(resolution.unresolved_modaliases)}"
     )
 
-    candidate_syms = candidate_trims(snap, resolution)
-    console.print(f"  candidate trims: {len(candidate_syms)}")
+    requested_dims = _parse_dimensions(dimension)
+    broad_candidate_syms = candidate_trims(snap, resolution)
+    if "modules" in requested_dims:
+        if candidate_scope == "focused":
+            candidate_syms = focused_candidate_trims(
+                snap, resolution, broad_candidates=broad_candidate_syms
+            )
+            console.print(
+                f"  candidate trims: {len(broad_candidate_syms)} broad; "
+                f"{len(candidate_syms)} focused for module LLM"
+            )
+        elif candidate_scope == "all":
+            candidate_syms = broad_candidate_syms
+            console.print(f"  candidate trims: {len(candidate_syms)}")
+        else:
+            raise typer.BadParameter("--candidate-scope must be 'focused' or 'all'")
+    else:
+        candidate_syms = []
+        console.print(
+            f"  broad module-trim candidates available: {len(broad_candidate_syms)} "
+            "[dim](module LLM dimension not requested)[/dim]"
+        )
 
     from autokernel.resolve import _running_config_symbols
 
@@ -533,9 +563,10 @@ def propose(
     running_cfg_path = base_config or snap.running_config_path
     running = _running_config_symbols(running_cfg_path)
     candidates = [(s, running.get(s, "y")) for s in candidate_syms]
+    broad_candidates = [(s, running.get(s, "y")) for s in broad_candidate_syms]
 
     # ── deterministic proposals ─────────────────────────────────────────
-    det = deterministic_proposals(snap, candidates)
+    det = deterministic_proposals(snap, broad_candidates)
     if no_cpu_tune:
         from autokernel.models import ProposalSource as _PS
 
@@ -561,7 +592,9 @@ def propose(
     # Track everything we drop from consideration so the consumer sees it.
     not_considered: list[str] = []
 
-    if skip_llm:
+    if "modules" not in requested_dims:
+        llm_pool = []
+    elif skip_llm:
         not_considered = [s for s, _ in llm_pool]
     elif max_candidates and len(llm_pool) > max_candidates:
         console.print(
@@ -573,7 +606,6 @@ def propose(
         llm_pool = llm_pool[:max_candidates]
 
     # ── LLM proposals (modules dimension) ──────────────────────────────
-    requested_dims = _parse_dimensions(dimension)
     llm: list = []
     if "modules" in requested_dims and not skip_llm and llm_pool:
         # Resolve model + service tier via the LLM-config module so the user

@@ -16,24 +16,37 @@ from autokernel.models import (
 )
 
 
-def _proposal(config: str, proposed: str = "n") -> RemovalProposal:
+def _proposal(
+    config: str,
+    proposed: str = "n",
+    *,
+    current: str | None = None,
+    source: ProposalSource = ProposalSource.DETERMINISTIC,
+) -> RemovalProposal:
     return RemovalProposal(
         config=config,
-        current_value="m" if proposed == "n" else "y",
+        current_value=current
+        if current is not None
+        else ("m" if proposed == "n" else "y"),
         proposed_value=proposed,
         reason="not present on this host",
         risk=RiskLevel.LOW,
         confidence=0.95,
-        source=ProposalSource.DETERMINISTIC,
+        source=source,
         evidence=[],
     )
 
 
 def _accepted(
-    config: str, proposed: str = "n", *, rule: str = "test"
+    config: str,
+    proposed: str = "n",
+    *,
+    current: str | None = None,
+    source: ProposalSource = ProposalSource.DETERMINISTIC,
+    rule: str = "test",
 ) -> ReviewedProposal:
     return ReviewedProposal(
-        proposal=_proposal(config, proposed),
+        proposal=_proposal(config, proposed, current=current, source=source),
         decision=ReviewDecision.ACCEPT,
         reviewer=Reviewer.POLICY,
         rule=rule,
@@ -158,12 +171,20 @@ def test_kfrag_emits_choice_option_as_y(tmp_path: Path):
     merge_config + olddefconfig flip the others to =n."""
     rs = ReviewSet(
         base_diff_path=tmp_path / "p.json",
-        accepted=[_accepted("CONFIG_PREEMPT_VOLUNTARY", proposed="PREEMPT_VOLUNTARY")],
+        accepted=[
+            _accepted(
+                "CONFIG_PREEMPT",
+                proposed="PREEMPT",
+                current="PREEMPT_VOLUNTARY",
+                source=ProposalSource.CHOICE,
+            )
+        ],
     )
     out = tmp_path / "choice.kfrag"
     header = write_kfrag(out, rs, snapshot_dir=tmp_path, autonomy="advise")
     text = out.read_text()
-    assert "CONFIG_PREEMPT_VOLUNTARY=y" in text
+    assert "# CONFIG_PREEMPT_VOLUNTARY is not set" in text
+    assert "CONFIG_PREEMPT=y" in text
     assert header.n_other == 1
 
 

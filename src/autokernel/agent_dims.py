@@ -359,7 +359,78 @@ def _write_cached(path: Path | None, proposals: list[RemovalProposal]) -> None:
     path.write_text(json.dumps(payload, indent=2))
 
 
+def _prompt_cache_signature(
+    *,
+    evidence: str,
+    recipe_block: str,
+    batch_signature: str,
+) -> str:
+    """Cache salt for all prompt inputs that can change a decision.
+
+    The raw batch signature captures the Kconfig surface/current values. The
+    evidence and recipe blocks capture workload, threat, module strategy,
+    aggression, and host facts. Without this salt, a cached vm-guest answer can
+    be replayed for a later laptop run over the same symbols.
+    """
+    return "\n".join((evidence, recipe_block, batch_signature))
+
+
 # ── propose_choices ───────────────────────────────────────────────────────
+
+
+CHOICE_OPTION_ALLOWLIST: tuple[str, ...] = (
+    # Latency / scheduler
+    "PREEMPT_NONE",
+    "PREEMPT_VOLUNTARY",
+    "PREEMPT",
+    "PREEMPT_RT",
+    # Timer frequency
+    "HZ_100",
+    "HZ_250",
+    "HZ_300",
+    "HZ_1000",
+    # Compiler optimization mode
+    "CC_OPTIMIZE_FOR_PERFORMANCE",
+    "CC_OPTIMIZE_FOR_SIZE",
+    # Slab allocator
+    "SLAB",
+    "SLUB",
+    "SLOB",
+    # Compression defaults that affect boot/package size
+    "KERNEL_GZIP",
+    "KERNEL_BZIP2",
+    "KERNEL_LZMA",
+    "KERNEL_XZ",
+    "KERNEL_LZO",
+    "KERNEL_LZ4",
+    "KERNEL_ZSTD",
+    # TCP congestion default choices commonly exposed by Kconfig
+    "DEFAULT_CUBIC",
+    "DEFAULT_RENO",
+    "DEFAULT_BBR",
+    # CPU frequency governor defaults
+    "CPU_FREQ_DEFAULT_GOV_PERFORMANCE",
+    "CPU_FREQ_DEFAULT_GOV_POWERSAVE",
+    "CPU_FREQ_DEFAULT_GOV_USERSPACE",
+    "CPU_FREQ_DEFAULT_GOV_ONDEMAND",
+    "CPU_FREQ_DEFAULT_GOV_CONSERVATIVE",
+    "CPU_FREQ_DEFAULT_GOV_SCHEDUTIL",
+)
+
+
+def _eligible_choices(
+    surface: KconfigSurface, ctx: OptimizationContext
+) -> list[ChoiceGroup]:
+    """Filter to high-impact choice groups worth LLM tokens."""
+    extra: set[str] = set()
+    wspec = workload_recipes.get(ctx.workload.value)
+    if wspec is not None:
+        extra |= {r.symbol for r in wspec.recipes}
+    tspec = threat_recipes.get(ctx.threat.value)
+    if tspec is not None:
+        extra |= {r.symbol for r in tspec.recipes}
+    allow = set(CHOICE_OPTION_ALLOWLIST) | extra
+    return [c for c in surface.choices if any(o.name in allow for o in c.options)]
 
 
 def _format_choice_for_prompt(c: ChoiceGroup) -> str:
@@ -406,7 +477,7 @@ def propose_choices(
     skipped (no proposal emitted). Proposals below the
     ``ctx.aggression`` confidence floor are also dropped.
     """
-    choices = surface.choices
+    choices = _eligible_choices(surface, ctx)
     if max_choices is not None:
         choices = choices[:max_choices]
     if not choices:
@@ -427,9 +498,16 @@ def propose_choices(
             f"{c.name or c.prompt}::{','.join(o.name for o in c.options)}"
             for c in chunk
         )
+        recipe_syms = {o.name for c in chunk for o in c.options}
+        recipe_block = _recipe_block(ctx, recipe_syms)
+        prompt_sig = _prompt_cache_signature(
+            evidence=evidence,
+            recipe_block=recipe_block,
+            batch_signature=batch_sig,
+        )
         cache_path = (
             cache_dir
-            / f"choice-{_batch_cache_key(model, service_tier, batch_sig, history_text=history_text)}.json"
+            / f"choice-{_batch_cache_key(model, service_tier, prompt_sig, history_text=history_text)}.json"
             if cache_dir is not None
             else None
         )
@@ -445,8 +523,6 @@ def propose_choices(
         if agent is None:
             agent = _build_choice_agent(model, service_tier)
 
-        recipe_syms = {o.name for c in chunk for o in c.options}
-        recipe_block = _recipe_block(ctx, recipe_syms)
         prompt = (
             f"{evidence}\n\n{recipe_block}\n\n"
             f"# Pick one option for each of the {len(chunk)} choice group(s) below.\n\n"
@@ -697,9 +773,15 @@ def propose_toggles(
         batch_idx = i // batch_size + 1
 
         batch_sig = "|".join(f"{t.name}={t.current_value}" for t in chunk)
+        recipe_block = _recipe_block(ctx, {t.name for t in chunk})
+        prompt_sig = _prompt_cache_signature(
+            evidence=evidence,
+            recipe_block=recipe_block,
+            batch_signature=batch_sig,
+        )
         cache_path = (
             cache_dir
-            / f"toggle-{_batch_cache_key(model, service_tier, batch_sig, history_text=history_text)}.json"
+            / f"toggle-{_batch_cache_key(model, service_tier, prompt_sig, history_text=history_text)}.json"
             if cache_dir is not None
             else None
         )
@@ -715,7 +797,6 @@ def propose_toggles(
         if agent is None:
             agent = _build_toggle_agent(model, service_tier)
 
-        recipe_block = _recipe_block(ctx, {t.name for t in chunk})
         prompt = (
             f"{evidence}\n\n{recipe_block}\n\n"
             f"# Decide y or n for each of the {len(chunk)} toggle(s) below.\n\n"
@@ -817,9 +898,15 @@ def propose_tunables(
         batch_idx = i // batch_size + 1
 
         batch_sig = "|".join(f"{t.name}={t.current_value}" for t in chunk)
+        recipe_block = _recipe_block(ctx, {t.name for t in chunk})
+        prompt_sig = _prompt_cache_signature(
+            evidence=evidence,
+            recipe_block=recipe_block,
+            batch_signature=batch_sig,
+        )
         cache_path = (
             cache_dir
-            / f"tunable-{_batch_cache_key(model, service_tier, batch_sig, history_text=history_text)}.json"
+            / f"tunable-{_batch_cache_key(model, service_tier, prompt_sig, history_text=history_text)}.json"
             if cache_dir is not None
             else None
         )
@@ -835,7 +922,6 @@ def propose_tunables(
         if agent is None:
             agent = _build_tunable_agent(model, service_tier)
 
-        recipe_block = _recipe_block(ctx, {t.name for t in chunk})
         prompt = (
             f"{evidence}\n\n{recipe_block}\n\n"
             f"# Pick a value for each of the {len(chunk)} tunable(s) below.\n\n"

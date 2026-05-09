@@ -21,7 +21,8 @@ style, and Debian's `make bindeb-pkg`.
 > `--preset=NAME` or per-axis flags. See [docs/ROADMAP.md](docs/ROADMAP.md)
 > for the layer-by-layer arc, [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 > for how the pieces fit together, [docs/AGENTS.md](docs/AGENTS.md)
-> for the LLM agent reference, and [docs/PGO.md](docs/PGO.md) for the
+> for the LLM agent reference, [docs/LLM_EFFICIENCY_PLAN.md](docs/LLM_EFFICIENCY_PLAN.md)
+> for the evidence-first LLM plan, and [docs/PGO.md](docs/PGO.md) for the
 > v0.17 profile-guided optimization design.
 
 [![tests](https://github.com/mjbommar/autokernel/actions/workflows/test.yml/badge.svg)](https://github.com/mjbommar/autokernel/actions/workflows/test.yml)
@@ -72,6 +73,16 @@ uv run pre-commit run --all-files
 scripts/validate-docker.sh
 scripts/validate-qemu.sh /path/to/linux-source  # uses arch/x86/boot/bzImage
 scripts/qemu-busybox-shell.sh /path/to/linux-source  # interactive BusyBox shell
+```
+
+For a real host build and optional one-shot reboot into the LLM-optimized
+kernel, see [docs/HARDWARE_BOOT.md](docs/HARDWARE_BOOT.md):
+
+```bash
+scripts/hardware-reboot-smoke.sh                 # build + VM boot-test only
+uv run python scripts/hardware-reboot-smoke.py   # same flow with Rich build monitor
+scripts/hardware-reboot-smoke.sh --install       # install + arm one-shot GRUB
+scripts/hardware-reboot-smoke.sh --install --reboot --yes
 ```
 
 The Docker validation image runs the same static checks and pytest suite
@@ -149,16 +160,15 @@ $ autokernel scan /tmp/myhost
 $ autokernel propose /tmp/myhost --autonomy advise
 auto-applied (8): …      # high-confidence deterministic trims
 needs review (17): …     # LLM proposals — tagged risk + confidence
-9818 candidate symbol(s) deferred (re-run with --max-candidates higher to widen)
+9818 candidate symbol(s) deferred (module-trim LLM cost guard)
 wrote /tmp/myhost/proposal.json
 
-# 2b. (v0.13) ALL FOUR Kconfig dimensions, not just trims. Workload-aware:
+# 2b. Workload-aware LLM tuning for bounded Kconfig dimensions:
 $ autokernel propose /tmp/myhost \
-    --dimension=all --workload=desktop \
+    --dimension=choices,toggles,tunables --workload=desktop \
     --kernel-source ~/.cache/autokernel/kernels/linux-6.19
 CPU tune: Intel Core Ultra 7 165H → CONFIG_X86_NATIVE_CPU=y (microarch: METEORLAKE)
 deterministic proposals: 9
-LLM proposals: 19           # tristate trims (existing dimension)
 choice proposals:  24       # PREEMPT_VOLUNTARY → PREEMPT, HZ_250 → HZ_1000, …
 toggle proposals:  3        # X86_AMD_PSTATE: y→n (Intel host), HYPERV: y→n (bare metal), …
 tunable proposals: 3        # NR_CPUS: 8192 → 32, LOCALVERSION="", …
@@ -192,6 +202,11 @@ $ autokernel build /tmp/myhost --kernel-source ~/.cache/autokernel/kernels/linux
 $ autokernel build /tmp/myhost --kernel-source … --execute
 ✓ built — linux-image-6.19.0_amd64.deb
 ```
+
+For a real hardware smoke build, prefer `--dimension=choices,toggles,tunables`
+plus `build --localmodconfig`: the LLM tunes bounded policy/sizing decisions,
+while `localmodconfig` trims modules from live system use. The module-trim LLM
+path is still available, but `--max-candidates` is only a cost guard.
 
 Cost-sensitive runs: `autokernel propose --skip-llm` produces a deterministic-only
 proposal. LLM batches are content-addressed and cached at `<snapshot>/batches/`,

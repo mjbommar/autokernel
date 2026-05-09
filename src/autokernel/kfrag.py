@@ -30,6 +30,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from autokernel.models import (
+    ProposalSource,
     ReviewDecision,
     ReviewedProposal,
     ReviewSet,
@@ -150,6 +151,9 @@ def write_kfrag(
         for r in others:
             note = _comment_for(r)
             lines.append(f"# {r.proposal.config}: {note}")
+            previous_choice = _previous_choice_symbol(r)
+            if previous_choice is not None:
+                lines.append(f"# {previous_choice} is not set")
             lines.append(
                 _format_assignment(r.proposal.config, r.proposal.proposed_value)
             )
@@ -165,11 +169,9 @@ def _format_assignment(symbol: str, value: str) -> str:
 
     Handles three cases that the multi-dim path produces:
 
-    * Choice option (``"PREEMPT_VOLUNTARY"``) → ``CONFIG_PREEMPT_VOLUNTARY=y``
-      Note: Kconfig choice groups are *implemented* as a set of
-      sibling tristates / bools where exactly one is =y. To select an
-      option you set its symbol to =y; merge_config + olddefconfig
-      flip the others to =n.
+    * Choice option (``"PREEMPT_VOLUNTARY"``) → ``CONFIG_PREEMPT_VOLUNTARY=y``.
+      The writer also unsets the previously-selected sibling when the proposal
+      records one.
     * Numeric (``"250"``, ``"0x10"``) → ``CONFIG_HZ=250``
     * String — anything that contains non-numeric characters and isn't
       a CONFIG_-shaped option → ``CONFIG_LOCALVERSION="-custom"``
@@ -196,6 +198,38 @@ def _format_assignment(symbol: str, value: str) -> str:
     # y/n/m already handled by caller; anything else is a string —
     # quote it.
     return f'{symbol}="{v}"'
+
+
+def _previous_choice_symbol(r: ReviewedProposal) -> str | None:
+    """Return the previously-selected CONFIG for a choice proposal.
+
+    Choice proposals store ``current_value`` as the old bare option name
+    (for example ``PREEMPT_VOLUNTARY``) and ``config`` as the newly selected
+    option (for example ``CONFIG_PREEMPT``). Emitting an explicit unset for the
+    old option keeps the merged config coherent before ``olddefconfig`` has a
+    chance to reconcile the choice.
+    """
+    p = r.proposal
+    if p.source != ProposalSource.CHOICE:
+        return None
+
+    current = p.current_value.strip()
+    proposed = p.proposed_value.strip()
+    if not current or current in {"?", "y", "n", "m"} or current == proposed:
+        return None
+
+    if current.startswith("CONFIG_"):
+        old_symbol = current
+        current_short = current.removeprefix("CONFIG_")
+    else:
+        current_short = current
+        old_symbol = f"CONFIG_{current}"
+
+    if not re.fullmatch(r"[A-Z0-9_]+", current_short):
+        return None
+    if old_symbol == p.config:
+        return None
+    return old_symbol
 
 
 def _comment_for(r: ReviewedProposal) -> str:

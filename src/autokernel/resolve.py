@@ -37,6 +37,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from autokernel.kconfig_map import candidate_configs
 from autokernel.kconfig_map import resolve_module_to_config
 from autokernel.modinfo import collect_module_info
 from autokernel.models import Snapshot
@@ -313,3 +314,138 @@ def candidate_trims(snap: Snapshot, resolution: ResolutionResult) -> list[str]:
         for sym, val in running.items()
         if val in ("y", "m") and sym not in resolution.required_configs
     )
+
+
+_KO_DEP_RE = re.compile(r"\.ko(?:\.(?:zst|gz|xz))?$")
+
+
+def _module_dep_entries(path: Path | None) -> list[tuple[str, str]]:
+    """Return ``(module_name, source_path)`` pairs from modules.dep.
+
+    ``modules.dep`` lines start with paths like
+    ``kernel/drivers/gpu/drm/i915/i915.ko.zst: ...``. The source path format
+    expected by :func:`candidate_configs` omits the leading ``kernel/`` and
+    the ``.ko`` compression suffix, e.g. ``drivers/gpu/drm/i915/i915``.
+    """
+    if path is None or not path.exists():
+        return []
+    out: list[tuple[str, str]] = []
+    try:
+        for line in path.read_text(errors="replace").splitlines():
+            head = line.split(":", 1)[0].strip()
+            if not head.startswith("kernel/"):
+                continue
+            rel = head.removeprefix("kernel/")
+            source_path = _KO_DEP_RE.sub("", rel)
+            if not source_path or source_path == rel:
+                continue
+            module_name = source_path.rsplit("/", 1)[-1].replace("-", "_")
+            if module_name:
+                out.append((module_name, source_path))
+    except OSError:
+        return []
+    return out
+
+
+_FOCUSED_PATH_PREFIX_SCORE: tuple[tuple[str, int], ...] = (
+    # Clearly optional physical-device classes first. These are the cases
+    # where hardware evidence most often lets the LLM make a confident cut.
+    ("drivers/counter/", 0),
+    ("drivers/watchdog/", 2),
+    ("drivers/auxdisplay/", 4),
+    ("drivers/input/joystick/", 6),
+    ("drivers/staging/", 8),
+    ("drivers/iio/", 10),
+    ("drivers/media/", 12),
+    ("drivers/infiniband/", 14),
+    ("drivers/mtd/", 16),
+    ("drivers/nvmem/", 18),
+    ("drivers/usb/serial/", 20),
+    ("drivers/usb/gadget/", 22),
+    # Hardware families where absence in PCI/USB/DMI tends to be meaningful.
+    ("drivers/gpu/drm/", 30),
+    ("drivers/platform/x86/", 32),
+    ("drivers/bluetooth/", 34),
+    ("drivers/net/wireless/", 36),
+    ("drivers/net/ethernet/", 38),
+    ("drivers/net/usb/", 40),
+    ("drivers/hid/", 42),
+    ("drivers/input/", 44),
+    ("drivers/hwmon/", 46),
+    ("drivers/rtc/", 48),
+    ("drivers/mmc/", 50),
+    ("drivers/ata/", 52),
+    ("drivers/scsi/", 54),
+    ("drivers/nvme/target/", 56),
+    # Optional filesystems/protocols after physical hardware.
+    ("fs/", 70),
+    ("net/bluetooth/", 80),
+    ("net/sched/", 82),
+    ("net/netfilter/", 84),
+    ("net/", 90),
+    # Avoid spending early tokens on core plumbing.
+    ("crypto/", 140),
+    ("lib/", 150),
+    ("kernel/", 160),
+    ("mm/", 170),
+    ("arch/", 180),
+)
+
+
+def _focused_score(source_path: str, current_value: str) -> tuple[int, int, str]:
+    prefix_score = 100
+    for prefix, score in _FOCUSED_PATH_PREFIX_SCORE:
+        if source_path.startswith(prefix):
+            prefix_score = score
+            break
+    # Modules (=m) are usually cheaper and safer trim targets than built-ins.
+    value_score = 0 if current_value == "m" else 25
+    return (prefix_score, value_score, source_path)
+
+
+def focused_candidate_trims(
+    snap: Snapshot,
+    resolution: ResolutionResult,
+    *,
+    broad_candidates: list[str] | None = None,
+    limit: int | None = None,
+) -> list[str]:
+    """High-signal subset of :func:`candidate_trims` for LLM review.
+
+    The broad trim set is "every enabled symbol not proven required", which
+    can be ~10k symbols on a distro kernel. This function narrows the module
+    dimension to symbols that actually correspond to shipped loadable module
+    files in ``modules.dep`` and prioritizes optional hardware/filesystem
+    classes. Load-bearing protection still happens later in policy.
+
+    ``limit`` is only a caller-controlled cost guard. It is deliberately not
+    the default selection mechanism because a hard cap hides candidate-quality
+    bugs instead of fixing them.
+    """
+    running = _running_config_symbols(snap.running_config_path)
+    broad = set(broad_candidates or candidate_trims(snap, resolution))
+
+    ranked: dict[str, tuple[int, int, str]] = {}
+    for module_name, source_path in _module_dep_entries(snap.modules_dep_path):
+        for sym in candidate_configs(module_name, source_path):
+            if sym not in broad:
+                continue
+            val = running.get(sym)
+            if val not in {"y", "m"}:
+                continue
+            score = _focused_score(source_path, val)
+            if sym not in ranked or score < ranked[sym]:
+                ranked[sym] = score
+
+    if not ranked:
+        return sorted(broad)
+
+    ordered = [
+        sym
+        for sym, _score in sorted(
+            ranked.items(), key=lambda item: (item[1][0], item[1][1], item[0])
+        )
+    ]
+    if limit is not None and limit > 0:
+        return ordered[:limit]
+    return ordered
