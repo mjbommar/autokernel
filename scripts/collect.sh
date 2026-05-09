@@ -31,6 +31,12 @@ run() {
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
+software_feature() {
+    # feature<TAB>source<TAB>name<TAB>detail
+    local feature="$1" source="$2" name="$3" detail="${4:-}"
+    printf '%s\t%s\t%s\t%s\n' "$feature" "$source" "$name" "$detail"
+}
+
 # ── identity / kernel ────────────────────────────────────────────────────────
 run uname        uname -a
 run os_release   cat /etc/os-release
@@ -106,6 +112,69 @@ have cryptsetup && run crypt_status bash -c 'for d in /dev/mapper/*; do [ -e "$d
 
 # DKMS — out-of-tree modules that must rebuild against any new kernel
 have dkms && run dkms_status dkms status
+
+# ── software intent: packages/binaries/services that imply late-loaded modules ─
+# lsmod answers "loaded now"; this captures installed/runnable software that can
+# request modules later, e.g. libvirt/Docker netfilter rules after daemon start.
+{
+    for bin in docker dockerd containerd podman nerdctl kubelet kubeadm kubectl crictl \
+        virsh libvirtd virtqemud qemu-system-x86_64 qemu-img iptables ip6tables nft \
+        firewalld ufw; do
+        if have "$bin"; then
+            case "$bin" in
+                docker|dockerd|containerd|podman|nerdctl) feature="containers" ;;
+                kubelet|kubeadm|kubectl|crictl) feature="kubernetes" ;;
+                virsh|libvirtd|virtqemud|qemu-system-x86_64|qemu-img) feature="virtualization" ;;
+                iptables|ip6tables|nft|firewalld|ufw) feature="firewall" ;;
+                *) feature="software" ;;
+            esac
+            software_feature "$feature" binary "$bin" "$(command -v "$bin" 2>/dev/null || true)"
+        fi
+    done
+
+    if have systemctl; then
+        systemctl list-unit-files --no-legend --no-pager 2>/dev/null \
+            | awk '{print $1 "\t" $2}' \
+            | grep -E '^(docker|containerd|podman|libvirtd|virtqemud|virtlogd|virtstoraged|kubelet|microk8s|firewalld|ufw)\.' \
+            | while read -r unit state; do
+                case "$unit" in
+                    docker.*|containerd.*|podman.*) feature="containers" ;;
+                    kubelet.*|microk8s.*) feature="kubernetes" ;;
+                    libvirtd.*|virtqemud.*|virtlogd.*|virtstoraged.*) feature="virtualization" ;;
+                    firewalld.*|ufw.*) feature="firewall" ;;
+                    *) feature="software" ;;
+                esac
+                software_feature "$feature" systemd "$unit" "$state"
+            done
+    fi
+
+    if have dpkg-query; then
+        for pkg in docker.io docker-ce docker-ce-cli containerd containerd.io podman \
+            libvirt-daemon libvirt-daemon-system libvirt-clients qemu-system-x86 \
+            kubelet kubeadm kubectl microk8s nftables iptables firewalld ufw; do
+            dpkg-query -W -f='${db:Status-Abbrev}\t${binary:Package}\t${Version}\n' "$pkg" 2>/dev/null \
+                | awk '$1 ~ /^ii/ { print $2 "\t" $3 }' \
+                | while read -r found version; do
+                    case "$found" in
+                        docker*|containerd*|podman) feature="containers" ;;
+                        kubelet|kubeadm|kubectl|microk8s) feature="kubernetes" ;;
+                        libvirt*|qemu-system-x86) feature="virtualization" ;;
+                        nftables|iptables|firewalld|ufw) feature="firewall" ;;
+                        *) feature="software" ;;
+                    esac
+                    software_feature "$feature" dpkg "$found" "$version"
+                done
+        done
+    elif have rpm; then
+        for pkg in docker docker-ce docker-ce-cli containerd podman libvirt qemu-system-x86 \
+            kubelet kubeadm kubectl nftables iptables firewalld ufw; do
+            if rpm -q "$pkg" >/dev/null 2>&1; then
+                software_feature software rpm "$pkg" "$(rpm -q "$pkg" 2>/dev/null)"
+            fi
+        done
+    fi
+} >"$OUT/software_features" 2>/dev/null
+echo 0 >"$OUT/software_features.rc"
 
 # Firmware actually loaded — try multiple sources because dmesg may be
 # restricted on Ubuntu 22.04+ (kernel.dmesg_restrict=1).

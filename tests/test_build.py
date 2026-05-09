@@ -353,6 +353,17 @@ def test_prepare_with_localmodconfig_runs_extra_steps(tmp_path, monkeypatch):
     snap.mkdir()
     lsmod = snap / "lsmod"
     lsmod.write_text("Module Size Used by\nfoo 1024 0\n")
+    (snap / "software_features").write_text(
+        "containers\tbinary\tdocker\t/usr/bin/docker\n"
+    )
+    (snap / "lspci_vmmnk").write_text(
+        "Slot:\t01:00.0\n"
+        "Class:\t0302\n"
+        "Vendor:\t10de\n"
+        "Device:\t28b9\n"
+        "Module:\tnouveau\n"
+        "Module:\tnova_core\n"
+    )
 
     calls = []
 
@@ -380,11 +391,49 @@ def test_prepare_with_localmodconfig_runs_extra_steps(tmp_path, monkeypatch):
         "localmodconfig",
         "olddefconfig-after-localmodconfig",
     ]
+    localmod_lsmod = snap / "lsmod.localmodconfig"
+    localmod_lsmod_text = localmod_lsmod.read_text()
+    assert "foo 1024 0" in localmod_lsmod_text
+    assert "nf_reject_ipv4 0 0" in localmod_lsmod_text
+    assert "ipt_REJECT 0 0" in localmod_lsmod_text
+    assert "nouveau 0 0" in localmod_lsmod_text
+    assert "nova_core 0 0" in localmod_lsmod_text
+
     # The localmodconfig step must invoke `yes '' | make LSMOD=...`
     lmc_argv = calls[1]
     assert lmc_argv[:2] == ["sh", "-c"]
     assert "localmodconfig" in lmc_argv[2]
-    assert f"LSMOD={lsmod}" in lmc_argv[2]
+    assert f"LSMOD={localmod_lsmod}" in lmc_argv[2]
+
+
+def test_prepare_localmodconfig_does_not_add_late_modules_without_signal(
+    tmp_path, monkeypatch
+):
+    src = _make_fake_kernel_source(tmp_path)
+    cfg = _make_final_config(tmp_path)
+    snap = tmp_path / "snap"
+    snap.mkdir()
+    lsmod = snap / "lsmod"
+    lsmod.write_text("Module Size Used by\nfoo 1024 0\n")
+
+    def _ok(argv, **kwargs):
+        for f in (kwargs.get("stdout"), kwargs.get("stderr")):
+            if hasattr(f, "write"):
+                f.write(b"")
+        return _FakeProcess(returncode=0)
+
+    monkeypatch.setattr(build_mod.subprocess, "run", _ok)
+    result = prepare(
+        source_dir=src,
+        config_path=cfg,
+        snapshot_dir=snap,
+        localmodconfig=True,
+        lsmod_path=lsmod,
+    )
+    assert result.ok
+    localmod_lsmod_text = (snap / "lsmod.localmodconfig").read_text()
+    assert "foo 1024 0" in localmod_lsmod_text
+    assert "nf_reject_ipv4 0 0" not in localmod_lsmod_text
 
 
 def test_prepare_without_localmodconfig_runs_only_olddefconfig(tmp_path, monkeypatch):

@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import shutil
+from pathlib import Path
+
 from autokernel.models import Snapshot
+from autokernel.snapshot import load
 
 
 def test_intel_laptop_basic_shape(intel_laptop: Snapshot):
@@ -96,3 +100,21 @@ def test_modaliases_bus_classified(intel_laptop: Snapshot):
 def test_running_config_path_set(intel_laptop: Snapshot):
     assert intel_laptop.running_config_path is not None
     assert intel_laptop.running_config_path.exists()
+
+
+def test_software_features_parsed(tmp_path: Path):
+    src = Path(__file__).parent / "fixtures" / "intel_laptop"
+    snapdir = tmp_path / "snap"
+    shutil.copytree(src, snapdir)
+    (snapdir / "software_features").write_text(
+        "containers\tbinary\tdocker\t/usr/bin/docker\n"
+        "virtualization\tdpkg\tlibvirt-daemon-system\t10.0\n"
+    )
+
+    snap = load(snapdir)
+
+    by_name = {s.name: s for s in snap.software_features}
+    assert by_name["docker"].feature == "containers"
+    assert by_name["docker"].source == "binary"
+    assert by_name["docker"].detail == "/usr/bin/docker"
+    assert by_name["libvirt-daemon-system"].feature == "virtualization"

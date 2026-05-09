@@ -25,6 +25,7 @@ from autokernel.models import (
     Mount,
     NetworkLink,
     PciDevice,
+    SoftwareFeature,
     Snapshot,
     UsbDevice,
 )
@@ -264,6 +265,32 @@ def _parse_dkms(path: Path) -> list[DkmsModule]:
     return out
 
 
+def _parse_software_features(path: Path) -> list[SoftwareFeature]:
+    out: list[SoftwareFeature] = []
+    seen: set[tuple[str, str, str, str | None]] = set()
+    for line in _read_lines(path):
+        parts = line.split("\t")
+        if len(parts) < 3:
+            continue
+        feature, source, name = (p.strip() for p in parts[:3])
+        detail = parts[3].strip() if len(parts) >= 4 and parts[3].strip() else None
+        if not feature or not source or not name:
+            continue
+        key = (feature, source, name, detail)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(
+            SoftwareFeature(
+                feature=feature,
+                source=source,
+                name=name,
+                detail=detail,
+            )
+        )
+    return out
+
+
 def _parse_firmware(snapdir: Path) -> list[FirmwareLoad]:
     out: list[FirmwareLoad] = []
     seen: set[str] = set()
@@ -424,6 +451,7 @@ def load(snapshot_dir: Path | str) -> Snapshot:
         network=_parse_ip_link(snapdir / "ip_link_j"),
         firmware=_parse_firmware(snapdir),
         dkms=_parse_dkms(snapdir / "dkms_status"),
+        software_features=_parse_software_features(snapdir / "software_features"),
         initramfs_modules=_parse_initramfs_modules(snapdir),
         initramfs_firmware=_parse_initramfs_firmware(snapdir),
         running_config_path=running_cfg_path,

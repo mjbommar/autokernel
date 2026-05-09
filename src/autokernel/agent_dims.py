@@ -265,6 +265,15 @@ def _evidence_block(
         f"# Boot: efi={snap.boot.efi} secure_boot={snap.boot.secure_boot} "
         f"luks={snap.boot.luks_in_chain} root={snap.boot.root_fstype}"
     )
+    if snap.software_features:
+        grouped: dict[str, list[str]] = {}
+        for signal in snap.software_features:
+            grouped.setdefault(signal.feature, []).append(signal.name)
+        summary = "; ".join(
+            f"{feature}={', '.join(sorted(set(names))[:8])}"
+            for feature, names in sorted(grouped.items())
+        )
+        lines.append(f"# Software intent: {summary}")
     if snap.pci:
         gpu_count = sum(
             1 for d in snap.pci if (d.class_id or "").startswith(("0300", "0302"))

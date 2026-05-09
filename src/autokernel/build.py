@@ -331,8 +331,15 @@ def prepare(
     )
 
     if localmodconfig:
-        # Use the snapshot's lsmod when given, else /proc/modules.
-        lsmod = str(lsmod_path) if lsmod_path is not None else "/proc/modules"
+        # Use the snapshot's lsmod when given, else /proc/modules. The copy is
+        # augmented with common late-loaded modules that are required by
+        # firewall/container/libvirt workflows but may not be loaded at scan time.
+        lsmod = str(
+            _write_localmodconfig_lsmod(
+                snapshot_dir=snapshot_dir,
+                lsmod_path=lsmod_path,
+            )
+        )
         lmc_env = dict(env)
         lmc_env["LSMOD"] = lsmod
         # Compose the make argv string: `make CC=clang HOSTCC=clang LSMOD=... localmodconfig`
@@ -378,6 +385,132 @@ _DISTRO_CERT_KEYS: tuple[str, ...] = (
     "CONFIG_SYSTEM_TRUSTED_KEYS",
     "CONFIG_SYSTEM_REVOCATION_KEYS",
 )
+
+
+_LOCALMODCONFIG_LATE_LOAD_MODULES: tuple[str, ...] = (
+    # libvirt, Docker/Podman, VPNs, Kubernetes, and nft/iptables frontends can
+    # request these only when rules are applied after boot. A pure lsmod-driven
+    # localmodconfig pass otherwise trims them and leaves firewall/NAT setup
+    # failing on the first real boot.
+    "br_netfilter",
+    "ip6t_REJECT",
+    "ip6table_filter",
+    "ipt_REJECT",
+    "iptable_filter",
+    "nf_reject_ipv4",
+    "nf_reject_ipv6",
+    "nft_reject",
+    "nft_reject_bridge",
+    "nft_reject_inet",
+    "nft_reject_ipv4",
+    "nft_reject_ipv6",
+    "nft_reject_netdev",
+)
+
+_LOCALMODCONFIG_FIREWALL_SOFTWARE_FEATURES: frozenset[str] = frozenset(
+    {"containers", "kubernetes", "virtualization", "firewall"}
+)
+
+_LOCALMODCONFIG_FIREWALL_RUNTIME_MODULES: frozenset[str] = frozenset(
+    {
+        "bridge",
+        "ip_set",
+        "nf_conntrack",
+        "nf_nat",
+        "nf_tables",
+        "nft_compat",
+        "overlay",
+        "veth",
+        "xt_MASQUERADE",
+        "xt_addrtype",
+        "xt_conntrack",
+    }
+)
+
+
+def _write_localmodconfig_lsmod(
+    *,
+    snapshot_dir: Path,
+    lsmod_path: Path | None,
+) -> Path:
+    source = Path(lsmod_path) if lsmod_path is not None else Path("/proc/modules")
+    text = source.read_text(errors="replace")
+    lines = text.splitlines()
+    seen: set[str] = set()
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("Module "):
+            continue
+        seen.add(stripped.split()[0])
+
+    out = snapshot_dir / "lsmod.localmodconfig"
+    extra_modules = set(_snapshot_hardware_modules(snapshot_dir))
+    if _needs_late_firewall_modules(snapshot_dir=snapshot_dir, loaded_modules=seen):
+        extra_modules.update(_LOCALMODCONFIG_LATE_LOAD_MODULES)
+    with out.open("w") as fh:
+        if lines:
+            fh.write("\n".join(lines) + "\n")
+        else:
+            fh.write("Module Size Used by\n")
+        for module in sorted(extra_modules):
+            if module not in seen:
+                fh.write(f"{module} 0 0\n")
+    return out
+
+
+def _snapshot_hardware_modules(snapshot_dir: Path) -> set[str]:
+    modules: set[str] = set()
+
+    for line in _read_snapshot_lines(snapshot_dir / "lspci_vmmnk"):
+        if line.startswith("Module:"):
+            module = line.split(":", 1)[1].strip()
+            if module:
+                modules.add(module)
+
+    for line in _read_snapshot_lines(snapshot_dir / "sys_bound_drivers"):
+        if "\t" in line:
+            driver = line.rsplit("\t", 1)[1].strip()
+            if driver:
+                modules.add(driver)
+
+    modules.update(_read_snapshot_lines(snapshot_dir / "initramfs_modules"))
+
+    for line in _read_snapshot_lines(snapshot_dir / "module_firmware"):
+        if "\t" in line:
+            module = line.split("\t", 1)[0].strip()
+            if module:
+                modules.add(module)
+
+    return modules
+
+
+def _read_snapshot_lines(path: Path) -> set[str]:
+    try:
+        text = path.read_text(errors="replace")
+    except FileNotFoundError:
+        return set()
+    return {line.strip() for line in text.splitlines() if line.strip()}
+
+
+def _needs_late_firewall_modules(
+    *,
+    snapshot_dir: Path,
+    loaded_modules: set[str],
+) -> bool:
+    if loaded_modules & _LOCALMODCONFIG_FIREWALL_RUNTIME_MODULES:
+        return True
+
+    software_features = snapshot_dir / "software_features"
+    try:
+        lines = software_features.read_text(errors="replace").splitlines()
+    except FileNotFoundError:
+        return False
+
+    for line in lines:
+        feature = line.split("\t", 1)[0].strip()
+        if feature in _LOCALMODCONFIG_FIREWALL_SOFTWARE_FEATURES:
+            return True
+    return False
 
 
 def _strip_missing_distro_cert_paths(config_path: Path, source_dir: Path) -> None:

@@ -356,6 +356,7 @@ def scan(
             f"  loaded modules: {len(snap.loaded_modules)}\n"
             f"  mounts:  {len(snap.mounts)}\n"
             f"  dkms:    {len(snap.dkms)}\n"
+            f"  software signals: {len(snap.software_features)}\n"
             f"  initramfs modules: {len(snap.initramfs_modules)}\n"
             f"  firmware loads: {len(snap.firmware)}\n"
             f"  running config: {snap.running_config_path}\n"

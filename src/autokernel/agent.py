@@ -206,6 +206,12 @@ def _evidence_summary(snap: Snapshot) -> str:
         for d in snap.dkms:
             lines.append(f"  {d.name} {d.version} ({d.status})")
 
+    if snap.software_features:
+        lines.append("# Software intent signals:")
+        for s in snap.software_features[:30]:
+            detail = f" ({s.detail})" if s.detail else ""
+            lines.append(f"  {s.feature}: {s.source}:{s.name}{detail}")
+
     if snap.firmware:
         lines.append(f"# Firmware blobs in use ({len(snap.firmware)}):")
         for fw in snap.firmware[:10]:

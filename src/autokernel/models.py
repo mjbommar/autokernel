@@ -106,6 +106,13 @@ class DkmsModule(_Frozen):
     status: str  # 'installed', 'built', etc.
 
 
+class SoftwareFeature(_Frozen):
+    feature: str  # containers, kubernetes, virtualization, firewall, ...
+    source: str  # binary, systemd, dpkg, rpm
+    name: str
+    detail: str | None = None
+
+
 class BootContext(_Frozen):
     cmdline: str
     cmdline_params: dict[str, str] = Field(default_factory=dict)
@@ -160,6 +167,7 @@ class Snapshot(_Frozen):
 
     firmware: list[FirmwareLoad] = Field(default_factory=list)
     dkms: list[DkmsModule] = Field(default_factory=list)
+    software_features: list[SoftwareFeature] = Field(default_factory=list)
 
     # Modules and firmware files known to be in the initramfs — these are
     # load-bearing for early boot regardless of what's loaded at runtime.
