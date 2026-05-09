@@ -18,8 +18,24 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
-REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd -P)"
+REPO_ROOT="${AUTOKERNEL_HW_REPO_ROOT:-$(cd -- "$SCRIPT_DIR/.." && pwd -P)}"
+
+if [ "${AUTOKERNEL_HW_SCRIPT_SNAPSHOT:-0}" != "1" ]; then
+    SNAPSHOT_RUN_DIR="${AUTOKERNEL_HW_WORK_DIR:-$HOME/.local/share/autokernel/hardware-boot}/tmp"
+    mkdir -p "$SNAPSHOT_RUN_DIR"
+    SNAPSHOT_SCRIPT="$(mktemp "$SNAPSHOT_RUN_DIR/hardware-reboot-smoke.XXXXXX.sh")"
+    cp "$0" "$SNAPSHOT_SCRIPT"
+    chmod +x "$SNAPSHOT_SCRIPT"
+    export AUTOKERNEL_HW_REPO_ROOT="$REPO_ROOT"
+    export AUTOKERNEL_HW_SCRIPT_SNAPSHOT=1
+    export AUTOKERNEL_HW_SCRIPT_COPY="$SNAPSHOT_SCRIPT"
+    exec bash "$SNAPSHOT_SCRIPT" "$@"
+fi
+
 cd "$REPO_ROOT"
+if [ "${AUTOKERNEL_HW_SCRIPT_SNAPSHOT:-0}" = "1" ] && [ -n "${AUTOKERNEL_HW_SCRIPT_COPY:-}" ]; then
+    trap 'rm -f "$AUTOKERNEL_HW_SCRIPT_COPY"' EXIT
+fi
 
 WORK_DIR="${AUTOKERNEL_HW_WORK_DIR:-$HOME/.local/share/autokernel/hardware-boot}"
 SNAPSHOT_DIR="${AUTOKERNEL_HW_SNAPSHOT_DIR:-}"
@@ -276,6 +292,9 @@ cleanup() {
     if [ -n "$SUDO_KEEPALIVE_PID" ]; then
         kill "$SUDO_KEEPALIVE_PID" 2>/dev/null || true
     fi
+    if [ "${AUTOKERNEL_HW_SCRIPT_SNAPSHOT:-0}" = "1" ] && [ -n "${AUTOKERNEL_HW_SCRIPT_COPY:-}" ]; then
+        rm -f "$AUTOKERNEL_HW_SCRIPT_COPY"
+    fi
 }
 trap cleanup EXIT INT TERM
 
@@ -393,24 +412,34 @@ set_config_not_set() {
 derive_grub_entry() {
     local kernel_release="$1"
     local cfg="/boot/grub/grub.cfg"
-    local current title_line title submenu_line submenu distro_name
+    local current grub_cfg_text title_line title submenu_line submenu distro_name
     current="$(uname -r)"
-    [ -r "$cfg" ] || return 1
 
-    title_line="$(
-        grep -F "Linux $current" "$cfg" \
-            | grep "menuentry '" \
-            | grep -v "recovery mode" \
-            | head -n 1 || true
-    )"
-    if [ -n "$title_line" ]; then
-        title="$(printf '%s\n' "$title_line" | sed -E "s/^[[:space:]]*menuentry '([^']+)'.*/\\1/")"
-        title="${title//$current/$kernel_release}"
+    if [ -r "$cfg" ]; then
+        grub_cfg_text="$(cat "$cfg")"
+    elif sudo -n test -r "$cfg" 2>/dev/null; then
+        grub_cfg_text="$(sudo -n cat "$cfg")"
+    else
+        grub_cfg_text=""
     fi
 
-    submenu_line="$(grep -m 1 "submenu 'Advanced options" "$cfg" || true)"
-    if [ -n "$submenu_line" ]; then
-        submenu="$(printf '%s\n' "$submenu_line" | sed -E "s/^[[:space:]]*submenu '([^']+)'.*/\\1/")"
+    if [ -n "$grub_cfg_text" ]; then
+        title_line="$(
+            printf '%s\n' "$grub_cfg_text" \
+                | grep -F "Linux $current" \
+                | grep "menuentry '" \
+                | grep -v "recovery mode" \
+                | head -n 1 || true
+        )"
+        if [ -n "$title_line" ]; then
+            title="$(printf '%s\n' "$title_line" | sed -E "s/^[[:space:]]*menuentry '([^']+)'.*/\\1/")"
+            title="${title//$current/$kernel_release}"
+        fi
+
+        submenu_line="$(printf '%s\n' "$grub_cfg_text" | grep -m 1 "submenu 'Advanced options" || true)"
+        if [ -n "$submenu_line" ]; then
+            submenu="$(printf '%s\n' "$submenu_line" | sed -E "s/^[[:space:]]*submenu '([^']+)'.*/\\1/")"
+        fi
     fi
 
     if [ -n "${title:-}" ]; then
