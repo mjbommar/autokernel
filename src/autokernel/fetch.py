@@ -97,6 +97,19 @@ def _major_minor(release: str) -> str:
     return f"{M}.{m}"
 
 
+def _source_package_version(release: str) -> str:
+    """Version string used by distro binary source packages.
+
+    Ubuntu source packages include the patchlevel in names such as
+    ``linux-source-7.0.0``.  Older callers may still pass a two-component
+    version like ``6.13``; preserve that shape instead of inventing a
+    trailing ``.0``.
+    """
+    base = release.split("-", 1)[0]
+    normalize_kernel_version(base)
+    return base
+
+
 def _kernelorg_url(release: str) -> str:
     M, m, p = normalize_kernel_version(release)
     base = f"https://cdn.kernel.org/pub/linux/kernel/v{M}.x"
@@ -127,11 +140,12 @@ def _plan_apt_get_source(release: str, working_dir: Path) -> FetchPlan:
 def _plan_apt_install_source(
     release: str, spec: DistroSpec, working_dir: Path
 ) -> FetchPlan:
+    version = _source_package_version(release)
     pkg = (spec.kernel_source_package_pattern or "linux-source").format(
-        version=_major_minor(release)
+        version=version
     )
-    target = working_dir / f"linux-source-{_major_minor(release)}"
-    src_tarball = f"/usr/src/linux-source-{_major_minor(release)}.tar.bz2"
+    target = working_dir / f"linux-source-{version}"
+    src_tarball = f"/usr/src/linux-source-{version}.tar.bz2"
     return FetchPlan(
         method=Method.APT_INSTALL_SOURCE,
         description=(

@@ -104,6 +104,20 @@ def test_plan_apt_install_source_includes_install_cmd(tmp_path: Path):
     assert p.needs_root
 
 
+def test_plan_apt_install_source_preserves_patchlevel_for_ubuntu_pkg(tmp_path: Path):
+    info = _info(Family.DEBIAN)
+    p = plan(
+        distro=info,
+        spec=spec_for(info),
+        release="7.0.0-15-generic",
+        working_dir=tmp_path,
+        method=Method.APT_INSTALL_SOURCE,
+    )
+    flat = " ".join(c for cmd in p.commands for c in cmd)
+    assert "linux-source-7.0.0" in flat
+    assert p.target_dir == tmp_path / "linux-source-7.0.0"
+
+
 def test_plan_tarball_uses_kernelorg_url(tmp_path: Path):
     info = _info(Family.FEDORA)
     p = plan(
