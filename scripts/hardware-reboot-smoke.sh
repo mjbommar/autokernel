@@ -60,6 +60,7 @@ THREAT="${AUTOKERNEL_HW_THREAT:-balanced}"
 MODULES_STRATEGY="${AUTOKERNEL_HW_MODULES:-distro}"
 AGGRESSION="${AUTOKERNEL_HW_AGGRESSION:-aggressive}"
 BOOT_TEST_METHOD="${AUTOKERNEL_HW_BOOT_TEST_METHOD:-qemu}"
+NVIDIA_MODE="${AUTOKERNEL_HW_NVIDIA:-auto}"
 
 SKIP_LLM=0
 INSTALL=0
@@ -106,6 +107,7 @@ Options:
   --modules NAME           distro, monolithic, modular (default: distro)
   --aggression NAME        conservative, balanced, aggressive (default: aggressive)
   --boot-test-method NAME  qemu, virtme, or auto (default: qemu)
+  --nvidia MODE            auto, open, proprietary, or off (default: auto)
   --skip-llm               Debug fallback: deterministic-only proposal
   --no-deps                Skip autokernel install-deps --execute
   --install                Install the package and arm one-shot GRUB
@@ -226,6 +228,10 @@ while [ "$#" -gt 0 ]; do
             ;;
         --boot-test-method)
             BOOT_TEST_METHOD="$2"
+            shift 2
+            ;;
+        --nvidia)
+            NVIDIA_MODE="$2"
             shift 2
             ;;
         --skip-llm)
@@ -622,6 +628,7 @@ if [ "$INSTALL" -eq 0 ]; then
     if [ -n "$INSTALL_KERNEL_ENTRY" ]; then
         INSTALL_CMD+=(--kernel-entry "$INSTALL_KERNEL_ENTRY")
     fi
+    INSTALL_CMD+=(--nvidia "$NVIDIA_MODE")
     INSTALL_CMD+=(--execute)
 
     cat <<EOF
@@ -663,12 +670,12 @@ for pkg in "${PACKAGES[@]}"; do
 done
 
 step "Dry-run install plan"
-run_ak install "$SNAPSHOT_DIR" "${PACKAGE_ARGS[@]}" --kernel-entry "$KERNEL_ENTRY"
+run_ak install "$SNAPSHOT_DIR" "${PACKAGE_ARGS[@]}" --kernel-entry "$KERNEL_ENTRY" --nvidia "$NVIDIA_MODE"
 
 confirm "Install these packages into /boot and arm one-shot GRUB entry '$KERNEL_ENTRY'?"
 
 step "Installing package and arming one-shot GRUB"
-sudo_ak install "$SNAPSHOT_DIR" "${PACKAGE_ARGS[@]}" --kernel-entry "$KERNEL_ENTRY" --execute
+sudo_ak install "$SNAPSHOT_DIR" "${PACKAGE_ARGS[@]}" --kernel-entry "$KERNEL_ENTRY" --nvidia "$NVIDIA_MODE" --execute
 
 cat <<EOF
 

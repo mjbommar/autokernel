@@ -135,13 +135,14 @@ have dkms && run dkms_status dkms status
 {
     for bin in docker dockerd containerd podman nerdctl kubelet kubeadm kubectl crictl \
         virsh libvirtd virtqemud qemu-system-x86_64 qemu-img iptables ip6tables nft \
-        firewalld ufw; do
+        firewalld ufw nvidia-smi nvidia-settings prime-select; do
         if have "$bin"; then
             case "$bin" in
                 docker|dockerd|containerd|podman|nerdctl) feature="containers" ;;
                 kubelet|kubeadm|kubectl|crictl) feature="kubernetes" ;;
                 virsh|libvirtd|virtqemud|qemu-system-x86_64|qemu-img) feature="virtualization" ;;
                 iptables|ip6tables|nft|firewalld|ufw) feature="firewall" ;;
+                nvidia-smi|nvidia-settings|prime-select) feature="nvidia" ;;
                 *) feature="software" ;;
             esac
             software_feature "$feature" binary "$bin" "$(command -v "$bin" 2>/dev/null || true)"
@@ -181,6 +182,15 @@ have dkms && run dkms_status dkms status
                     software_feature "$feature" dpkg "$found" "$version"
                 done
         done
+        for pattern in 'nvidia-driver-*' 'nvidia-dkms-*' 'nvidia-kernel-source-*' \
+            'nvidia-utils-*' 'libnvidia-compute-*' 'linux-modules-nvidia-*' \
+            'linux-objects-nvidia-*'; do
+            dpkg-query -W -f='${db:Status-Abbrev}\t${binary:Package}\t${Version}\n' "$pattern" 2>/dev/null \
+                | awk '$1 ~ /^ii/ { print $2 "\t" $3 }' \
+                | while read -r found version; do
+                    software_feature nvidia dpkg "$found" "$version"
+                done
+        done
     elif have rpm; then
         for pkg in docker docker-ce docker-ce-cli containerd podman libvirt qemu-system-x86 \
             kubelet kubeadm kubectl nftables iptables firewalld ufw; do
@@ -188,6 +198,11 @@ have dkms && run dkms_status dkms status
                 software_feature software rpm "$pkg" "$(rpm -q "$pkg" 2>/dev/null)"
             fi
         done
+        rpm -qa 2>/dev/null \
+            | grep -E '^(nvidia|xorg-x11-drv-nvidia|akmod-nvidia|kmod-nvidia)' \
+            | while read -r found; do
+                software_feature nvidia rpm "$found" "$found"
+            done
     fi
 } >"$OUT/software_features" 2>/dev/null
 echo 0 >"$OUT/software_features.rc"

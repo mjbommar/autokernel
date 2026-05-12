@@ -24,6 +24,11 @@ The script is intentionally conservative about system mutation:
 - `--install` installs the package and arms a one-shot GRUB entry
 - `--install --reboot` does the same, then reboots immediately
 - it asks `sudo -v` once and keeps the sudo timestamp alive during long builds
+- NVIDIA driver handling defaults to `--nvidia auto`: if NVIDIA hardware and
+  driver usage are detected, install adds a matching DKMS driver package,
+  builds the modules for the custom kernel release, verifies them, and refreshes
+  initramfs before GRUB is armed. Use `--nvidia open`, `--nvidia proprietary`,
+  or `--nvidia off` to override.
 
 ## Default Optimizer Path
 

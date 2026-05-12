@@ -40,6 +40,7 @@ from pathlib import Path
 
 from autokernel.bootloader import Bootloader
 from autokernel.distro import DistroInfo, DistroSpec, Family
+from autokernel.nvidia import NvidiaDriverPlan
 
 
 # ── data model ──────────────────────────────────────────────────────────────
@@ -166,6 +167,64 @@ def _install_package_step(
     )
 
 
+def _nvidia_steps(distro: DistroInfo, plan: NvidiaDriverPlan) -> list[InstallStep]:
+    if distro.family != Family.DEBIAN:
+        return []
+
+    return [
+        InstallStep(
+            name="install_nvidia_driver",
+            argv=["apt", "install", "-y", plan.package_name],
+            description=(
+                f"Install/upgrade {plan.package_name} so NVIDIA user-space and "
+                f"DKMS kernel modules match for driver branch {plan.branch}."
+            ),
+            timeout=1800.0,
+        ),
+        InstallStep(
+            name="build_nvidia_dkms",
+            argv=["dkms", "autoinstall", "-k", plan.kernel_release],
+            description=(
+                f"Build NVIDIA {plan.flavor} DKMS modules for "
+                f"{plan.kernel_release} before the first reboot."
+            ),
+            timeout=1800.0,
+        ),
+        InstallStep(
+            name="verify_nvidia_modules",
+            argv=[
+                "bash",
+                "-c",
+                (
+                    "set -e; "
+                    f"k={_sh_single_quote(plan.kernel_release)}; "
+                    "for m in nvidia nvidia_modeset nvidia_drm nvidia_uvm; do "
+                    'modinfo -k "$k" "$m" >/dev/null; '
+                    "done"
+                ),
+            ],
+            description=(
+                f"Verify NVIDIA modules are present under /lib/modules/"
+                f"{plan.kernel_release}."
+            ),
+            timeout=60.0,
+        ),
+        InstallStep(
+            name="refresh_initramfs",
+            argv=["update-initramfs", "-u", "-k", plan.kernel_release],
+            description=(
+                f"Refresh initramfs for {plan.kernel_release} after DKMS module "
+                "installation."
+            ),
+            timeout=600.0,
+        ),
+    ]
+
+
+def _sh_single_quote(value: str) -> str:
+    return "'" + value.replace("'", "'\"'\"'") + "'"
+
+
 def _regenerate_step(bootloader: Bootloader) -> InstallStep | None:
     argv = bootloader.regenerate_cmd()
     if argv is None:
@@ -208,6 +267,7 @@ def build_plan(
     package_paths: list[Path],
     kernel_entry: str | None = None,
     enable_probation: bool = True,
+    nvidia_plan: NvidiaDriverPlan | None = None,
 ) -> InstallPlan:
     """Compose the full install plan.
 
@@ -251,6 +311,8 @@ def build_plan(
         _backup_step(Path("/"), bootloader),
         install_step,
     ]
+    if nvidia_plan is not None:
+        steps.extend(_nvidia_steps(distro, nvidia_plan))
     if regen_step is not None:
         steps.append(regen_step)
 

@@ -204,6 +204,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         default=_env_default("AUTOKERNEL_HW_BOOT_TEST_METHOD", "qemu"),
         choices=("qemu", "virtme", "auto"),
     )
+    parser.add_argument(
+        "--nvidia",
+        default=_env_default("AUTOKERNEL_HW_NVIDIA", "auto"),
+        choices=("auto", "open", "proprietary", "off"),
+    )
     parser.add_argument("--skip-llm", action="store_true")
     parser.add_argument("--no-deps", action="store_true")
     parser.add_argument("--install", action="store_true")
@@ -482,6 +487,7 @@ def _install_command(
     packages: Iterable[Path],
     kernel_entry: str,
     *,
+    nvidia: str,
     execute: bool,
 ) -> list[str]:
     cmd = _direct_autokernel(repo_root, "install", str(snapshot_dir))
@@ -489,6 +495,7 @@ def _install_command(
         cmd += ["--package", str(package)]
     if kernel_entry:
         cmd += ["--kernel-entry", kernel_entry]
+    cmd += ["--nvidia", nvidia]
     if execute:
         cmd.append("--execute")
     return cmd
@@ -882,6 +889,7 @@ def main(argv: list[str] | None = None) -> int:
                         snapshot_dir,
                         packages,
                         entry,
+                        nvidia=args.nvidia,
                         execute=True,
                     ),
                     env,
@@ -909,6 +917,7 @@ def main(argv: list[str] | None = None) -> int:
                 snapshot_dir,
                 packages,
                 entry,
+                nvidia=args.nvidia,
                 execute=True,
             )
             run_command(

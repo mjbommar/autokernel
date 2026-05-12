@@ -85,6 +85,13 @@ scripts/hardware-reboot-smoke.sh --install       # install + arm one-shot GRUB
 scripts/hardware-reboot-smoke.sh --install --reboot --yes
 ```
 
+NVIDIA laptops/desktops are handled during install: if the snapshot shows
+NVIDIA hardware or NVIDIA driver usage, `autokernel install --nvidia=auto`
+adds the matching DKMS driver package, builds `nvidia.ko` for the custom
+kernel release, verifies the modules exist, and refreshes the initramfs before
+arming GRUB. Use `--nvidia=open` or `--nvidia=proprietary` to force a flavor,
+or `--nvidia=off` to disable this handling.
+
 The Docker validation image runs the same static checks and pytest suite
 inside Ubuntu 24.04 with QEMU installed:
 

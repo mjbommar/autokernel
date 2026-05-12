@@ -49,6 +49,7 @@ from autokernel import fetch as fetch_mod
 from autokernel import install as install_mod
 from autokernel import installdeps as installdeps_mod
 from autokernel import llm as llm_mod
+from autokernel import nvidia as nvidia_mod
 from autokernel import preflight as preflight_mod
 from autokernel import rollback as rollback_mod
 from autokernel import snapshot as snap_mod
@@ -1607,6 +1608,17 @@ def install(
             help="Don't require a recent successful `boot-test` for this snapshot. Override only when you know what you're doing."
         ),
     ] = False,
+    nvidia: Annotated[
+        nvidia_mod.NvidiaMode,
+        typer.Option(
+            "--nvidia",
+            help=(
+                "NVIDIA handling for custom-kernel installs: auto preserves the "
+                "detected driver flavor, open/proprietary force a DKMS flavor, "
+                "off disables NVIDIA handling."
+            ),
+        ),
+    ] = nvidia_mod.NvidiaMode.AUTO,
 ) -> None:
     """Install a built kernel package with one-shot probation, or commit a successful boot."""
     import os
@@ -1615,6 +1627,7 @@ def install(
     distro = detect_distro()
     spec = spec_for(distro)
     bootloader = bootloader_mod.detect()
+    snap = snap_mod.load(snapshot_dir)
 
     # ── commit path ─────────────────────────────────────────────────────
     if commit:
@@ -1660,7 +1673,6 @@ def install(
 
     # ── pre-flight (optional skip) ──────────────────────────────────────
     if not skip_preflight:
-        snap = snap_mod.load(snapshot_dir)
         run = preflight_mod.run_checks(
             tags={"always", "install"},
             snapshot=snap,
@@ -1722,6 +1734,15 @@ def install(
             f"method={bt_record.get('method', '?')})[/dim]"
         )
 
+    nvidia_plan = nvidia_mod.plan_nvidia_support(
+        snapshot=snap,
+        distro=distro,
+        package_paths=package,
+        mode=nvidia,
+    )
+    if nvidia_plan is not None:
+        _render_nvidia_install_plan(nvidia_plan)
+
     # ── plan + render + (maybe) execute ─────────────────────────────────
     plan = install_mod.build_plan(
         distro=distro,
@@ -1730,6 +1751,7 @@ def install(
         package_paths=package,
         kernel_entry=kernel_entry,
         enable_probation=not no_probation,
+        nvidia_plan=nvidia_plan,
     )
     _render_install_plan(plan, distro=distro, bootloader=bootloader, mode="install")
 
@@ -1835,6 +1857,26 @@ def _find_latest_built_packages(snapshot_dir: Path) -> list[Path]:
     for pat in ("linux-image-*.deb", "kernel-*.rpm", "linux-*.pkg.tar.zst"):
         candidates.extend(snapshot_dir.glob(pat))
     return sorted(candidates)
+
+
+def _render_nvidia_install_plan(plan: nvidia_mod.NvidiaDriverPlan) -> None:
+    evidence = ", ".join(plan.evidence[:5])
+    if len(plan.evidence) > 5:
+        evidence += ", …"
+    console.print(
+        Panel.fit(
+            "\n".join(
+                [
+                    "[cyan]NVIDIA custom-kernel support enabled[/cyan]",
+                    f"  target kernel: {plan.kernel_release}",
+                    f"  driver:        {plan.package_name} ({plan.flavor})",
+                    f"  reason:        {plan.reason}",
+                    f"  evidence:      {evidence or 'n/a'}",
+                ]
+            ),
+            title="nvidia",
+        )
+    )
 
 
 def _render_install_plan(plan, *, distro, bootloader, mode: str) -> None:
