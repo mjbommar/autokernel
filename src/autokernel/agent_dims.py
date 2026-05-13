@@ -36,6 +36,7 @@ from typing import Literal, cast
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 
+from autokernel.audio import render_audio_summary
 from autokernel.kconfig_walk import (
     BoolToggle,
     ChoiceGroup,
@@ -265,6 +266,14 @@ def _evidence_block(
         f"# Boot: efi={snap.boot.efi} secure_boot={snap.boot.secure_boot} "
         f"luks={snap.boot.luks_in_chain} root={snap.boot.root_fstype}"
     )
+    if snap.system.chassis_type is not None:
+        lines.append(
+            "# System: "
+            f"vendor={snap.system.sys_vendor or '-'} "
+            f"product={snap.system.product_name or '-'} "
+            f"chassis_type={snap.system.chassis_type}"
+        )
+    lines.append(render_audio_summary(snap.audio))
     if snap.software_features:
         grouped: dict[str, list[str]] = {}
         for signal in snap.software_features:

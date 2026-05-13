@@ -1,0 +1,4 @@
+audio	binary	pipewire	/usr/bin/pipewire
+audio	binary	wireplumber	/usr/bin/wireplumber
+audio	dpkg	alsa-ucm-conf	1.2.14
+bluetooth	binary	bluetoothctl	/usr/bin/bluetoothctl

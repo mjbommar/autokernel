@@ -35,6 +35,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+from autokernel.audio import AUDIO_KEEP_MODULES
+
 
 REPRO_TIMESTAMP_DEFAULT = "1970-01-01T00:00:00Z"
 REPRO_USER_DEFAULT = "autokernel"
@@ -447,6 +449,8 @@ def _write_localmodconfig_lsmod(
     extra_modules = set(_snapshot_hardware_modules(snapshot_dir))
     if _needs_late_firewall_modules(snapshot_dir=snapshot_dir, loaded_modules=seen):
         extra_modules.update(_LOCALMODCONFIG_LATE_LOAD_MODULES)
+    if _needs_late_audio_modules(snapshot_dir=snapshot_dir, loaded_modules=seen):
+        extra_modules.update(AUDIO_KEEP_MODULES)
     with out.open("w") as fh:
         if lines:
             fh.write("\n".join(lines) + "\n")
@@ -511,6 +515,52 @@ def _needs_late_firewall_modules(
         if feature in _LOCALMODCONFIG_FIREWALL_SOFTWARE_FEATURES:
             return True
     return False
+
+
+def _needs_late_audio_modules(
+    *,
+    snapshot_dir: Path,
+    loaded_modules: set[str],
+) -> bool:
+    if any(_looks_like_audio_module(module) for module in loaded_modules):
+        return True
+
+    for line in _read_snapshot_lines(snapshot_dir / "lspci_vmmnk"):
+        if line.startswith("Class:") and line.split(":", 1)[1].strip().startswith(
+            ("0401", "0403")
+        ):
+            return True
+        if line.startswith("Device:") and "audio" in line.lower():
+            return True
+        if line.startswith("Driver:") and _looks_like_audio_module(
+            line.split(":", 1)[1].strip()
+        ):
+            return True
+
+    asound_cards = "\n".join(_read_snapshot_lines(snapshot_dir / "asound_cards"))
+    if asound_cards and "no soundcards" not in asound_cards.lower():
+        return True
+
+    if _read_snapshot_lines(snapshot_dir / "asound_pcm"):
+        return True
+
+    for line in _read_snapshot_lines(snapshot_dir / "dev_snd"):
+        if any(token in line for token in ("controlC", "pcmC", "seq", "timer")):
+            return True
+
+    for line in _read_snapshot_lines(snapshot_dir / "software_features"):
+        feature = line.split("\t", 1)[0].strip()
+        if feature in {"audio", "desktop", "bluetooth"}:
+            return True
+
+    return False
+
+
+def _looks_like_audio_module(module: str) -> bool:
+    lower = module.lower().replace("-", "_")
+    return lower.startswith(("snd", "soundwire")) or any(
+        frag in lower for frag in ("_sof", "sof_", "hda", "sdw", "sdca")
+    )
 
 
 def _strip_missing_distro_cert_paths(config_path: Path, source_dir: Path) -> None:

@@ -118,3 +118,12 @@ def test_software_features_parsed(tmp_path: Path):
     assert by_name["docker"].source == "binary"
     assert by_name["docker"].detail == "/usr/bin/docker"
     assert by_name["libvirt-daemon-system"].feature == "virtualization"
+
+
+def test_audio_context_detects_user_facing_laptop_audio(intel_laptop: Snapshot):
+    audio = intel_laptop.audio
+    assert audio.useful is True
+    assert audio.confidence >= 0.95
+    assert audio.role == "internal-sof"
+    assert any("PCI audio" in item for item in audio.evidence)
+    assert "snd_sof_pci_intel_mtl" in audio.modules

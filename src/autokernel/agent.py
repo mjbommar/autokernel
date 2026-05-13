@@ -29,6 +29,7 @@ from typing import cast
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 
+from autokernel.audio import render_audio_summary
 from autokernel.llm import ServiceTier, normalize_service_tier
 from autokernel.models import (
     ProposalSource,
@@ -46,7 +47,7 @@ BATCH_SIZE = int(os.environ.get("AUTOKERNEL_BATCH_SIZE", "60"))
 DEFAULT_SERVICE_TIER = normalize_service_tier(os.environ.get("AUTOKERNEL_SERVICE_TIER"))
 # Bump when the system prompt changes in a way that should invalidate cached
 # batches (different decision rules → different proposals).
-SYSTEM_PROMPT_VERSION = "v1"
+SYSTEM_PROMPT_VERSION = "v2"
 
 
 class _ProposalDraft(BaseModel):
@@ -161,6 +162,14 @@ def _evidence_summary(snap: Snapshot) -> str:
         f"# Boot: efi={snap.boot.efi} secure_boot={snap.boot.secure_boot} "
         f"luks={snap.boot.luks_in_chain} root={snap.boot.root_fstype} boot={snap.boot.boot_fstype}"
     )
+    if snap.system.chassis_type is not None:
+        lines.append(
+            "# System: "
+            f"vendor={snap.system.sys_vendor or '-'} "
+            f"product={snap.system.product_name or '-'} "
+            f"chassis_type={snap.system.chassis_type}"
+        )
+    lines.append(render_audio_summary(snap.audio))
 
     lines.append("# PCI devices:")
     for d in snap.pci[:50]:
@@ -229,7 +238,7 @@ def _format_batch(symbols: list[tuple[str, str]]) -> str:
 
 
 def _batch_cache_key(
-    model: str, service_tier: str | None, chunk: list[tuple[str, str]]
+    model: str, service_tier: str | None, evidence: str, chunk: list[tuple[str, str]]
 ) -> str:
     """Content-address a batch: same (model, service_tier, prompt version,
     symbol set) yields the same key. Service tier is part of the key because
@@ -241,6 +250,7 @@ def _batch_cache_key(
             "model": model,
             "service_tier": service_tier,
             "prompt_version": SYSTEM_PROMPT_VERSION,
+            "evidence_sha256": hashlib.sha256(evidence.encode()).hexdigest(),
             "symbols": sorted(chunk),
         },
         sort_keys=True,
@@ -300,7 +310,7 @@ def propose(
         batch_idx = i // batch_size + 1
 
         cache_path = (
-            cache_dir / f"{_batch_cache_key(model, service_tier, chunk)}.json"
+            cache_dir / f"{_batch_cache_key(model, service_tier, evidence, chunk)}.json"
             if cache_dir is not None
             else None
         )

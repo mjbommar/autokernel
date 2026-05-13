@@ -373,6 +373,8 @@ def scan(
             f"  mounts:  {len(snap.mounts)}\n"
             f"  dkms:    {len(snap.dkms)}\n"
             f"  software signals: {len(snap.software_features)}\n"
+            f"  audio:   {'useful' if snap.audio.useful else 'unused'}"
+            f" ({snap.audio.role}, conf={snap.audio.confidence:.2f})\n"
             f"  initramfs modules: {len(snap.initramfs_modules)}\n"
             f"  firmware loads: {len(snap.firmware)}\n"
             f"  running config: {snap.running_config_path}\n"
@@ -577,6 +579,12 @@ def propose(
         f"unresolved modules: {len(resolution.unresolved_modules)}  "
         f"unresolved modaliases: {len(resolution.unresolved_modaliases)}"
     )
+    if snap.audio.useful:
+        console.print(
+            f"  audio keep-set: {snap.audio.role} "
+            f"(conf={snap.audio.confidence:.2f}; "
+            "protecting HDA/SOF/SoundWire/codec/USB audio)"
+        )
 
     requested_dims = _parse_dimensions(dimension)
     broad_candidate_syms = candidate_trims(snap, resolution)

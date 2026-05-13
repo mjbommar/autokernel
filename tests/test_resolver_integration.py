@@ -12,6 +12,9 @@ are looked up against the fixture's own running config.
 
 from __future__ import annotations
 
+import shutil
+from pathlib import Path
+
 from autokernel.kconfig_map import resolve_module_to_config
 from autokernel.models import Snapshot
 from autokernel.policy import compute_load_bearing
@@ -21,6 +24,7 @@ from autokernel.resolve import (
     focused_candidate_trims,
     resolve,
 )
+from autokernel.snapshot import load
 
 
 # ── direct candidate-generator checks against fixture configs ───────────────
@@ -107,3 +111,56 @@ def test_focused_candidate_trims_uses_modules_dep(tmp_path, intel_laptop: Snapsh
     assert len(focused) < len(broad)
     assert "CONFIG_104_QUAD_8" in focused
     assert "CONFIG_60XX_WDT" in focused
+
+
+def test_laptop_audio_stack_is_load_bearing(intel_laptop: Snapshot):
+    res = resolve(intel_laptop)
+    lb = compute_load_bearing(intel_laptop, res)
+
+    for sym in (
+        "CONFIG_SND_HDA_INTEL",
+        "CONFIG_SND_HDA_CODEC_REALTEK",
+        "CONFIG_SND_SOC_SOF_INTEL_MTL",
+        "CONFIG_SND_SOC_INTEL_SOUNDWIRE_SOF_MACH",
+        "CONFIG_SND_USB_AUDIO",
+    ):
+        is_lb, reason = lb.contains(sym)
+        assert is_lb, f"{sym} not load-bearing; reason={reason!r}"
+
+
+def test_headless_without_audio_can_still_trim_audio(tmp_path):
+    src = Path(__file__).parent / "fixtures" / "intel_laptop"
+    snapdir = tmp_path / "headless"
+    shutil.copytree(src, snapdir)
+
+    blocks = (snapdir / "lspci_vmmnk").read_text().split("\n\n")
+    blocks = [b for b in blocks if "Class:\t0401" not in b]
+    (snapdir / "lspci_vmmnk").write_text("\n\n".join(blocks) + "\n")
+
+    lsmod_lines = []
+    for line in (snapdir / "lsmod").read_text().splitlines():
+        first = line.split(None, 1)[0] if line.split() else ""
+        if first.startswith("snd") or first.startswith("soundwire"):
+            continue
+        lsmod_lines.append(line)
+    (snapdir / "lsmod").write_text("\n".join(lsmod_lines) + "\n")
+
+    (snapdir / "dmi_id").write_text(
+        "sys_vendor\tDell Inc.\n"
+        "product_name\tPowerEdge R760\n"
+        "product_family\tPowerEdge\n"
+        "chassis_type\t23\n"
+    )
+    (snapdir / "software_features").write_text("")
+    (snapdir / "asound_cards").write_text("--- no soundcards ---\n")
+    (snapdir / "asound_pcm").write_text("")
+    (snapdir / "dev_snd").write_text("")
+    (snapdir / "sys_class_sound").write_text("")
+
+    snap = load(snapdir)
+    assert snap.audio.useful is False
+
+    res = resolve(snap)
+    trims = set(candidate_trims(snap, res))
+    assert "CONFIG_SND_USB_AUDIO" in trims
+    assert "CONFIG_SND_HDA_CODEC_REALTEK" in trims

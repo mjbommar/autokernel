@@ -7,6 +7,7 @@ locations, and result objects.
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -140,6 +141,21 @@ def test_prepare_rejects_missing_config(tmp_path: Path):
     snap.mkdir()
     with pytest.raises(FileNotFoundError, match="final.config"):
         prepare(source_dir=src, config_path=tmp_path / "missing", snapshot_dir=snap)
+
+
+def test_localmodconfig_lsmod_adds_late_audio_modules(tmp_path: Path):
+    fixture = Path(__file__).parent / "fixtures" / "intel_laptop"
+    snap = tmp_path / "snap"
+    shutil.copytree(fixture, snap)
+
+    out = build_mod._write_localmodconfig_lsmod(  # noqa: SLF001
+        snapshot_dir=snap,
+        lsmod_path=snap / "lsmod",
+    )
+    text = out.read_text()
+
+    assert "snd_hda_codec_realtek 0 0" in text
+    assert "snd_usb_audio 0 0" in text
 
 
 # ── build ───────────────────────────────────────────────────────────────────
