@@ -91,6 +91,43 @@ so compiler and packaging temporary files do not spill into `/tmp`.
 The script stamps a unique `CONFIG_LOCALVERSION` so the built kernel release is
 distinct from the running distro kernel.
 
+## Rebuild From The Current Snapshot
+
+When you already have a snapshot with `final.config` and a kernel source tree,
+use the narrower reboot-candidate script. It does not re-run LLM proposal work;
+it gets from the current checked/reviewed config to installable packages:
+
+```bash
+scripts/build-reboot-candidate.sh
+```
+
+The default is conservative:
+
+- installs missing build / boot-test / install dependencies with sudo
+- scans only if the snapshot is missing, or when `--rescan` is passed
+- builds distro packages with `--localmodconfig`
+- runs the VM boot-test, defaulting to QEMU
+- renders an install dry-run and prints the exact one-shot install command
+- does not touch `/boot` unless `--install` is passed
+- does not reboot unless `--reboot` is passed
+
+For the current 7.1-rc3 test tree:
+
+```bash
+scripts/build-reboot-candidate.sh \
+  --snapshot-dir kernel-01 \
+  --kernel-source ~/.cache/autokernel/kernels/linux-torvalds-v7.1-rc3
+```
+
+After reviewing the dry-run output, install and arm one-shot GRUB with:
+
+```bash
+scripts/build-reboot-candidate.sh \
+  --snapshot-dir kernel-01 \
+  --kernel-source ~/.cache/autokernel/kernels/linux-torvalds-v7.1-rc3 \
+  --install
+```
+
 ## Install For One-Shot Boot
 
 After reviewing the build and boot-test output:

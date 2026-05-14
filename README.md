@@ -328,7 +328,7 @@ so reruns are free.
 
 | Verb | What it does | Output |
 |---|---|---|
-| `preflight [DIR] --for=...` | Distro detection + system checks (tools, libs, disk, RAM, snapshot health) | exit code; rendered table |
+| `preflight [DIR] --for=... [--kernel-source PATH]` | Distro detection + system checks (tools, libs, disk, RAM, snapshot/package/boot-test health) | exit code; rendered table |
 | `scan [DIR]` | Run bash collectors → typed Snapshot | `DIR/snapshot.json` |
 | `propose DIR [--dimension=all] [--workload=…]` | Resolver + deterministic trim + LLM (4 dimensions: modules, choices, toggles, tunables) | `DIR/proposal.json` |
 | `inventory scan SOURCE --out DIR` | Build a source-derived Kconfig inventory for LLM tools | `DIR/manifest.json`, `DIR/symbols.jsonl` |
@@ -541,8 +541,9 @@ add families.
 - **Always** — distro recognized, Python ≥ 3.12.
 - **`scan`** — `dmesg` readability (degrades to `journalctl -k`).
 - **`propose`** — running `.config` and `modules.builtin.modinfo` reachable.
-- **`build`** — disk, RAM, build tools (`gcc make flex bison bc ld perl awk tar`), recommended (`ccache pahole`), dev libs (`libssl-dev libelf-dev libncurses-dev` or distro equivalents), Secure Boot.
-- **`install`** *(future)* — GRUB tools, root/sudo, `/boot` writable.
+- **`build`** — disk, RAM, build tools (`gcc make flex bison bc ld perl awk tar`), recommended (`ccache pahole`), dev libs (`libssl-dev libelf-dev libdw-dev libncurses-dev` or distro equivalents), distro package deps (`debhelper`, `llvm`, etc.), Secure Boot.
+- **`boot-test`** — QEMU/virtme availability. With `--kernel-source PATH`, also warns when the built `.config` cannot support virtme's host-backed rootfs.
+- **`install`** — GRUB tools, root/sudo, `/boot` writable, fallback kernel presence, installable package discovery, and boot-test record state.
 
 Each check returns PASS/WARN/FAIL/SKIP. The CLI exits non-zero on any
 FAIL; `--strict` also fails on WARN. Every FAIL/WARN includes a
@@ -612,6 +613,12 @@ touches your live `/boot`. Two methods, picked automatically:
 |---|---|---|
 | **virtme-ng** (preferred) | `uv tool install virtme-ng` | Boots the kernel against the host's read-only `/` over virtio-fs. Reaches userspace. |
 | **QEMU kernel-only** (fallback) | `autokernel install-deps --for boot-test --execute` (or `apt install qemu-system-x86` directly) | Boots the kernel with no rootfs. Success = kernel reaches the VFS-mount stage without an earlier panic. |
+
+`virtme-ng` requires the built kernel to include either `CONFIG_VIRTIO_FS`
+or the 9P stack (`CONFIG_NET_9P`, `CONFIG_NET_9P_VIRTIO`, `CONFIG_9P_FS`).
+`--localmodconfig` can trim those out if they are not loaded on the host.
+Run `autokernel preflight SNAPSHOT --for boot-test --kernel-source PATH`
+to surface that before a boot-test.
 
 A passing test writes `<snapshot>/boot-test.json` with the bzImage's
 SHA-256. `autokernel install --execute` then refuses to proceed unless:

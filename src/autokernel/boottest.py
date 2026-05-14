@@ -26,6 +26,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -390,3 +391,77 @@ def find_bzimage(kernel_source: Path) -> Path | None:
         if c.exists():
             return c
     return None
+
+
+def _read_kernel_config(kernel_source: Path) -> dict[str, str] | None:
+    config_path = kernel_source / ".config"
+    if not config_path.exists():
+        return None
+
+    out: dict[str, str] = {}
+    for line in config_path.read_text(errors="replace").splitlines():
+        if line.startswith("CONFIG_") and "=" in line:
+            name, value = line.split("=", 1)
+            out[name.removeprefix("CONFIG_")] = value
+        elif line.startswith("# CONFIG_") and line.endswith(" is not set"):
+            name = line.removeprefix("# CONFIG_").removesuffix(" is not set")
+            out[name] = "n"
+    return out
+
+
+def virtme_root_transport_available(kernel_source: Path) -> bool:
+    """Whether the built config can mount virtme's host-backed rootfs."""
+    config = _read_kernel_config(kernel_source)
+    if config is None:
+        return True
+
+    enabled = {"y", "m"}
+    has_virtiofs = config.get("VIRTIO_FS") in enabled
+    has_9p = all(
+        config.get(symbol) in enabled for symbol in ("NET_9P", "NET_9P_VIRTIO", "9P_FS")
+    )
+    return has_virtiofs or has_9p
+
+
+def detect_kernel_release(
+    kernel_source: Path, bzimage_path: Path, *, fallback: str
+) -> str:
+    """Return the release string for the built kernel under test.
+
+    The snapshot records the kernel that was running when hardware was
+    scanned, which can differ from the freshly built image. Prefer the kernel
+    tree's own `kernelrelease` target; fall back to parsing `file bzImage` so
+    boot-test records still identify the artifact when make is unavailable.
+    """
+    try:
+        result = subprocess.run(
+            ["make", "-s", "kernelrelease"],
+            cwd=str(kernel_source),
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        result = None
+    if result is not None and result.returncode == 0:
+        release = result.stdout.strip().splitlines()
+        if release and release[0]:
+            return release[0]
+
+    try:
+        result = subprocess.run(
+            ["file", str(bzimage_path)],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        result = None
+    if result is not None and result.returncode == 0:
+        match = re.search(r"\bversion\s+([^,\s]+)", result.stdout)
+        if match:
+            return match.group(1)
+
+    return fallback

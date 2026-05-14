@@ -357,6 +357,82 @@ def test_prepare_leaves_already_empty_cert_paths(tmp_path, monkeypatch):
     assert 'CONFIG_SYSTEM_TRUSTED_KEYS=""' in final
 
 
+# ── module compression normalization ───────────────────────────────────────
+
+
+def test_prepare_enables_module_compress_all_when_compression_is_enabled(
+    tmp_path, monkeypatch
+):
+    src = _make_fake_kernel_source(tmp_path)
+    cfg = tmp_path / "final.config"
+    cfg.write_text(
+        "CONFIG_MODULES=y\n"
+        "CONFIG_MODULE_COMPRESS=y\n"
+        "CONFIG_MODULE_COMPRESS_ZSTD=y\n"
+        "# CONFIG_MODULE_COMPRESS_ALL is not set\n"
+    )
+    snap = tmp_path / "snap"
+    snap.mkdir()
+
+    def _ok(argv, **kwargs):
+        for f in (kwargs.get("stdout"), kwargs.get("stderr")):
+            if hasattr(f, "write"):
+                f.write(b"")
+        return _FakeProcess(returncode=0)
+
+    monkeypatch.setattr(build_mod.subprocess, "run", _ok)
+    prepare(source_dir=src, config_path=cfg, snapshot_dir=snap)
+    final = (src / ".config").read_text()
+    assert "CONFIG_MODULE_COMPRESS_ALL=y\n" in final
+    assert "# CONFIG_MODULE_COMPRESS_ALL is not set" not in final
+
+
+def test_prepare_appends_module_compress_all_when_missing(tmp_path, monkeypatch):
+    src = _make_fake_kernel_source(tmp_path)
+    cfg = tmp_path / "final.config"
+    cfg.write_text(
+        "CONFIG_MODULES=y\nCONFIG_MODULE_COMPRESS=y\nCONFIG_MODULE_COMPRESS_ZSTD=y\n"
+    )
+    snap = tmp_path / "snap"
+    snap.mkdir()
+
+    def _ok(argv, **kwargs):
+        for f in (kwargs.get("stdout"), kwargs.get("stderr")):
+            if hasattr(f, "write"):
+                f.write(b"")
+        return _FakeProcess(returncode=0)
+
+    monkeypatch.setattr(build_mod.subprocess, "run", _ok)
+    prepare(source_dir=src, config_path=cfg, snapshot_dir=snap)
+    assert (src / ".config").read_text().endswith("CONFIG_MODULE_COMPRESS_ALL=y\n")
+
+
+def test_prepare_does_not_enable_module_compress_all_when_compression_is_off(
+    tmp_path, monkeypatch
+):
+    src = _make_fake_kernel_source(tmp_path)
+    cfg = tmp_path / "final.config"
+    cfg.write_text(
+        "CONFIG_MODULES=y\n"
+        "# CONFIG_MODULE_COMPRESS is not set\n"
+        "# CONFIG_MODULE_COMPRESS_ALL is not set\n"
+    )
+    snap = tmp_path / "snap"
+    snap.mkdir()
+
+    def _ok(argv, **kwargs):
+        for f in (kwargs.get("stdout"), kwargs.get("stderr")):
+            if hasattr(f, "write"):
+                f.write(b"")
+        return _FakeProcess(returncode=0)
+
+    monkeypatch.setattr(build_mod.subprocess, "run", _ok)
+    prepare(source_dir=src, config_path=cfg, snapshot_dir=snap)
+    final = (src / ".config").read_text()
+    assert "# CONFIG_MODULE_COMPRESS_ALL is not set" in final
+    assert "CONFIG_MODULE_COMPRESS_ALL=y" not in final
+
+
 # ── localmodconfig integration (build.prepare --localmodconfig) ─────────
 
 
@@ -419,7 +495,7 @@ def test_prepare_with_localmodconfig_runs_extra_steps(tmp_path, monkeypatch):
     lmc_argv = calls[1]
     assert lmc_argv[:2] == ["sh", "-c"]
     assert "localmodconfig" in lmc_argv[2]
-    assert f"LSMOD={localmod_lsmod}" in lmc_argv[2]
+    assert f"LSMOD={localmod_lsmod.resolve()}" in lmc_argv[2]
 
 
 def test_prepare_localmodconfig_does_not_add_late_modules_without_signal(

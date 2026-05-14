@@ -1361,11 +1361,18 @@ def preflight(
         Path | None,
         typer.Argument(help="Optional snapshot dir; enables snapshot-aware checks"),
     ] = None,
+    kernel_source: Annotated[
+        Path | None,
+        typer.Option(
+            "--kernel-source",
+            help="Optional kernel source tree for built-kernel boot-test checks",
+        ),
+    ] = None,
     for_: Annotated[
         str,
         typer.Option(
             "--for",
-            help="Which verb's checks to run: all|scan|propose|apply|build|install",
+            help="Which verb's checks to run: all|scan|propose|apply|build|install|boot-test",
         ),
     ] = "all",
     strict: Annotated[
@@ -1402,7 +1409,12 @@ def preflight(
         raise typer.Exit(2)
 
     distro = detect_distro()
-    run = preflight_mod.run_checks(tags=tags, snapshot=snap, distro=distro)
+    run = preflight_mod.run_checks(
+        tags=tags,
+        snapshot=snap,
+        distro=distro,
+        kernel_source=kernel_source,
+    )
 
     _render_preflight(run, distro=distro, for_=for_)
 
@@ -1672,6 +1684,22 @@ def install(
             raise typer.Exit(result.step_runs[-1].exit_code)
         return
 
+    # ── pre-flight (optional skip) ──────────────────────────────────────
+    if not skip_preflight:
+        run = preflight_mod.run_checks(
+            tags={"always", "install"},
+            snapshot=snap,
+            distro=distro,
+            package_paths=tuple(package or ()),
+        )
+        _render_preflight(run, distro=distro, for_="install")
+        if run.has_failures:
+            raise err.fail(
+                "preflight check failures — refusing to proceed",
+                fix="address the FAILed items above, or rerun with --skip-preflight",
+                exit_code=1,
+            )
+
     # ── install path: locate package(s) ─────────────────────────────────
     if not package:
         package = _find_latest_built_packages(snapshot_dir)
@@ -1684,21 +1712,6 @@ def install(
                     f"first, or pass --package PATH explicitly"
                 ),
                 exit_code=2,
-            )
-
-    # ── pre-flight (optional skip) ──────────────────────────────────────
-    if not skip_preflight:
-        run = preflight_mod.run_checks(
-            tags={"always", "install"},
-            snapshot=snap,
-            distro=distro,
-        )
-        _render_preflight(run, distro=distro, for_="install")
-        if run.has_failures:
-            raise err.fail(
-                "preflight check failures — refusing to proceed",
-                fix="address the FAILed items above, or rerun with --skip-preflight",
-                exit_code=1,
             )
 
     # ── boot-test gate ──────────────────────────────────────────────────
@@ -2581,11 +2594,42 @@ def boot_test(
         )
 
     snap = snap_mod.load(snapshot_dir)
+    kernel_release = boottest_mod.detect_kernel_release(
+        kernel_source,
+        bzimage,
+        fallback=snap.kernel.release,
+    )
+    plan_method = method
+    if method == boottest_mod.Method.AUTO:
+        detected = boottest_mod.detect_method()
+        if (
+            detected == boottest_mod.Method.VIRTME
+            and not boottest_mod.virtme_root_transport_available(kernel_source)
+            and boottest_mod.shutil.which("qemu-system-x86_64")
+        ):
+            plan_method = boottest_mod.Method.QEMU
+        else:
+            plan_method = method
+    elif (
+        method == boottest_mod.Method.VIRTME
+        and not boottest_mod.virtme_root_transport_available(kernel_source)
+    ):
+        raise err.fail(
+            "virtme root transport unavailable in built kernel config",
+            why=(
+                "virtme needs CONFIG_VIRTIO_FS or the 9P stack "
+                "(CONFIG_NET_9P, CONFIG_NET_9P_VIRTIO, CONFIG_9P_FS) to mount "
+                "the host-backed root filesystem. This localmodconfig build has "
+                "those disabled."
+            ),
+            fix="rerun boot-test with --method qemu, or rebuild with virtiofs/9p enabled",
+            exit_code=2,
+        )
     try:
         plan_obj = boottest_mod.plan(
-            method=method,
+            method=plan_method,
             bzimage_path=bzimage,
-            kernel_release=snap.kernel.release,
+            kernel_release=kernel_release,
             timeout=timeout,
         )
     except RuntimeError as e:

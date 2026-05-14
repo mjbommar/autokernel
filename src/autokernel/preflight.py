@@ -68,6 +68,8 @@ class CheckContext:
     distro: DistroInfo
     spec: DistroSpec
     snapshot: Snapshot | None = None
+    kernel_source: Path | None = None
+    package_paths: tuple[Path, ...] = ()
 
 
 @dataclass
@@ -346,10 +348,20 @@ def check_kernel_dev_libs(ctx: CheckContext) -> CheckResult:
     """Headers we can't easily probe via `which`: openssl, elfutils, ncurses."""
     fam = ctx.spec.family
     pkgs = {
-        Family.DEBIAN: ["libssl-dev", "libelf-dev", "libncurses-dev"],
-        Family.FEDORA: ["openssl-devel", "elfutils-libelf-devel", "ncurses-devel"],
-        Family.ARCH: ["openssl", "libelf", "ncurses"],
-        Family.SUSE: ["libopenssl-devel", "libelf-devel", "ncurses-devel"],
+        Family.DEBIAN: ["libssl-dev", "libelf-dev", "libdw-dev", "libncurses-dev"],
+        Family.FEDORA: [
+            "openssl-devel",
+            "elfutils-libelf-devel",
+            "elfutils-devel",
+            "ncurses-devel",
+        ],
+        Family.ARCH: ["openssl", "libelf", "libdw", "ncurses"],
+        Family.SUSE: [
+            "libopenssl-devel",
+            "libelf-devel",
+            "libdw-devel",
+            "ncurses-devel",
+        ],
     }.get(fam)
     if pkgs is None:
         return CheckResult(
@@ -369,6 +381,38 @@ def check_kernel_dev_libs(ctx: CheckContext) -> CheckResult:
         name="kernel_dev_libs",
         severity=Severity.FAIL,
         message=f"missing dev libs: {', '.join(missing)}",
+        fix_hint=_install_hint(ctx.spec, missing),
+        details={"missing": missing},
+    )
+
+
+def check_distro_build_packages(ctx: CheckContext) -> CheckResult:
+    """Distro package-level deps for the default/package build path.
+
+    Tool/header checks above catch hard failures for kernel-only builds. This
+    check mirrors DistroSpec.build_deps so preflight also reports packages that
+    `install-deps --for build` would install, such as Debian's debhelper for
+    bindeb-pkg. WARN keeps kernel-only workflows usable.
+    """
+    pkgs = list(ctx.spec.build_deps)
+    if not pkgs:
+        return CheckResult(
+            name="distro_build_packages",
+            severity=Severity.SKIP,
+            message=f"package check not implemented for family {ctx.spec.family.value}",
+        )
+
+    missing = _query_packages_missing(ctx.spec.family, pkgs)
+    if not missing:
+        return CheckResult(
+            name="distro_build_packages",
+            severity=Severity.PASS,
+            message=f"all distro build packages installed ({len(pkgs)})",
+        )
+    return CheckResult(
+        name="distro_build_packages",
+        severity=Severity.WARN,
+        message=f"missing distro build packages: {', '.join(missing)}",
         fix_hint=_install_hint(ctx.spec, missing),
         details={"missing": missing},
     )
@@ -513,6 +557,105 @@ def check_root_or_sudo(ctx: CheckContext) -> CheckResult:
 # ── install-specific checks ─────────────────────────────────────────────────
 
 
+def _snapshot_package_candidates(snapshot_dir: Path) -> list[Path]:
+    candidates: list[Path] = []
+    for pat in ("linux-image-*.deb", "kernel-*.rpm", "linux-*.pkg.tar.zst"):
+        candidates.extend(snapshot_dir.glob(pat))
+    return sorted(candidates)
+
+
+def check_install_packages_present(ctx: CheckContext) -> CheckResult:
+    """Warn when `install` cannot auto-discover installable kernel packages."""
+    if ctx.package_paths:
+        return CheckResult(
+            name="install_packages_present",
+            severity=Severity.PASS,
+            message=f"{len(ctx.package_paths)} explicit install package(s) provided",
+            details={"packages": [str(p) for p in ctx.package_paths]},
+        )
+    if ctx.snapshot is None:
+        return CheckResult(
+            name="install_packages_present",
+            severity=Severity.SKIP,
+            message="no snapshot",
+        )
+
+    packages = _snapshot_package_candidates(ctx.snapshot.snapshot_dir)
+    if packages:
+        return CheckResult(
+            name="install_packages_present",
+            severity=Severity.PASS,
+            message=f"{len(packages)} install package(s) found under snapshot",
+            details={"packages": [str(p) for p in packages]},
+        )
+
+    return CheckResult(
+        name="install_packages_present",
+        severity=Severity.WARN,
+        message="no installable kernel packages found under snapshot",
+        fix_hint=(
+            "build a package target with `autokernel build SNAPSHOT --kernel-source PATH "
+            "--execute`, or pass `autokernel install --package PATH` explicitly"
+        ),
+    )
+
+
+def check_boot_test_record(ctx: CheckContext) -> CheckResult:
+    """Surface boot-test gate state during install preflight."""
+    if ctx.snapshot is None:
+        return CheckResult(
+            name="boot_test_record",
+            severity=Severity.SKIP,
+            message="no snapshot",
+        )
+
+    from autokernel import boottest as boottest_mod
+
+    record = boottest_mod.read_latest_record(ctx.snapshot.snapshot_dir)
+    if record is None:
+        return CheckResult(
+            name="boot_test_record",
+            severity=Severity.WARN,
+            message="no boot-test record for this snapshot",
+            fix_hint=(
+                "run `autokernel boot-test SNAPSHOT --kernel-source PATH` before "
+                "`autokernel install --execute`"
+            ),
+        )
+    if not record.get("verdict_ok"):
+        return CheckResult(
+            name="boot_test_record",
+            severity=Severity.FAIL,
+            message=f"latest boot-test failed: {record.get('verdict_reason', 'unknown')}",
+            fix_hint="fix the kernel build and re-run boot-test before install",
+            details={"record": record},
+        )
+
+    method = str(record.get("method", "?"))
+    release = str(record.get("kernel_release", "?"))
+    if method == "qemu":
+        return CheckResult(
+            name="boot_test_record",
+            severity=Severity.WARN,
+            message=(
+                f"latest boot-test passed for {release} using qemu kernel-only; "
+                "this verifies early boot to rootfs lookup, not host userspace"
+            ),
+            fix_hint=(
+                "this is acceptable as a fallback smoke test; for userspace coverage, "
+                "rebuild with CONFIG_VIRTIO_FS or 9P support and run virtme"
+            ),
+            details={"record": record},
+        )
+
+    return CheckResult(
+        name="boot_test_record",
+        severity=Severity.PASS,
+        message=f"latest boot-test passed for {release} using {method}",
+        details={"record": record},
+    )
+
+
 def check_bootloader_supported(ctx: CheckContext) -> CheckResult:
     """`autokernel install` v1 supports GRUB2 only. Detect what's actually
     on this host and pass/warn/fail accordingly."""
@@ -653,6 +796,46 @@ def check_grub_tools(ctx: CheckContext) -> CheckResult:
 # ── boot-test checks ─────────────────────────────────────────────────────
 
 
+def _qemu_packages(ctx: CheckContext) -> list[str]:
+    return {
+        Family.DEBIAN: ["qemu-system-x86"],
+        Family.FEDORA: ["qemu-system-x86"],
+        Family.ARCH: ["qemu-base"],
+        Family.SUSE: ["qemu-x86"],
+    }.get(ctx.spec.family, ["qemu-system-x86"])
+
+
+def check_boot_test_runtime_available(ctx: CheckContext) -> CheckResult:
+    """At least one VM runtime is required for `autokernel boot-test`.
+
+    The individual qemu/virtme checks below remain WARN-level because each
+    runtime is optional when the other one is present. This aggregate check is
+    the actual gate that fails when neither option is installed.
+    """
+    qemu = _which("qemu-system-x86_64") is not None
+    virtme = _which("virtme-ng") is not None or _which("virtme-run") is not None
+    if qemu or virtme:
+        available = []
+        if qemu:
+            available.append("qemu-system-x86_64")
+        if virtme:
+            available.append("virtme-ng/virtme-run")
+        return CheckResult(
+            name="boot_test_runtime",
+            severity=Severity.PASS,
+            message=f"boot-test runtime available: {', '.join(available)}",
+        )
+
+    qemu_hint = _install_hint(ctx.spec, _qemu_packages(ctx))
+    hints = [h for h in [qemu_hint, "uv tool install virtme-ng"] if h]
+    return CheckResult(
+        name="boot_test_runtime",
+        severity=Severity.FAIL,
+        message="no boot-test runtime available (need qemu-system-x86_64 or virtme-ng)",
+        fix_hint="; ".join(hints),
+    )
+
+
 def check_qemu_available(ctx: CheckContext) -> CheckResult:
     """qemu-system-x86_64 must be on PATH for the kernel-only boot-test
     fallback. Without it, boot-test only works if virtme-ng is around."""
@@ -662,17 +845,11 @@ def check_qemu_available(ctx: CheckContext) -> CheckResult:
             severity=Severity.PASS,
             message="qemu-system-x86_64 on PATH",
         )
-    pkgs = {
-        Family.DEBIAN: ["qemu-system-x86"],
-        Family.FEDORA: ["qemu-system-x86"],
-        Family.ARCH: ["qemu-base"],
-        Family.SUSE: ["qemu-x86"],
-    }.get(ctx.spec.family, ["qemu-system-x86"])
     return CheckResult(
         name="qemu_available",
         severity=Severity.WARN,
         message="qemu-system-x86_64 not installed (boot-test will need virtme-ng instead)",
-        fix_hint=_install_hint(ctx.spec, pkgs),
+        fix_hint=_install_hint(ctx.spec, _qemu_packages(ctx)),
     )
 
 
@@ -691,6 +868,48 @@ def check_virtme_available(ctx: CheckContext) -> CheckResult:
         message="virtme-ng not installed (QEMU kernel-only boot-test still works)",
         fix_hint=(
             "uv tool install virtme-ng  (preferred; isolated env, ~/.local/bin shim)"
+        ),
+    )
+
+
+def check_virtme_config_support(ctx: CheckContext) -> CheckResult:
+    """Warn when the built kernel config cannot support virtme's rootfs."""
+    if ctx.kernel_source is None:
+        return CheckResult(
+            name="virtme_config_support",
+            severity=Severity.SKIP,
+            message="no --kernel-source provided",
+        )
+
+    from autokernel import boottest as boottest_mod
+
+    config_path = ctx.kernel_source / ".config"
+    if not config_path.exists():
+        return CheckResult(
+            name="virtme_config_support",
+            severity=Severity.SKIP,
+            message=f"no built .config at {config_path}",
+        )
+
+    if boottest_mod.virtme_root_transport_available(ctx.kernel_source):
+        return CheckResult(
+            name="virtme_config_support",
+            severity=Severity.PASS,
+            message="built .config supports virtme root transport",
+        )
+
+    qemu_available = _which("qemu-system-x86_64") is not None
+    return CheckResult(
+        name="virtme_config_support",
+        severity=Severity.WARN if qemu_available else Severity.FAIL,
+        message=(
+            "built .config cannot mount virtme's host-backed rootfs "
+            "(missing CONFIG_VIRTIO_FS or 9P stack)"
+        ),
+        fix_hint=(
+            "use `autokernel boot-test --method qemu`, or rebuild with "
+            "CONFIG_VIRTIO_FS=y/m or CONFIG_NET_9P + CONFIG_NET_9P_VIRTIO + "
+            "CONFIG_9P_FS enabled"
         ),
     )
 
@@ -790,6 +1009,10 @@ _REGISTRY: list[tuple[str, _Registered]] = [
     ("recommended_tools", _Registered(check_recommended_tools, frozenset({"build"}))),
     ("kernel_dev_libs", _Registered(check_kernel_dev_libs, frozenset({"build"}))),
     (
+        "distro_build_packages",
+        _Registered(check_distro_build_packages, frozenset({"build"})),
+    ),
+    (
         "snapshot_running_config",
         _Registered(
             check_snapshot_running_config, frozenset({"propose", "apply", "snapshot"})
@@ -810,6 +1033,14 @@ _REGISTRY: list[tuple[str, _Registered]] = [
         "bootloader_supported",
         _Registered(check_bootloader_supported, frozenset({"install"})),
     ),
+    (
+        "install_packages_present",
+        _Registered(check_install_packages_present, frozenset({"install"})),
+    ),
+    (
+        "boot_test_record",
+        _Registered(check_boot_test_record, frozenset({"install"})),
+    ),
     ("boot_writable", _Registered(check_boot_writable, frozenset({"install"}))),
     (
         "fallback_kernel_present",
@@ -817,8 +1048,16 @@ _REGISTRY: list[tuple[str, _Registered]] = [
     ),
     ("grub_tools", _Registered(check_grub_tools, frozenset({"install"}))),
     # boot-test
+    (
+        "boot_test_runtime",
+        _Registered(check_boot_test_runtime_available, frozenset({"boot-test"})),
+    ),
     ("qemu_available", _Registered(check_qemu_available, frozenset({"boot-test"}))),
     ("virtme_available", _Registered(check_virtme_available, frozenset({"boot-test"}))),
+    (
+        "virtme_config_support",
+        _Registered(check_virtme_config_support, frozenset({"boot-test"})),
+    ),
 ]
 
 
@@ -827,6 +1066,8 @@ def run_checks(
     tags: set[str] | None = None,
     snapshot: Snapshot | None = None,
     distro: DistroInfo | None = None,
+    kernel_source: Path | None = None,
+    package_paths: tuple[Path, ...] = (),
 ) -> CheckRun:
     """Run the subset of registered checks matching ``tags``.
 
@@ -838,7 +1079,13 @@ def run_checks(
     """
     info = distro or detect()
     spec = spec_for(info)
-    ctx = CheckContext(distro=info, spec=spec, snapshot=snapshot)
+    ctx = CheckContext(
+        distro=info,
+        spec=spec,
+        snapshot=snapshot,
+        kernel_source=kernel_source,
+        package_paths=package_paths,
+    )
 
     out = CheckRun()
     for _name, reg in _REGISTRY:
