@@ -8,7 +8,7 @@
   "arch": "x86_64",
   "srcarch": "x86",
   "config_path": null,
-  "generated_at": "2026-05-14T14:13:10.590443+00:00",
+  "generated_at": "2026-05-14T14:21:50.406235+00:00",
   "symbol_count": 18701,
   "kconfiglib_version": null
 }
