@@ -27,12 +27,14 @@ make a per-machine kernel that is smaller, still bootable, and explainable.
 - **Safe install path:** build distro packages, boot-test the kernel, install
   with sudo only when needed, and arm GRUB for a one-shot probation boot.
 
-Measured on a Meteor Lake Ubuntu laptop, one autokernel build shipped **351
-module files instead of 6,906** and enabled **2,845 Kconfig symbols instead
-of 10,056** versus the stock Ubuntu 7.x kernel. A recent high-impact Linux
-CVE review showed **4 strong exposure reductions, 2 partial reductions, and
-4 unchanged core-kernel exposures** for that build. Details and caveats are
-in [Measured example](#measured-example).
+Measured on a Meteor Lake Ubuntu laptop, the current 7.1-rc3 autokernel
+reboot candidate shipped **737 compressed module files instead of 6,906** and
+enabled **3,298 Kconfig symbols instead of 10,056** versus Ubuntu's stock
+7.0.0-15-generic kernel. Its staged `/lib/modules` tree was **25.00 MiB
+instead of 153.69 MiB**. A recent high-impact Linux CVE review showed **4
+strong exposure reductions, 2 partial reductions, and 4 unchanged core-kernel
+exposures** for this host-minimal profile. Details and caveats are in
+[Measured example](#measured-example).
 
 ## Status
 
@@ -170,15 +172,24 @@ point of the comparison is to make the tradeoff visible: autokernel removes
 large amounts of unused module surface, but core kernel bugs and user-facing
 hardware still need patching and policy.
 
-| Metric | Ubuntu stock 7.x | autokernel | Reduction |
+This table compares Ubuntu `7.0.0-15-generic` with the QEMU-boot-tested
+autokernel `7.1.0-rc3` zstd-module reboot candidate. Module and boot-artifact
+sizes for the candidate come from the staged Debian image package before
+install.
+
+| Metric | Ubuntu `7.0.0-15-generic` | autokernel `7.1.0-rc3` zstd candidate | Reduction |
 |---|---:|---:|---:|
-| Module files shipped | 6,906 | 351 | 94.9% fewer |
-| Module tree size | 161.2 MB | 72.9 MB | 54.8% smaller |
-| Enabled Kconfig symbols (`y+m`) | 10,056 | 2,845 | 71.7% fewer |
-| Module Kconfig symbols (`m`) | 6,712 | 342 | 94.9% fewer |
-| Built-in Kconfig symbols (`y`) | 3,344 | 2,503 | 25.1% fewer |
-| `vmlinuz` size | 17.3 MB | 15.3 MB | 11.5% smaller |
-| `initrd` size | 43.3 MB | 32.5 MB | 25.0% smaller |
+| Module files shipped | 6,906 | 737 `.ko.zst` | 89.3% fewer |
+| Module tree size | 153.69 MiB | 25.00 MiB | 83.7% smaller |
+| Enabled Kconfig symbols (`y+m`) | 10,056 | 3,298 | 67.2% fewer |
+| Module Kconfig symbols (`m`) | 6,712 | 737 | 89.0% fewer |
+| Built-in Kconfig symbols (`y`) | 3,344 | 2,561 | 23.4% fewer |
+| `vmlinuz` size | 16.47 MiB | 14.67 MiB | 11.0% smaller |
+| `/boot` artifacts + `/lib/modules`, excluding initrd | 180.95 MiB | 49.56 MiB | 72.6% smaller |
+
+The initrd is generated during package install, so the zstd candidate's final
+initrd size should be remeasured after install. The previous installed
+autokernel initrd was 32.03 MiB versus 39.44 MiB for Ubuntu stock.
 
 CVE exposure is evaluated by subsystem presence, not by counting symbols. In
 one recent high-impact Linux CVE sample:
