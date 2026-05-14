@@ -29,8 +29,9 @@ The module-trim path is not yet in the right shape:
   symbols plus a general evidence summary.
 - The pydantic-ai agent is schema-bound and cached, but it has no tools and no
   per-candidate evidence records.
-- `--max-candidates` only controls spend. It does not improve the candidate
-  set and should not be treated as an optimization strategy.
+- `--max-candidates` only controls spend. It defaults to unlimited, does not
+  improve the candidate set, and should not be treated as an optimization
+  strategy.
 
 On this machine, the current snapshot shape is:
 
@@ -179,9 +180,9 @@ For normal laptops/desktops:
 - module LLM review set: target under 500 without using a hard cap
 - always-LLM policy/sizing knobs: under 150 combined choices/toggles/tunables
 
-`--max-candidates` remains useful as a safety valve for API cost, but the
-pipeline should be considered wrong if the natural module review set is still
-thousands.
+`--max-candidates` remains useful as an explicit safety valve for API cost, but
+the pipeline should be considered wrong if the natural module review set is
+still thousands.
 
 ## Implementation Todo
 

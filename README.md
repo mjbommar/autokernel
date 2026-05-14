@@ -317,7 +317,8 @@ $ autokernel build /tmp/myhost --kernel-source … --execute
 For a real hardware smoke build, prefer `--dimension=choices,toggles,tunables`
 plus `build --localmodconfig`: the LLM tunes bounded policy/sizing decisions,
 while `localmodconfig` trims modules from live system use. The module-trim LLM
-path is still available, but `--max-candidates` is only a cost guard.
+path is still available. By default it is uncapped; set `--max-candidates N`
+only as an explicit cost guard.
 
 Cost-sensitive runs: `autokernel propose --skip-llm` produces a deterministic-only
 proposal. LLM batches are content-addressed and cached at `<snapshot>/batches/`,
@@ -330,6 +331,8 @@ so reruns are free.
 | `preflight [DIR] --for=...` | Distro detection + system checks (tools, libs, disk, RAM, snapshot health) | exit code; rendered table |
 | `scan [DIR]` | Run bash collectors → typed Snapshot | `DIR/snapshot.json` |
 | `propose DIR [--dimension=all] [--workload=…]` | Resolver + deterministic trim + LLM (4 dimensions: modules, choices, toggles, tunables) | `DIR/proposal.json` |
+| `inventory scan SOURCE --out DIR` | Build a source-derived Kconfig inventory for LLM tools | `DIR/manifest.json`, `DIR/symbols.jsonl` |
+| `inventory enrich DIR [--jobs N]` | Enrich inventory records with evidence-cited summaries (`openai:gpt-5.4-mini`, flex by default; resumable by `symbol + fact_hash`) | `DIR/enrichments.jsonl` |
 | `review DIR --rules…` | Bulk-decision rules over `needs_review` | `DIR/review.json` + `DIR/auto.kfrag` |
 | `apply DIR` | Merge kfrag into running `.config`, validate load-bearing | `DIR/final.config` |
 | `fetch-source [--method=…]` | Distro-aware kernel source acquisition | a kernel source tree |

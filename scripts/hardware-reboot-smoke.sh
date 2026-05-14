@@ -50,7 +50,7 @@ LOCALVERSION="${AUTOKERNEL_HW_LOCALVERSION:--autokernel-$(date -u +%Y%m%d%H%M)}"
 KERNEL_ENTRY="${AUTOKERNEL_HW_KERNEL_ENTRY:-}"
 DIMENSION="${AUTOKERNEL_HW_DIMENSION:-choices,toggles,tunables}"
 CANDIDATE_SCOPE="${AUTOKERNEL_HW_CANDIDATE_SCOPE:-focused}"
-MAX_CANDIDATES="${AUTOKERNEL_HW_MAX_CANDIDATES:-480}"
+MAX_CANDIDATES="${AUTOKERNEL_HW_MAX_CANDIDATES:-0}"
 LLM_MODE="${AUTOKERNEL_HW_LLM_MODE:-auto}"
 MODEL="${AUTOKERNEL_HW_MODEL:-}"
 SERVICE_TIER="${AUTOKERNEL_HW_SERVICE_TIER:-}"
@@ -97,7 +97,7 @@ Options:
   --kernel-entry ENTRY     GRUB entry for one-shot boot; auto-derived when omitted
   --dimension VALUE        modules, choices, toggles, tunables, or all (default: choices,toggles,tunables)
   --candidate-scope SCOPE  focused or all when module LLM is enabled (default: focused)
-  --max-candidates N       Cost guard only when module LLM is enabled; 0 means no cap (default: 480)
+  --max-candidates N       Cost guard only when module LLM is enabled; 0 means no cap (default: 0)
   --llm-mode MODE          auto, cheap, fast, or quality (default: auto)
   --model MODEL            Literal pydantic-ai model id; overrides --llm-mode
   --service-tier TIER      Provider service tier, e.g. OpenAI flex/priority/auto

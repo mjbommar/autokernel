@@ -177,7 +177,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument(
         "--max-candidates",
-        default=_env_default("AUTOKERNEL_HW_MAX_CANDIDATES", "480"),
+        default=_env_default("AUTOKERNEL_HW_MAX_CANDIDATES", "0"),
     )
     parser.add_argument(
         "--llm-mode", default=_env_default("AUTOKERNEL_HW_LLM_MODE", "auto")

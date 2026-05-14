@@ -39,7 +39,6 @@ autokernel propose SNAPSHOT \
   --dimension choices,toggles,tunables \
   --candidate-scope focused \
   --kernel-source SOURCE \
-  --max-candidates 480 \
   --llm-mode auto \
   --threat balanced \
   --modules distro \
@@ -52,8 +51,9 @@ This means:
 - module trimming for the smoke boot is handled deterministically by the later
   `build --localmodconfig` step
 - the module-trim LLM path remains available with `--dimension all` or
-  `--dimension modules,...`, but `--max-candidates` is only a cost guard, not a
-  substitute for evidence-derived candidate selection
+  `--dimension modules,...`; it is uncapped by default, and `--max-candidates`
+  is only an explicit cost guard, not a substitute for evidence-derived
+  candidate selection
 - choice, toggle, and tunable dimensions run against the target kernel source
 - choices, toggles, and tunables are allowlisted to high-impact knobs
 - security stays balanced rather than permissive

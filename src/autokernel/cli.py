@@ -97,6 +97,13 @@ config_app = typer.Typer(
 )
 app.add_typer(config_app, name="config")
 
+inventory_app = typer.Typer(
+    add_completion=False,
+    help="Build, search, and enrich source-derived Kconfig inventories.",
+    no_args_is_help=True,
+)
+app.add_typer(inventory_app, name="inventory")
+
 console = Console()
 err_console = Console(stderr=True)
 
@@ -434,7 +441,7 @@ def propose(
         typer.Option(
             help="Cost guard for module-trim LLM candidates; 0 disables the cap"
         ),
-    ] = 600,
+    ] = 0,
     candidate_scope: Annotated[
         str,
         typer.Option(
@@ -826,7 +833,7 @@ def _render_diff(diff) -> None:
         console.print(
             f"\n[yellow]{len(diff.not_considered)} candidate symbol(s) were not considered[/yellow] "
             f"(LLM skipped or pool truncated). Re-run without --skip-llm or with a higher "
-            f"--max-candidates to address them. Sample: "
+            f"--max-candidates, or --max-candidates 0, to address them. Sample: "
             f"{', '.join(diff.not_considered[:5])}…"
         )
 
@@ -1937,6 +1944,243 @@ def _render_install_result(result) -> None:
             f"{run.duration_s:.1f}",
         )
     console.print(t)
+
+
+# ── inventory sub-app ─────────────────────────────────────────────────────
+
+
+@inventory_app.command("scan")
+def inventory_scan(
+    kernel_source: Annotated[
+        Path,
+        typer.Argument(help="Kernel source tree containing Kconfig and Makefile"),
+    ],
+    out: Annotated[
+        Path,
+        typer.Option("--out", help="Directory to write manifest.json + symbols.jsonl"),
+    ],
+    arch: Annotated[str, typer.Option("--arch", help="Kernel ARCH")] = "x86_64",
+    config: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional .config to load for current values"),
+    ] = None,
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", help="Only scan the first N symbols for smoke tests"),
+    ] = None,
+) -> None:
+    """Build a deterministic Kconfig/source inventory."""
+    from autokernel.inventory import build_inventory, write_inventory
+
+    console.print(f"[dim]scanning Kconfig inventory under {kernel_source}…[/dim]")
+    dataset = build_inventory(
+        kernel_source,
+        arch=arch,
+        config_path=config,
+        limit=limit,
+    )
+    write_inventory(dataset, out)
+    console.print(
+        f"[green]✓ inventory[/green] symbols={len(dataset.symbols)} out={out}"
+    )
+
+
+@inventory_app.command("search")
+def inventory_search(
+    inventory_dir: Annotated[Path, typer.Argument(help="Inventory directory")],
+    query: Annotated[str, typer.Argument(help="Symbol name or text query")],
+    text: Annotated[
+        bool,
+        typer.Option("--text", help="Search Kconfig prompt/help text instead of names"),
+    ] = False,
+    limit: Annotated[int, typer.Option("--limit")] = 50,
+) -> None:
+    """Search inventory symbols by name or Kconfig text."""
+    from autokernel.inventory import InventoryTools
+
+    tools = InventoryTools.from_dir(inventory_dir)
+    hits = (
+        tools.search_kconfig_text(query, limit=limit)
+        if text
+        else tools.search_symbols(query, limit=limit)
+    )
+    for symbol in hits:
+        rec = tools.get_symbol(symbol)
+        console.print(f"{rec.symbol}\t{rec.type.value}\t{rec.prompt or ''}")
+
+
+@inventory_app.command("show")
+def inventory_show(
+    inventory_dir: Annotated[Path, typer.Argument(help="Inventory directory")],
+    symbol: Annotated[str, typer.Argument(help="CONFIG_ symbol")],
+) -> None:
+    """Print one inventory record as JSON."""
+    from autokernel.inventory import InventoryTools
+
+    rec = InventoryTools.from_dir(inventory_dir).get_symbol(symbol)
+    console.print_json(rec.model_dump_json(exclude_none=True))
+
+
+@inventory_app.command("read-file")
+def inventory_read_file(
+    inventory_dir: Annotated[Path, typer.Argument(help="Inventory directory")],
+    path: Annotated[str, typer.Argument(help="Path inside kernel source tree")],
+    source_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--source-dir",
+            help="Override manifest source_dir for vendored inventories",
+        ),
+    ] = None,
+    head: Annotated[int | None, typer.Option("--head")] = None,
+    start: Annotated[int | None, typer.Option("--start")] = None,
+    end: Annotated[int | None, typer.Option("--end")] = None,
+) -> None:
+    """Read a bounded source file excerpt through inventory path sandboxing."""
+    from autokernel.inventory import InventoryTools
+
+    tools = InventoryTools.from_dir(inventory_dir, source_dir=source_dir)
+    if head is not None:
+        excerpt = tools.read_file_head(path, max_lines=head)
+    elif start is not None and end is not None:
+        excerpt = tools.read_file_excerpt(path, start_line=start, end_line=end)
+    else:
+        excerpt = tools.read_file_head(path)
+    console.print(excerpt.text)
+
+
+@inventory_app.command("enrich")
+def inventory_enrich(
+    inventory_dir: Annotated[Path, typer.Argument(help="Inventory directory")],
+    symbols: Annotated[
+        list[str] | None,
+        typer.Option("--symbol", help="CONFIG_ symbol to enrich; repeatable"),
+    ] = None,
+    limit: Annotated[int | None, typer.Option("--limit")] = None,
+    batch_size: Annotated[int, typer.Option("--batch-size")] = 20,
+    jobs: Annotated[
+        int,
+        typer.Option("--jobs", help="Concurrent enrichment batches"),
+    ] = 1,
+    source_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--source-dir",
+            help="Override manifest source_dir for vendored inventories",
+        ),
+    ] = None,
+    model: Annotated[
+        str,
+        typer.Option("--model", help="pydantic-ai model id for enrichment"),
+    ] = "openai:gpt-5.4-mini",
+    service_tier: Annotated[
+        str | None,
+        typer.Option("--service-tier", help="OpenAI service tier"),
+    ] = "flex",
+    offline: Annotated[
+        bool,
+        typer.Option("--offline", help="Write deterministic baseline enrichment"),
+    ] = False,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="Re-enrich rows even when the same symbol/fact hash already exists",
+        ),
+    ] = False,
+) -> None:
+    """Enrich inventory records into enrichments.jsonl."""
+    from autokernel.inventory import InventoryTools
+    from autokernel.inventory_agent import (
+        enrich_records,
+        offline_enrichment,
+        write_enrichments,
+    )
+
+    tools = InventoryTools.from_dir(inventory_dir, source_dir=source_dir)
+    if batch_size < 1:
+        raise typer.BadParameter("--batch-size must be at least 1")
+    if jobs < 1:
+        raise typer.BadParameter("--jobs must be at least 1")
+    if symbols:
+        records = [tools.get_symbol(s) for s in symbols]
+    else:
+        records = tools.dataset.symbols
+    if limit is not None:
+        records = records[:limit]
+
+    out_path = inventory_dir / "enrichments.jsonl"
+    if not force and out_path.exists():
+        existing: set[tuple[str, str]] = set()
+        with out_path.open(encoding="utf-8") as f:
+            for line_no, line in enumerate(f, start=1):
+                if not line.strip():
+                    continue
+                try:
+                    item = json.loads(line)
+                except json.JSONDecodeError as e:
+                    raise err.fail(
+                        "invalid existing enrichment JSONL",
+                        why=f"{out_path}:{line_no}: {e}",
+                        fix="delete the invalid enrichments.jsonl or pass a clean inventory directory",
+                        exit_code=2,
+                    ) from e
+                symbol = item.get("symbol")
+                fact_hash = item.get("fact_hash")
+                if isinstance(symbol, str) and isinstance(fact_hash, str):
+                    existing.add((symbol, fact_hash))
+        before = len(records)
+        records = [r for r in records if (r.symbol, r.fact_hash) not in existing]
+        skipped = before - len(records)
+        if skipped:
+            console.print(f"[dim]skipping {skipped} existing enrichment(s)[/dim]")
+
+    chunks = [records[i : i + batch_size] for i in range(0, len(records), batch_size)]
+
+    def enrich_chunk(chunk):
+        if offline:
+            return [offline_enrichment(r) for r in chunk]
+        return enrich_records(
+            chunk,
+            tools,
+            model=model,
+            service_tier=service_tier,
+        )
+
+    total = 0
+    if jobs == 1 or len(chunks) <= 1:
+        for chunk in chunks:
+            enrichments = enrich_chunk(chunk)
+            write_enrichments(enrichments, out_path)
+            total += len(enrichments)
+            console.print(f"[dim]enriched {total}/{len(records)}[/dim]")
+    else:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        next_chunk = 0
+        futures = {}
+        with ThreadPoolExecutor(max_workers=jobs) as executor:
+
+            def submit_next() -> None:
+                nonlocal next_chunk
+                if next_chunk < len(chunks):
+                    future = executor.submit(enrich_chunk, chunks[next_chunk])
+                    futures[future] = next_chunk
+                    next_chunk += 1
+
+            for _ in range(min(jobs, len(chunks))):
+                submit_next()
+
+            while futures:
+                for future in as_completed(list(futures)):
+                    futures.pop(future)
+                    enrichments = future.result()
+                    write_enrichments(enrichments, out_path)
+                    total += len(enrichments)
+                    console.print(f"[dim]enriched {total}/{len(records)}[/dim]")
+                    submit_next()
+                    break
+    console.print(f"[green]✓ enrichments[/green] wrote {out_path}")
 
 
 # ── config sub-app: show / test ────────────────────────────────────────────

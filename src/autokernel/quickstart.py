@@ -303,13 +303,6 @@ def _run_propose(
     if skip_llm or not llm_pool:
         not_considered = [s for s, _ in llm_pool]
     else:
-        cap = 200  # quickstart caps to keep cost predictable
-        if len(llm_pool) > cap:
-            console.print(
-                f"[dim]capping LLM pool at {cap} symbols (the rest are deferred)[/dim]"
-            )
-            not_considered = [s for s, _ in llm_pool[cap:]]
-            llm_pool = llm_pool[:cap]
         cache_dir = snapshot_dir / "batches"
         with console.status(
             f"[cyan]asking LLM about {len(llm_pool)} candidates…[/cyan]"
