@@ -8,7 +8,12 @@ from pydantic_ai.models.test import TestModel
 from typer.testing import CliRunner
 
 from autokernel.cli import app
-from autokernel.inventory import InventoryTools, build_inventory, read_inventory, write_inventory
+from autokernel.inventory import (
+    InventoryTools,
+    build_inventory,
+    read_inventory,
+    write_inventory,
+)
 from autokernel.inventory_agent import (
     enrich_records,
     offline_enrichment,

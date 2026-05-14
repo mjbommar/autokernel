@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent, RunContext
@@ -14,7 +14,7 @@ from autokernel.inventory import (
     InventoryTools,
     KconfigSymbolRecord,
 )
-from autokernel.llm import ServiceTier, normalize_service_tier
+from autokernel.llm import normalize_service_tier
 
 
 DEFAULT_INVENTORY_MODEL = "openai:gpt-5.4-mini"
@@ -78,13 +78,13 @@ Rules:
 
 def build_agent(
     *,
-    model: str = DEFAULT_INVENTORY_MODEL,
-    service_tier: ServiceTier | str | None = DEFAULT_INVENTORY_SERVICE_TIER,
+    model: Any = DEFAULT_INVENTORY_MODEL,
+    service_tier: str | None = DEFAULT_INVENTORY_SERVICE_TIER,
 ) -> Agent[InventoryTools, InventoryEnrichmentBatch]:
     """Build an enrichment agent with read-only inventory/source tools."""
     from pydantic_ai.settings import ModelSettings
 
-    tier = normalize_service_tier(cast(str | None, service_tier))
+    tier = normalize_service_tier(service_tier)
     settings = ModelSettings(service_tier=tier) if tier else ModelSettings()
     agent = cast(
         Agent[InventoryTools, InventoryEnrichmentBatch],
@@ -236,8 +236,8 @@ def enrich_records(
     records: list[KconfigSymbolRecord],
     tools: InventoryTools,
     *,
-    model: str = DEFAULT_INVENTORY_MODEL,
-    service_tier: ServiceTier | str | None = DEFAULT_INVENTORY_SERVICE_TIER,
+    model: Any = DEFAULT_INVENTORY_MODEL,
+    service_tier: str | None = DEFAULT_INVENTORY_SERVICE_TIER,
     max_attempts: int = 3,
 ) -> list[InventoryEnrichment]:
     """Ask the enrichment agent for a batch of records and validate output."""
@@ -320,7 +320,9 @@ def offline_enrichment(
     refs: list[EvidenceRef] = []
     for loc in record.locations[:2]:
         refs.append(
-            EvidenceRef(kind="kconfig", path=loc.path, line=loc.line, detail="definition")
+            EvidenceRef(
+                kind="kconfig", path=loc.path, line=loc.line, detail="definition"
+            )
         )
     for binding in record.kbuild[:2]:
         refs.append(
@@ -359,8 +361,12 @@ def offline_enrichment(
         ),
         built_artifacts=record.modules,
         disable_effect=f"Disabling {record.symbol} removes the configured functionality and any bound build objects.",
-        keep_when=["Keep when the host uses the listed modules, devices, or dependent functionality."],
-        safe_to_disable_when=["Consider disabling only when no source, module, or hardware evidence is relevant to the host."],
+        keep_when=[
+            "Keep when the host uses the listed modules, devices, or dependent functionality."
+        ],
+        safe_to_disable_when=[
+            "Consider disabling only when no source, module, or hardware evidence is relevant to the host."
+        ],
         common_misconfigurations=[],
         proposal_guidance=guidance,
         confidence=0.5,
@@ -409,6 +415,5 @@ def _batch_prompt(records: list[KconfigSymbolRecord], *, attempt: int = 1) -> st
         f"Attempt: {attempt}.\n\n"
         "Use tools to inspect "
         "source/Kbuild evidence before making implementation or hardware claims. "
-        "Return one enrichment per input symbol.\n\n"
-        + json.dumps(payload, indent=2)
+        "Return one enrichment per input symbol.\n\n" + json.dumps(payload, indent=2)
     )

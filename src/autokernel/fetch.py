@@ -141,9 +141,7 @@ def _plan_apt_install_source(
     release: str, spec: DistroSpec, working_dir: Path
 ) -> FetchPlan:
     version = _source_package_version(release)
-    pkg = (spec.kernel_source_package_pattern or "linux-source").format(
-        version=version
-    )
+    pkg = (spec.kernel_source_package_pattern or "linux-source").format(version=version)
     target = working_dir / f"linux-source-{version}"
     src_tarball = f"/usr/src/linux-source-{version}.tar.bz2"
     return FetchPlan(

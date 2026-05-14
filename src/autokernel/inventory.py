@@ -246,7 +246,9 @@ def write_inventory(dataset: InventoryDataset, out_dir: Path) -> None:
 
 def read_inventory(inv_dir: Path) -> InventoryDataset:
     inv_dir = inv_dir.expanduser().resolve()
-    manifest = InventoryManifest.model_validate_json((inv_dir / "manifest.json").read_text())
+    manifest = InventoryManifest.model_validate_json(
+        (inv_dir / "manifest.json").read_text()
+    )
     symbols: list[KconfigSymbolRecord] = []
     with (inv_dir / "symbols.jsonl").open() as f:
         for line in f:
@@ -329,11 +331,15 @@ class InventoryTools:
             "choice_options": rec.choice.options if rec.choice else [],
         }
 
-    def search_config_usages(self, symbol: str, *, limit: int = 100) -> list[SourceUsage]:
+    def search_config_usages(
+        self, symbol: str, *, limit: int = 100
+    ) -> list[SourceUsage]:
         rec = self.get_symbol(symbol)
         return rec.source_usages[:limit]
 
-    def search_kbuild_usages(self, symbol: str, *, limit: int = 100) -> list[KbuildBinding]:
+    def search_kbuild_usages(
+        self, symbol: str, *, limit: int = 100
+    ) -> list[KbuildBinding]:
         rec = self.get_symbol(symbol)
         return rec.kbuild[:limit]
 
@@ -345,7 +351,9 @@ class InventoryTools:
             return [str(root.relative_to(self.source_dir))]
         out: list[str] = []
         for path in sorted(root.rglob("*")):
-            if not path.is_file() or _has_skipped_part(path.relative_to(self.source_dir)):
+            if not path.is_file() or _has_skipped_part(
+                path.relative_to(self.source_dir)
+            ):
                 continue
             rel = str(path.relative_to(self.source_dir))
             if globs and not any(fnmatch.fnmatch(rel, pat) for pat in globs):
@@ -433,7 +441,10 @@ def _symbol_record(
     selected_by: dict[str, list[str]],
     implied_by: dict[str, list[str]],
 ) -> KconfigSymbolRecord:
-    name = cast(str, sym.name)
+    name_value = getattr(sym, "name", None)
+    if not isinstance(name_value, str):
+        raise ValueError("anonymous Kconfig symbol cannot be inventoried")
+    name = name_value
     symbol = f"CONFIG_{name}"
     locations = [_node_location(n, source_dir) for n in sym.nodes]
     depends_on = _expr_to_str(getattr(sym, "direct_dep", None))
@@ -442,7 +453,9 @@ def _symbol_record(
     kbuild = kbuild_index.get(symbol, [])
     usages = source_index.get(symbol, [])
     sym_type = kconfig_walk._TYPE_MAP.get(sym.orig_type, SymbolType.UNKNOWN)
-    modules = _module_names_from_kbuild(kbuild) if sym_type == SymbolType.TRISTATE else []
+    modules = (
+        _module_names_from_kbuild(kbuild) if sym_type == SymbolType.TRISTATE else []
+    )
     hardware = _hardware_summary(source_dir, usages, kbuild)
 
     rec = KconfigSymbolRecord(
@@ -569,7 +582,9 @@ def _defaults(items: list[Any]) -> list[KconfigDefault]:
     for item in items or []:
         value = item[0] if isinstance(item, tuple) and item else item
         cond = item[1] if isinstance(item, tuple) and len(item) > 1 else None
-        out.append(KconfigDefault(value=_value_to_str(value), condition=_expr_to_str(cond)))
+        out.append(
+            KconfigDefault(value=_value_to_str(value), condition=_expr_to_str(cond))
+        )
     return out
 
 
@@ -606,7 +621,11 @@ def _node_location(node: Any, source_dir: Path) -> SourceLocation:
     if not path:
         return SourceLocation(path="<unknown>", line=0)
     p = Path(path)
-    rel = str(p.relative_to(source_dir)) if p.is_absolute() and p.is_relative_to(source_dir) else path
+    rel = (
+        str(p.relative_to(source_dir))
+        if p.is_absolute() and p.is_relative_to(source_dir)
+        else path
+    )
     try:
         lineno = int(line)
     except ValueError:
@@ -696,7 +715,9 @@ def _top_paths(usages: list[SourceUsage], bindings: list[KbuildBinding]) -> list
         counts[usage.path] += 1
     for binding in bindings:
         counts[binding.path] += 1
-    return [p for p, _ in sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:10]]
+    return [
+        p for p, _ in sorted(counts.items(), key=lambda item: (-item[1], item[0]))[:10]
+    ]
 
 
 def _subsystem_tags(
@@ -704,14 +725,28 @@ def _subsystem_tags(
     usages: list[SourceUsage],
     bindings: list[KbuildBinding],
 ) -> list[str]:
-    paths = [loc.path for loc in locations] + [u.path for u in usages] + [b.path for b in bindings]
+    paths = (
+        [loc.path for loc in locations]
+        + [u.path for u in usages]
+        + [b.path for b in bindings]
+    )
     tags: set[str] = set()
     for path in paths:
         parts = Path(path).parts
         if not parts:
             continue
         first = parts[0]
-        if first in {"drivers", "fs", "net", "mm", "kernel", "crypto", "security", "sound", "arch"}:
+        if first in {
+            "drivers",
+            "fs",
+            "net",
+            "mm",
+            "kernel",
+            "crypto",
+            "security",
+            "sound",
+            "arch",
+        }:
             tags.add(first)
         if len(parts) > 1 and first == "drivers":
             tags.add(f"drivers/{parts[1]}")
@@ -724,7 +759,11 @@ def _risk_tags(
     usages: list[SourceUsage],
     bindings: list[KbuildBinding],
 ) -> list[str]:
-    paths = [p.path for p in locations] + [u.path for u in usages] + [b.path for b in bindings]
+    paths = (
+        [p.path for p in locations]
+        + [u.path for u in usages]
+        + [b.path for b in bindings]
+    )
     text = " ".join([symbol] + paths).lower()
     tokens = _path_tokens(paths)
     tags: set[str] = set()
