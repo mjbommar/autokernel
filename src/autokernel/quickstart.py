@@ -211,10 +211,18 @@ def _confirm_continue_after_warnings(*, console: Console, yes: bool) -> bool:
 def _maybe_skip_llm(*, console: Console) -> bool:
     """If no API key is set, ask whether to skip the LLM step rather than
     just failing in `propose`."""
-    if os.environ.get("ANTHROPIC_API_KEY") or os.environ.get("OPENAI_API_KEY"):
+    if any(
+        os.environ.get(var)
+        for var in (
+            "ANTHROPIC_API_KEY",
+            "OPENAI_API_KEY",
+            "GOOGLE_API_KEY",
+            "GEMINI_API_KEY",
+        )
+    ):
         return False
     console.print(
-        "[yellow]no ANTHROPIC_API_KEY or OPENAI_API_KEY in environment.[/yellow]\n"
+        "[yellow]no ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY in environment.[/yellow]\n"
         "  [dim]The LLM stage proposes config trims based on hardware evidence "
         "and typically costs <$0.05 per run.[/dim]"
     )

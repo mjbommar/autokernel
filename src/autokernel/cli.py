@@ -229,7 +229,7 @@ def _run_dimension_passes(
         raise err.fail(
             "no LLM provider configured for v0.13 dimension passes",
             why=str(e),
-            fix="set ANTHROPIC_API_KEY or OPENAI_API_KEY in .env, or omit --dimension",
+            fix="set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY in .env, or omit --dimension",
             exit_code=1,
         )
 
@@ -672,7 +672,7 @@ def propose(
             raise err.fail(
                 "no LLM provider configured",
                 why=str(e),
-                fix="set ANTHROPIC_API_KEY or OPENAI_API_KEY in .env (see .env.example), or pass --skip-llm to use only deterministic rules",
+                fix="set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY in .env (see .env.example), or pass --skip-llm to use only deterministic rules",
                 exit_code=1,
             )
         except llm_mod.ProviderNotAvailable as e:
@@ -2038,7 +2038,7 @@ def config_test(
         raise err.fail(
             "no LLM provider configured",
             why=str(e),
-            fix="copy .env.example to .env and set ANTHROPIC_API_KEY or OPENAI_API_KEY (or run `autokernel config show` to see all options)",
+            fix="copy .env.example to .env and set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY (or run `autokernel config show` to see all options)",
             exit_code=1,
         )
     except llm_mod.ProviderNotAvailable as e:

@@ -57,11 +57,6 @@ class Provider(str, Enum):
     ANTHROPIC = "anthropic"
     OPENAI = "openai"
     GOOGLE = "google-gla"  # gemini API key (the older "google generative ai" one)
-    GROQ = "groq"
-    MISTRAL = "mistral"
-    DEEPSEEK = "deepseek"
-    XAI = "xai"
-    OPENROUTER = "openrouter"
 
 
 class LLMMode(str, Enum):
@@ -89,11 +84,6 @@ _API_KEY_VARS: dict[Provider, tuple[str, ...]] = {
     Provider.ANTHROPIC: ("ANTHROPIC_API_KEY",),
     Provider.OPENAI: ("OPENAI_API_KEY",),
     Provider.GOOGLE: ("GOOGLE_API_KEY", "GEMINI_API_KEY"),
-    Provider.GROQ: ("GROQ_API_KEY",),
-    Provider.MISTRAL: ("MISTRAL_API_KEY",),
-    Provider.DEEPSEEK: ("DEEPSEEK_API_KEY",),
-    Provider.XAI: ("XAI_API_KEY",),
-    Provider.OPENROUTER: ("OPENROUTER_API_KEY",),
 }
 
 
@@ -119,36 +109,6 @@ _DEFAULTS: dict[Provider, dict[LLMMode, str]] = {
         LLMMode.CHEAP: "gemini-2.0-flash-lite",
         LLMMode.QUALITY: "gemini-2.5-pro",
     },
-    Provider.GROQ: {
-        LLMMode.AUTO: "llama-3.3-70b-versatile",
-        LLMMode.FAST: "llama-3.3-70b-versatile",
-        LLMMode.CHEAP: "llama-3.1-8b-instant",
-        LLMMode.QUALITY: "llama-3.3-70b-versatile",
-    },
-    Provider.MISTRAL: {
-        LLMMode.AUTO: "mistral-large-latest",
-        LLMMode.FAST: "mistral-medium-latest",
-        LLMMode.CHEAP: "mistral-small-latest",
-        LLMMode.QUALITY: "mistral-large-latest",
-    },
-    Provider.DEEPSEEK: {
-        LLMMode.AUTO: "deepseek-chat",
-        LLMMode.FAST: "deepseek-chat",
-        LLMMode.CHEAP: "deepseek-chat",
-        LLMMode.QUALITY: "deepseek-reasoner",
-    },
-    Provider.XAI: {
-        LLMMode.AUTO: "grok-2-latest",
-        LLMMode.FAST: "grok-2-latest",
-        LLMMode.CHEAP: "grok-2-mini",
-        LLMMode.QUALITY: "grok-2-latest",
-    },
-    Provider.OPENROUTER: {
-        LLMMode.AUTO: "anthropic/claude-sonnet-4",
-        LLMMode.FAST: "anthropic/claude-sonnet-4",
-        LLMMode.CHEAP: "openai/gpt-4o-mini",
-        LLMMode.QUALITY: "anthropic/claude-opus-4",
-    },
 }
 
 
@@ -158,11 +118,6 @@ _PROVIDER_PREFERENCE: tuple[Provider, ...] = (
     Provider.ANTHROPIC,
     Provider.OPENAI,
     Provider.GOOGLE,
-    Provider.MISTRAL,
-    Provider.GROQ,
-    Provider.XAI,
-    Provider.DEEPSEEK,
-    Provider.OPENROUTER,
 )
 
 

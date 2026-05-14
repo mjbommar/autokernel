@@ -81,7 +81,7 @@ For development, clone and `uv sync`:
 git clone https://github.com/mjbommar/autokernel
 cd autokernel
 uv sync
-cp .env.example .env  # add ANTHROPIC_API_KEY or OPENAI_API_KEY
+cp .env.example .env  # add ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY
 uv run autokernel preflight
 ```
 
@@ -233,11 +233,6 @@ ids.
 export ANTHROPIC_API_KEY=sk-ant-...
 export OPENAI_API_KEY=sk-...
 export GOOGLE_API_KEY=...        # or GEMINI_API_KEY
-export MISTRAL_API_KEY=...
-export GROQ_API_KEY=...
-export XAI_API_KEY=...
-export DEEPSEEK_API_KEY=...
-export OPENROUTER_API_KEY=...
 
 # See what would run, without spending money:
 autokernel config show
@@ -246,7 +241,7 @@ autokernel config show
 autokernel config test
 
 # Run propose with a mode preset instead of a literal model id:
-autokernel propose /tmp/snap --llm-mode=cheap     # haiku / gpt-mini / gemini-flash
+autokernel propose /tmp/snap --llm-mode=cheap     # haiku / gpt-5-mini / gemini-flash
 autokernel propose /tmp/snap --llm-mode=quality   # opus / gpt-5 / gemini-2.5-pro
 
 # Or pin a specific model:
@@ -254,8 +249,8 @@ autokernel propose /tmp/snap --model=anthropic:claude-opus-4-7
 ```
 
 When multiple providers are available, autokernel prefers them in this
-order: `anthropic`, `openai`, `google-gla`, `mistral`, `groq`, `xai`,
-`deepseek`, `openrouter`. Override with `--model <provider>:<id>`.
+order: `anthropic`, `openai`, `google-gla`. Override with
+`--model <provider>:<id>`.
 
 ## Quick start (manual verbs)
 
