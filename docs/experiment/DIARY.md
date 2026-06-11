@@ -355,3 +355,19 @@ apt (clang C++ → force-gcc / agentic-patch demo), libxcrypt (strip-lto),
 gmp (libtool → force-gcc), rust-coreutils (stock), sed (strip-nodoc). systemd,
 libselinux, libsemanage now expected CLANG. Wall-clock dominated by systemd
 (38m) + perl (36m) + openssl/util-linux.
+
+### 1.11 No-masquerade validation PASSED — the redesign is vindicated
+
+Mid-run check of the clean ring0-clang2 build:
+- **libselinux ✓, libsemanage ✓, libsepol ✓ — all clang** (were force-gcc under
+  the masquerade). Their `gcc -aux-info` helpers run real gcc; shipped objects
+  are clang; the majority audit tolerates the helpers.
+- systemd ✓ clang (proven in the gating test).
+
+So the important infrastructure — PID 1 + the SELinux stack + the symver libs —
+is genuinely clang+ThinLTO+bfd. The residual is exactly the genuinely-gcc-bound
+set: bzip2/libcap2 (hardcoded CC=gcc), gmp (clang libtool flag-munging), ncurses
+(clang -m32 32-bit multilib needs gcc sysroot — masked before by the mixed
+build), libxcrypt (@@-compat), rust-coreutils (rust+bfd). 28 ok / 6 ftbfs at
+check time. The masquerade-drop is the correct call: maximal *meaningful* clang,
+honest force-gcc on the rest.
