@@ -335,3 +335,23 @@ builds clean clang. If confirmed, drop the masquerade default and re-run Phase 1
 for the cleaner result (systemd=clang). The masquerade was my Phase-0 addition
 to chase "100% clang"; the experiment has shown it overshoots — honest force-gcc
 on the genuinely-gcc packages is the better answer.
+
+### 1.10 Decision executed — no-masquerade design, systemd CONFIRMED clang
+
+Masquerade run data point: 40 clang built, 9 residual, 6.74 CPU-hours (stopped
+before triage). Dropped the masquerade default + switched the identity audit to
+the **majority rule** (8a703b1).
+
+**Gating test — systemd without masquerade: ✓ DECISIVE.** Built clean in 2307s
+with **1936 clang compiles / 0 gcc**, blhc-clean. Pure clang+ThinLTO+bfd PID 1.
+The no-masquerade design works: systemd's BPF asm-header helper finds its
+headers because a real gcc is present for the detection step, while every
+shipped object is clang.
+
+→ **Launched the full clean Phase 1 re-run** in `ring0-clang2` (systemd already
+built, skipped by resume). This is the run of record. Expected residual under
+no-masquerade: bzip2/libcap2/bash (hardcoded gcc → honest force-gcc),
+apt (clang C++ → force-gcc / agentic-patch demo), libxcrypt (strip-lto),
+gmp (libtool → force-gcc), rust-coreutils (stock), sed (strip-nodoc). systemd,
+libselinux, libsemanage now expected CLANG. Wall-clock dominated by systemd
+(38m) + perl (36m) + openssl/util-linux.
