@@ -282,3 +282,97 @@ def test_strip_lto_reaches_link_stage_in_clang_world():
     # The strip must clear the link stage too — and lld with it.
     assert "DEB_LDFLAGS_APPEND" not in env
     assert builder_mod.flags_hash(flags, remedy) != builder_mod.flags_hash(flags, None)
+
+
+# ── linker selection (Phase 0 symver remedy) ────────────────────────────────
+
+
+def test_linker_default_lld_for_clang():
+    flags = GlobalFlags(march="native", opt="-O3", lto=Lto.AUTO, compiler="clang")
+    env = builder_mod.build_environment(flags, None, jobs=1, ccache_dir=None)
+    assert env["DEB_LDFLAGS_APPEND"] == "-flto=thin -fuse-ld=lld"
+
+
+def test_linker_bfd_for_clang_world():
+    flags = GlobalFlags(
+        march="native", opt="-O3", lto=Lto.AUTO, compiler="clang", linker="bfd"
+    )
+    env = builder_mod.build_environment(flags, None, jobs=1, ccache_dir=None)
+    assert env["DEB_LDFLAGS_APPEND"] == "-flto=thin -fuse-ld=bfd"
+    # the bfd choice is part of the resume key
+    base = GlobalFlags(march="native", opt="-O3", lto=Lto.AUTO, compiler="clang")
+    assert builder_mod.flags_hash(flags, None) != builder_mod.flags_hash(base, None)
+
+
+def test_explicit_linker_survives_lto_strip():
+    """A symver remedy that strips -flto must keep an explicit bfd choice
+    (unlike the implicit lld, which is dropped with LTO)."""
+    flags = GlobalFlags(
+        march="native", opt="-O3", lto=Lto.AUTO, compiler="clang", linker="bfd"
+    )
+    remedy = _override(strip_flags=["-flto=thin"])
+    env = builder_mod.build_environment(flags, remedy, jobs=1, ccache_dir=None)
+    assert "-flto" not in env.get("DEB_LDFLAGS_APPEND", "")
+    assert env["DEB_LDFLAGS_APPEND"] == "-fuse-ld=bfd"
+
+
+def test_gcc_world_unaffected_by_linker_field():
+    flags = GlobalFlags(march="native", opt="-O3", lto=Lto.AUTO)  # gcc, no linker
+    env = builder_mod.build_environment(flags, None, jobs=1, ccache_dir=None)
+    assert "DEB_LDFLAGS_APPEND" not in env
+
+
+# ── compiler masquerade + identity audit (Phase 0 §0.5) ─────────────────────
+
+
+def test_compiler_identity_audit_detects_gcc_in_clang_world():
+    log = "clang -march=native -c a.c -o a.o\nx86_64-linux-gnu-gcc -O2 -c b.c -o b.o\n"
+    ok, detail = builder_mod.compiler_identity_audit(log, "clang")
+    assert not ok and "gcc compiled" in detail
+
+
+def test_compiler_identity_audit_passes_pure_clang():
+    log = "clang -march=native -c a.c -o a.o\nclang++ -c b.cc -o b.o\n"
+    ok, detail = builder_mod.compiler_identity_audit(log, "clang")
+    assert ok and "gcc=0" in detail
+
+
+def test_compiler_identity_audit_vacuous_for_data_package():
+    ok, _ = builder_mod.compiler_identity_audit("dh_install: copying files\n", "clang")
+    assert ok
+
+
+def test_compiler_identity_audit_ignores_clang_in_paths():
+    # "clang" inside a path must not count as a gcc miss or a compile.
+    log = "gcc -c /home/x/clang-stuff/a.c -o a.o\n"
+    ok, _ = builder_mod.compiler_identity_audit(log, "clang")
+    assert not ok  # the gcc invocation is the violation
+
+
+def test_masquerade_hook_links_gcc_names_to_clang():
+    hook = builder_mod.masquerade_hook()
+    assert "ak-masq/gcc" in hook and "/usr/bin/clang" in hook
+    assert "ak-masq/g++" in hook and "/usr/bin/clang++" in hook
+    assert "x86_64-linux-gnu-gcc" in hook
+
+
+def test_render_sbuildrc_masquerade_prepends_path():
+    rc_on = builder_mod.render_sbuildrc(env={}, ccache_dir=None, masquerade=True)
+    rc_off = builder_mod.render_sbuildrc(env={}, ccache_dir=None, masquerade=False)
+    assert "/usr/local/lib/ak-masq:/usr/lib/ccache" in rc_on
+    assert "ak-masq" not in rc_off
+
+
+def test_masquerade_in_flags_hash_only_for_clang():
+    clang_masq = GlobalFlags(
+        compiler="clang", linker="bfd", masquerade=True, lto=Lto.AUTO
+    )
+    clang_plain = GlobalFlags(compiler="clang", linker="bfd", lto=Lto.AUTO)
+    assert builder_mod.flags_hash(clang_masq, None) != builder_mod.flags_hash(
+        clang_plain, None
+    )
+    # a force_compiler=gcc package in a masquerade world isn't masqueraded
+    forced = _override(force_compiler="gcc")
+    h_forced = builder_mod.flags_hash(clang_masq, forced)
+    h_forced_plain = builder_mod.flags_hash(clang_plain, forced)
+    assert h_forced == h_forced_plain  # masquerade key absent for gcc-forced pkg

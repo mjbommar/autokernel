@@ -63,6 +63,9 @@ class GlobalFlags(_Frozen):
     opt: str = "-O2"
     lto: Lto = Lto.NONE
     compiler: str = "gcc"  # world default is gcc; clang stays kernel-side
+    linker: str = ""  # "" = compiler default (lld for clang); "bfd"/"gold"/"lld"
+    masquerade: bool = False  # PATH-prepend gcc/cc → compiler (force clang
+    # through build systems that hardcode gcc; clang-world default)
     hardening: HardeningTier = HardeningTier.DISTRO_DEFAULT
     build_options: list[str] = Field(default_factory=list)  # DEB_BUILD_OPTIONS
     build_profiles: list[str] = Field(default_factory=list)  # DEB_BUILD_PROFILES
@@ -96,14 +99,29 @@ class GlobalFlags(_Frozen):
             parts.append("-D_FORTIFY_SOURCE=3")
         return " ".join(parts)
 
+    def linker_for(self, compiler: str) -> str:
+        """The linker to use. Explicit `linker` wins; else clang defaults
+        to lld (plugin-capable, needed for ThinLTO), gcc to its own
+        default (empty → bfd via collect2)."""
+        if self.linker:
+            return self.linker
+        return "lld" if compiler == "clang" else ""
+
     def ldflags_for(self, compiler: str) -> str:
         """Link-stage appends. clang ThinLTO needs the LTO flag at link
-        time and a plugin-capable linker (lld); gcc handles both via
-        collect2, so gcc gets nothing (baseline env stability)."""
+        time and a plugin-capable linker; gcc handles both via collect2,
+        so gcc gets nothing unless a linker is explicitly chosen.
+
+        bfd/gold preserve `.symver` versioned symbols under ThinLTO where
+        lld's --no-undefined-version default hard-errors (Phase 0
+        finding, docs/experiment/DIARY.md)."""
+        parts: list[str] = []
         if compiler == "clang" and self.lto != Lto.NONE:
-            lto = "-flto" if self.lto == Lto.FULL else "-flto=thin"
-            return f"{lto} -fuse-ld=lld"
-        return ""
+            parts.append("-flto" if self.lto == Lto.FULL else "-flto=thin")
+        linker = self.linker_for(compiler)
+        if linker:
+            parts.append(f"-fuse-ld={linker}")
+        return " ".join(parts)
 
 
 # ── overrides ───────────────────────────────────────────────────────────────

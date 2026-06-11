@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import shutil
 import subprocess
 import threading
@@ -119,17 +120,23 @@ def effective_build_options(
 
 def effective_ldflags(flags: GlobalFlags, override: PackageOverride | None) -> str:
     """Link-stage flags, honoring strip_flags: a remedy that strips the
-    LTO token must reach the *link* too, and lld goes with it (it's
-    only there for ThinLTO). Found live: strip-flags retries kept
-    failing because DEB_LDFLAGS_APPEND still carried -flto=thin."""
+    LTO token must reach the *link* too. The default lld goes with it
+    (it's only there for ThinLTO) — but an *explicit* linker choice
+    (linker=bfd/gold, the symver remedy) is kept. Found live: strip-flags
+    retries kept failing because DEB_LDFLAGS_APPEND still carried
+    -flto=thin."""
     base = flags.ldflags_for(effective_compiler(flags, override))
     if not base or not override:
         return base
     tokens = base.split()
     stripped = set(override.strip_flags)
+    # The implicit lld is dropped with LTO; an explicit linker is not.
+    implicit_lld = not flags.linker
     if any(t.startswith("-flto") for t in stripped):
         tokens = [
-            t for t in tokens if not t.startswith("-flto") and t != "-fuse-ld=lld"
+            t
+            for t in tokens
+            if not t.startswith("-flto") and not (implicit_lld and t == "-fuse-ld=lld")
         ]
     else:
         tokens = [t for t in tokens if t not in stripped]
@@ -196,23 +203,45 @@ def flags_hash(flags: GlobalFlags, override: PackageOverride | None) -> str:
         "compiler": effective_compiler(flags, override),
         "patches": override.patches if override else [],
     }
-    # Key only present when non-empty so gcc-world hashes (and their
+    # Key only present when non-empty/true so gcc-world hashes (and their
     # cached build records) are unchanged by the clang plumbing.
     ldflags = effective_ldflags(flags, override)
     if ldflags:
         payload["ldflags"] = ldflags
+    if flags.masquerade and effective_compiler(flags, override) == "clang":
+        payload["masquerade"] = True
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
 
 
 # ── sbuildrc ────────────────────────────────────────────────────────────────
 
 _CCACHE_MOUNT = "/srv/world-ccache"
+# Compiler masquerade: gcc/cc names symlinked to clang so build systems
+# that hardcode gcc still produce clang objects (the 100%-clang lever,
+# docs/experiment/DIARY.md §0.5). Lives in the chroot, prepended to PATH.
+_MASQ_DIR = "/usr/local/lib/ak-masq"
+_MASQ_CC = ("gcc", "cc", "x86_64-linux-gnu-gcc")
+_MASQ_CXX = ("g++", "c++", "x86_64-linux-gnu-g++")
+
+
+def masquerade_hook() -> str:
+    """mmdebstrap customize-hook that creates the gcc→clang masquerade in
+    the chroot. Points at the ccache clang shim when present so masqueraded
+    builds still cache."""
+    cc_links = " && ".join(
+        f'ln -sf /usr/bin/clang "$1{_MASQ_DIR}/{n}"' for n in _MASQ_CC
+    )
+    cxx_links = " && ".join(
+        f'ln -sf /usr/bin/clang++ "$1{_MASQ_DIR}/{n}"' for n in _MASQ_CXX
+    )
+    return f'mkdir -p "$1{_MASQ_DIR}" && {cc_links} && {cxx_links}'
 
 
 def render_sbuildrc(
     *,
     env: dict[str, str],
     ccache_dir: Path | None,
+    masquerade: bool = False,
 ) -> str:
     """Generated SBUILD_CONFIG.
 
@@ -235,6 +264,13 @@ def render_sbuildrc(
     env_lines = ",\n".join(
         f"    '{k}' => '{v}'" for k, v in sorted(env_in_chroot.items())
     )
+    # masquerade dir goes first so gcc/cc names resolve to clang before
+    # the real gcc in /usr/bin.
+    path_dirs = (
+        "/usr/lib/ccache:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+    )
+    if masquerade:
+        path_dirs = f"{_MASQ_DIR}:{path_dirs}"
     return (
         "\n".join(
             [
@@ -242,9 +278,7 @@ def render_sbuildrc(
                 "$build_environment = {",
                 env_lines,
                 "};",
-                # /usr/lib/ccache shims first; harmless when ccache is absent.
-                "$path = '/usr/lib/ccache:/usr/local/sbin:/usr/local/bin:"
-                "/usr/sbin:/usr/bin:/sbin:/bin';",
+                f"$path = '{path_dirs}';",
                 f"$unshare_bind_mounts = [{', '.join(mounts)}];",
                 "$run_lintian = 0;",
                 "$run_autopkgtest = 0;",
@@ -281,6 +315,29 @@ def extra_package_args(repo_dir: Path) -> list[str]:
 
 
 # ── audit ───────────────────────────────────────────────────────────────────
+
+# Compile invocations: a compiler driver name followed (anywhere) by a
+# `-c ` compile flag. Anchored to word boundaries so "clang" doesn't
+# match inside paths.
+_CLANG_COMPILE = re.compile(r"(?:^|[\s/])(?:clang\+\+|clang)\b[^\n]*?\s-c\s", re.M)
+_GCC_COMPILE = re.compile(
+    r"(?:^|[\s/])(?:x86_64-linux-gnu-)?(?:gcc|g\+\+|cc|c\+\+)\b[^\n]*?\s-c\s", re.M
+)
+
+
+def compiler_identity_audit(log_text: str, want: str) -> tuple[bool, str]:
+    """Did the requested compiler actually compile the objects? (Phase 0
+    §0.5: build systems that hardcode gcc silently produced gcc objects
+    despite CC=clang.) Returns (ok, detail). For want='clang', any gcc
+    compile invocation is a violation; a build that compiled *nothing*
+    (data/script package) passes vacuously."""
+    clang_n = len(_CLANG_COMPILE.findall(log_text))
+    gcc_n = len(_GCC_COMPILE.findall(log_text))
+    if want == "clang":
+        if gcc_n > 0:
+            return False, f"gcc compiled {gcc_n} object(s) (clang did {clang_n})"
+        return True, f"clang={clang_n} gcc=0"
+    return True, f"clang={clang_n} gcc={gcc_n}"
 
 
 def audit_build_log(
@@ -406,10 +463,14 @@ def ensure_chroot_tarball(ctx: BuildContext, log: Path) -> None:
     ctx.chroot_tarball.parent.mkdir(parents=True, exist_ok=True)
     comps = " ".join(base.components)
     include = "ccache"
+    extra_hooks: list[str] = []
     if ctx.manifest.flags.compiler == "clang":
-        # clang isn't a build-dep of anything; it must live in the
-        # chroot image. lld: ThinLTO needs a plugin-capable linker.
-        include = "ccache,clang,lld"
+        # clang isn't a build-dep of anything; it must live in the chroot.
+        # lld+llvm: ThinLTO needs a plugin-capable linker; llvm provides
+        # LLVMgold.so so linker=bfd works (the symver remedy, Phase 0).
+        include = "ccache,clang,lld,llvm"
+    if ctx.manifest.flags.masquerade:
+        extra_hooks.append(f"--customize-hook={masquerade_hook()}")
     argv = [
         "mmdebstrap",
         "--variant=buildd",
@@ -417,6 +478,7 @@ def ensure_chroot_tarball(ctx: BuildContext, log: Path) -> None:
         f"--include={include}",
         # sbuild's unshare bind mounts need pre-existing mountpoints.
         f'--customize-hook=mkdir -p "$1{_CCACHE_MOUNT}"',
+        *extra_hooks,
         base.suite,
         str(ctx.chroot_tarball),
         f"deb {base.mirror} {base.suite} {comps}",
@@ -515,8 +577,14 @@ def build_unit(ctx: BuildContext, unit: SourceUnit) -> PackageBuildRecord:
         ccache_dir=_CCACHE_MOUNT if ctx.ccache_dir else None,
     )
     sbuildrc = udir / "sbuildrc"
+    # Masquerade only when this package's effective compiler is clang —
+    # a force_compiler=gcc remedy must see a real gcc on PATH.
+    masq = (
+        ctx.manifest.flags.masquerade
+        and effective_compiler(ctx.manifest.flags, override) == "clang"
+    )
     sbuildrc.write_text(
-        render_sbuildrc(env=env, ccache_dir=ctx.ccache_dir),
+        render_sbuildrc(env=env, ccache_dir=ctx.ccache_dir, masquerade=masq),
         encoding="utf-8",
     )
     base = ctx.manifest.base
@@ -573,6 +641,20 @@ def build_unit(ctx: BuildContext, unit: SourceUnit) -> PackageBuildRecord:
             audit=audit,
             note=f"flag audit failed: missing {audit.missing}",
         )
+
+    # 4b. compiler-identity audit (the 100%-clang gate, Phase 0 §0.5):
+    # a clang world that silently built objects with gcc is a violation
+    # unless force_compiler=gcc was explicitly declared.
+    want = effective_compiler(ctx.manifest.flags, override)
+    if want == "clang":
+        cc_ok, cc_detail = compiler_identity_audit(build_log_text, "clang")
+        if not cc_ok:
+            return finish(
+                BuildOutcome.FTBFS,
+                local_version=local_version,
+                audit=audit,
+                note=f"compiler-identity audit failed: {cc_detail}",
+            )
 
     # 5. publish (serialized: the repo index is shared state)
     debs = sorted(src_dir.glob("*.deb"))
@@ -653,7 +735,13 @@ def build_world(
     manifest = apply_exceptions(manifest, world_dir)
     base = manifest.base
     ccache_dir = default_ccache_dir() if ccache else None
-    tarball_tag = "-clang" if manifest.flags.compiler == "clang" else ""
+    # Tag encodes the chroot's toolchain config so a different config
+    # regenerates rather than reusing a stale chroot (e.g. the masquerade
+    # + llvm additions for the 100%-clang world).
+    if manifest.flags.compiler == "clang":
+        tarball_tag = "-clang-masq" if manifest.flags.masquerade else "-clang"
+    else:
+        tarball_tag = ""
     ctx = BuildContext(
         manifest=manifest,
         world_dir=world_dir,

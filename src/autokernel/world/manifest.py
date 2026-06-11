@@ -166,6 +166,11 @@ def init_manifest(
     entries = entries if entries is not None else installed_entries()
     world = filter_ring(entries, ring)
     flags = flags_for_axes(aggression, threat, compiler=compiler)
+    if compiler == "clang":
+        # clang-world defaults (Phase 0): bfd+LLVMgold preserves .symver
+        # versioned symbols under ThinLTO where lld hard-fails; the
+        # masquerade forces clang through build systems that hardcode gcc.
+        flags = flags.model_copy(update={"linker": "bfd", "masquerade": True})
     sources = sorted({e.source for e in world})
     return WorldManifest(
         created_at=datetime.now(UTC),
