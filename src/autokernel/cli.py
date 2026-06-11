@@ -2965,6 +2965,172 @@ def _run_one_iteration(
     )
 
 
+# ── world (docs/WORLD.md) ───────────────────────────────────────────────────
+
+world_app = typer.Typer(
+    add_completion=False,
+    help="Source-rebuilt Debian, Gentoo-style (see docs/WORLD.md).",
+    no_args_is_help=True,
+)
+app.add_typer(world_app, name="world")
+
+
+@world_app.command("init")
+def world_init_cmd(
+    ring: Annotated[
+        int,
+        typer.Option(
+            "--ring",
+            min=0,
+            max=2,
+            help="0 = required set (minbase), 1 = +important, 2 = everything installed",
+        ),
+    ] = 0,
+    aggression: Annotated[
+        str,
+        typer.Option(help="conservative / balanced / aggressive → flag tier"),
+    ] = "balanced",
+    threat: Annotated[
+        str,
+        typer.Option(help="permissive / balanced / paranoid → hardening tier"),
+    ] = "balanced",
+    world_dir: Annotated[
+        Path | None,
+        typer.Option(
+            help="Output dir (default ~/.local/share/autokernel/world/<host>)"
+        ),
+    ] = None,
+) -> None:
+    """Capture the installed package set as a world manifest.
+
+    Deterministic (no LLM): dpkg state at the chosen ring + axes-derived
+    GlobalFlags + the preset toolchain gate. ``world propose`` (later)
+    is the LLM edit pass on this skeleton.
+    """
+    from autokernel.optimize_context import Aggression, ThreatModel
+    from autokernel.world import manifest as world_manifest_mod
+    from autokernel.world.models import Ring
+
+    try:
+        m = world_manifest_mod.init_manifest(
+            ring=Ring(ring),
+            aggression=Aggression(aggression),
+            threat=ThreatModel(threat),
+        )
+    except (ValueError, RuntimeError, subprocess.CalledProcessError) as exc:
+        raise err.fail(
+            "world init failed",
+            why=str(exc),
+            fix="check --ring/--aggression/--threat values and that dpkg-query works",
+            exit_code=2,
+        ) from exc
+
+    out_dir = world_dir or world_manifest_mod.default_world_dir()
+    manifest_path = out_dir / "manifest.json"
+    world_manifest_mod.save_manifest(m, manifest_path)
+
+    console.rule(f"world init: ring {ring}")
+    table = Table(show_header=False, box=None)
+    table.add_row("host", m.host)
+    table.add_row("base", f"{m.base.distro_id} {m.base.suite} ({m.base.mirror})")
+    table.add_row("binaries", str(len(m.world)))
+    table.add_row("sources", str(len(m.sources)))
+    table.add_row(
+        "flags",
+        f"{m.flags.cflags_append}  [dim](compiler={m.flags.compiler}, "
+        f"profiles={','.join(m.flags.build_profiles) or '-'})[/dim]",
+    )
+    table.add_row(
+        "overrides",
+        f"{len(m.overrides)} preset (toolchain gate: "
+        f"{', '.join(o.source_pkg for o in m.overrides) or 'none'})",
+    )
+    console.print(table)
+    console.print(f"\n[green]✓ wrote {manifest_path}[/green]")
+    console.print("[dim]next: `autokernel world plan`[/dim]")
+
+
+@world_app.command("plan")
+def world_plan_cmd(
+    world_dir: Annotated[
+        Path | None,
+        typer.Option(help="World dir holding manifest.json (default per-host dir)"),
+    ] = None,
+    sources_file: Annotated[
+        Path | None,
+        typer.Option(
+            help="Pre-fetched Sources text (skips network; mainly for tests/offline)"
+        ),
+    ] = None,
+) -> None:
+    """Compute the rebuild plan: source closure → waves → cost estimate."""
+    from autokernel.world import closure as world_closure_mod
+    from autokernel.world import indices as world_indices_mod
+    from autokernel.world import manifest as world_manifest_mod
+
+    out_dir = world_dir or world_manifest_mod.default_world_dir()
+    manifest_path = out_dir / "manifest.json"
+    if not manifest_path.exists():
+        raise err.fail(
+            "no world manifest",
+            why=f"{manifest_path} does not exist",
+            fix="run `autokernel world init` first",
+            exit_code=2,
+        )
+    m = world_manifest_mod.load_manifest(manifest_path)
+
+    if sources_file is not None:
+        text = sources_file.read_text(encoding="utf-8")
+        missing: list[str] = []
+    else:
+        console.print(
+            f"[dim]fetching Sources indices for {m.base.suite} "
+            f"(cached under {out_dir / 'indices'})…[/dim]"
+        )
+        text, missing = world_indices_mod.fetch_sources_text(
+            m.base, out_dir / "indices"
+        )
+    sources_meta = world_indices_mod.parse_sources(text)
+
+    plan = world_closure_mod.plan_world(m, sources_meta)
+    plan_path = out_dir / "plan.json"
+    plan_path.write_text(plan.model_dump_json(indent=2) + "\n", encoding="utf-8")
+
+    console.rule(f"world plan: {plan.stats.total_sources} sources, ring {m.ring}")
+    wave_table = Table("wave", "sources", "examples")
+    for i, wave in enumerate(plan.waves()):
+        names = [u.source for u in wave]
+        wave_table.add_row(
+            str(i),
+            str(len(names)),
+            ", ".join(names[:6]) + (", …" if len(names) > 6 else ""),
+        )
+    console.print(wave_table)
+
+    s = plan.stats
+    summary = Table(show_header=False, box=None)
+    summary.add_row(
+        "rebuild", f"{s.rebuild_sources} sources → {s.total_binaries} binaries"
+    )
+    summary.add_row("use_stock", f"{s.stock_sources} (toolchain gate / overrides)")
+    summary.add_row("est. CPU-hours", f"{s.est_cpu_hours}")
+    if s.monsters:
+        summary.add_row("monsters", ", ".join(s.monsters))
+    if s.cycle_sources:
+        summary.add_row("cycles (same-wave)", ", ".join(s.cycle_sources))
+    if s.unsourced:
+        summary.add_row(
+            "[yellow]unsourced[/yellow]",
+            f"{len(s.unsourced)} binaries with no deb-src entry: "
+            + ", ".join(s.unsourced[:8])
+            + ("…" if len(s.unsourced) > 8 else ""),
+        )
+    if missing:
+        summary.add_row("[yellow]missing indices[/yellow]", ", ".join(missing))
+    console.print(summary)
+    console.print(f"\n[green]✓ wrote {plan_path}[/green]")
+
+
 def _main() -> None:
     app()
 

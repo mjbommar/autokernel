@@ -50,6 +50,7 @@ dependencies = [
     "kconfiglib>=14.1.0",
     "pydantic>=2.13.4",
     "pydantic-ai>=1.92.0",
+    "python-debian>=0.1.49",
     "python-dotenv>=1.2.2",
     "rich>=15.0.0",
     "textual>=0.80",
