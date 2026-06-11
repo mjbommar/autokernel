@@ -307,3 +307,31 @@ genuine, categorized incompatibilities, each honestly remediable:
 This *is* the experiment's answer to "how much of Debian can be clang": ~86%
 cleanly, the rest a small, categorized, honestly-handled tail — exactly the
 hybrid the thesis predicts.
+
+### 1.9 systemd fails → the masquerade is net-counterproductive (decision point)
+
+systemd (PID 1, the most important package for the image) FTBFS compiling its
+**BPF objects**: `'asm/types.h' file not found`. systemd's BPF build uses a
+compiler helper to locate the multiarch asm headers; the masquerade (gcc→clang)
+breaks that detection.
+
+This crystallizes the masquerade trade-off, and it's **negative**:
+- **Wins** (~3, unimportant): bzip2, libcap2, bash-code become genuinely clang.
+- **Breaks** (~3-4, important): systemd, libselinux, libsemanage — build-tooling
+  steps (BPF header detection, SWIG `-aux-info`) that need a *real* gcc helper.
+  These get forced to gcc — including **PID 1**.
+- And the **identity audit already enforces honesty without the masquerade**:
+  a package that hardcodes gcc → silent-gcc → audit FTBFS → force-gcc (declared).
+
+So the cleaner design is **no masquerade**: CC=clang only. Then systemd/libselinux
+keep clang (their gcc *helpers* run real gcc and work), while bzip2/libcap2/bash
+become honestly force-gcc. That yields a more *meaningful* clang world — the
+packages that genuinely can't be clang are declared gcc, and the important ones
+(systemd as clang init) are real.
+
+**Plan:** finish the current (masquerade) run as a data point + capture its
+economics, then test systemd WITHOUT masquerade in a scratch dir to confirm it
+builds clean clang. If confirmed, drop the masquerade default and re-run Phase 1
+for the cleaner result (systemd=clang). The masquerade was my Phase-0 addition
+to chase "100% clang"; the experiment has shown it overshoots — honest force-gcc
+on the genuinely-gcc packages is the better answer.
