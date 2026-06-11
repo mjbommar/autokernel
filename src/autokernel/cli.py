@@ -3364,6 +3364,130 @@ def world_decide_cmd(
     console.print(f"\n[green]✓ wrote {out_dir / 'decisions'}/*.json[/green]")
 
 
+@world_app.command("image")
+def world_image_cmd(
+    world_dir: Annotated[
+        Path | None,
+        typer.Option(help="World dir holding the built repo"),
+    ] = None,
+    size_mb: Annotated[
+        int,
+        typer.Option(min=0, help="ext4 image size in MB (0 = auto from tar size)"),
+    ] = 0,
+    include: Annotated[
+        list[str] | None,
+        typer.Option(
+            "--include", help="Extra packages beyond the bootable default set"
+        ),
+    ] = None,
+    tar_only: Annotated[
+        bool,
+        typer.Option(
+            "--tar-only", help="Stop after the rootfs tar (skip ext4 packing)"
+        ),
+    ] = False,
+) -> None:
+    """Build a bootable rootfs image from the world repo (Path A, W5).
+
+    Unprivileged end to end: mmdebstrap assembly with the world repo
+    pinned at 1001, init set installed, boot sentinel injected, then
+    fakeroot + mkfs.ext4 -d packing. Boot it with `world boot-test`.
+    """
+    from autokernel.world import image as world_image_mod
+    from autokernel.world import manifest as world_manifest_mod
+    from autokernel.world import repo as world_repo_mod
+
+    out_dir = world_dir or world_manifest_mod.default_world_dir()
+    repo_dir = out_dir / "repo"
+    keyring = repo_dir / world_repo_mod.KEYRING_NAME
+    if not (repo_dir / "InRelease").exists():
+        raise err.fail(
+            "no signed world repo",
+            why=f"{repo_dir} has no InRelease",
+            fix="run `autokernel world build --execute` first",
+            exit_code=2,
+        )
+    m = world_manifest_mod.load_manifest(out_dir / "manifest.json")
+
+    image_dir = out_dir / "image"
+    out_tar = image_dir / "rootfs.tar"
+    log = image_dir / "image.log"
+    includes = [*world_image_mod.DEFAULT_INCLUDES, *(include or [])]
+
+    console.rule("world image (Path A)")
+    console.print(f"[dim]assembling rootfs from {repo_dir} (+ stock fallback)…[/dim]")
+    world_image_mod.build_rootfs_tar(
+        base=m.base,
+        repo_dir=repo_dir,
+        keyring=keyring,
+        out_tar=out_tar,
+        includes=includes,
+        log=log,
+    )
+    console.print(
+        f"[green]✓[/green] rootfs tar: {out_tar} "
+        f"({out_tar.stat().st_size // (1024 * 1024)} MB)"
+    )
+    if tar_only:
+        return
+
+    img = image_dir / "rootfs.img"
+    size = world_image_mod.image_size_mb(out_tar, explicit_mb=size_mb)
+    console.print(f"[dim]packing ext4 ({size} MB, fakeroot + mkfs.ext4 -d)…[/dim]")
+    world_image_mod.pack_ext4(out_tar, img, size_mb=size, log=log)
+    console.print(f"[green]✓[/green] image: {img}")
+    console.print("[dim]next: `autokernel world boot-test`[/dim]")
+
+
+@world_app.command("boot-test")
+def world_boot_test_cmd(
+    world_dir: Annotated[
+        Path | None,
+        typer.Option(help="World dir holding image/rootfs.img"),
+    ] = None,
+    kernel: Annotated[
+        Path | None,
+        typer.Option(
+            help="Kernel to direct-boot (default: running kernel extracted "
+            "from its .deb — /boot is 0600 on modern Ubuntu)"
+        ),
+    ] = None,
+    timeout: Annotated[int, typer.Option(min=30)] = 120,
+) -> None:
+    """Boot the world image in QEMU; success = the sentinel unit prints
+    at multi-user.target (then powers off)."""
+    from autokernel.world import image as world_image_mod
+    from autokernel.world import manifest as world_manifest_mod
+
+    out_dir = world_dir or world_manifest_mod.default_world_dir()
+    img = out_dir / "image" / "rootfs.img"
+    if not img.exists():
+        raise err.fail(
+            "no world image",
+            why=f"{img} does not exist",
+            fix="run `autokernel world image` first",
+            exit_code=2,
+        )
+    log = out_dir / "image" / "image.log"
+    if kernel is None:
+        console.print("[dim]extracting running kernel from its .deb…[/dim]")
+        kernel = world_image_mod.extract_boot_kernel(out_dir / "image", log=log)
+    serial_log = out_dir / "image" / "serial.log"
+
+    console.rule("world boot-test")
+    console.print(f"[dim]qemu direct-kernel boot: {kernel.name}, root=/dev/vda[/dim]")
+    ok, reason = world_image_mod.boot_image(
+        img, kernel, serial_log=serial_log, timeout=timeout
+    )
+    if ok:
+        console.print(f"[green]✓ BOOT OK[/green] — {reason}")
+        console.print(f"[dim]serial log: {serial_log}[/dim]")
+    else:
+        console.print(f"[red]✗ boot failed[/red] — {reason}")
+        console.print(f"[dim]serial log: {serial_log}[/dim]")
+        raise typer.Exit(1)
+
+
 @world_app.command("adopt")
 def world_adopt_cmd(
     world_dir: Annotated[
