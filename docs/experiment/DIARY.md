@@ -228,3 +228,25 @@ State of the experiment infrastructure:
 - Phase 5 foundation ✅ (economics; bench + treadmill pending images)
 - Phase 2 (PGO) — deliberately deferred until Phase 1 completes, so the
   profile-collection flow is designed against real hot-set packages.
+
+### 1.5 Residual is exactly as predicted; Phase 4 completed (0db0557)
+
+Phase 1 at 15/51 clean + **2 FTBFS, both predicted**:
+- **gmp**: genuine clang build-incompat — GMP's libtool mangles
+  `-fdebug-prefix-map` → `--debug-prefix-map` only under clang. → triage
+  `force-gcc` (masquerade *exposed* it instead of silently using gcc — the
+  audit working as designed).
+- **libxcrypt**: the hard `@@`-default-version compat case bfd can't fix
+  (Phase 0 0.7). → triage `strip -flto=thin`.
+
+The entire symver class (attr, libbsd, libmd, libsepol, libselinux, …) built
+clean with bfd — **no triage, $0 LLM**. This is the thesis in miniature.
+
+Completed Phase 4 (0db0557): wired the agentic-patch tier-3 escalation into
+`triage_and_retry` (opt-in `--agentic-patch claude|codex`) — deferred failures
+get a coding-agent patch, rebuild-validated. Won't fire in Phase 1 (the
+residual has flag remedies), but ready for genuine source-incompat cases.
+852 tests, all hooks green.
+
+Awaiting Phase 1's big waves + the triage pass (gmp→force-gcc, libxcrypt→
+strip-lto), then: economics capture → bootable clang image → Phase 2 PGO.
