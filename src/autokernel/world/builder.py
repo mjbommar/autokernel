@@ -793,11 +793,13 @@ def build_world(
     triage: bool = False,
     triage_model: str | None = None,
     triage_progress=None,
+    agentic_backend: str | None = None,
 ) -> list[PackageBuildRecord]:
     """Build all pending units wave by wave. FTBFS records and
     continues; with ``triage=True`` a bounded LLM triage→retry pass
-    runs over this run's failures afterwards. ``progress`` is an
-    optional callback(record)."""
+    runs over this run's failures afterwards (escalating deferred
+    failures to ``agentic_backend`` if set). ``progress`` is an optional
+    callback(record)."""
     import os
 
     manifest = apply_exceptions(manifest, world_dir)
@@ -849,7 +851,12 @@ def build_world(
                     progress(record)
     if triage and any(r.outcome == BuildOutcome.FTBFS for r in records):
         records = triage_and_retry(
-            ctx, plan, records, model=triage_model, progress=triage_progress
+            ctx,
+            plan,
+            records,
+            model=triage_model,
+            progress=triage_progress,
+            agentic_backend=agentic_backend,
         )
     return records
 
@@ -874,6 +881,71 @@ def _latest_build_log(world_dir: Path, unit: SourceUnit) -> Path | None:
     return fallback if fallback.exists() else None
 
 
+def agentic_patch_remedy(
+    ctx: BuildContext,
+    unit: SourceUnit,
+    record: PackageBuildRecord,
+    *,
+    backend: str,
+    model: str | None = None,
+    timeout_s: int = 600,
+) -> PackageOverride | None:
+    """Tier-3 escalation (Phase 4): a headless coding agent generates a
+    source patch for an FTBFS no flag remedy could fix. Returns a
+    patches= override (validated by the caller's rebuild) or None."""
+    from autokernel.world import agent_patch
+    from autokernel.world.models import OverrideSource
+
+    scratch = unit_dir(ctx.world_dir, unit) / "agentic"
+    if scratch.exists():
+        shutil.rmtree(scratch)
+    scratch.mkdir(parents=True)
+    fetch = [
+        "apt-get",
+        *_apt_opts(ctx.apt_dir),
+        "source",
+        "--only-source",
+        f"{unit.source}={unit.version}",
+    ]
+    if _run(fetch, cwd=scratch) != 0:
+        return None
+    tree = next((p for p in scratch.iterdir() if p.is_dir()), None)
+    if tree is None:
+        return None
+
+    log_path = _latest_build_log(ctx.world_dir, unit)
+    log_tail = ""
+    if log_path is not None:
+        from autokernel.world import triage as triage_mod
+
+        log_tail = triage_mod.extract_log_tail(
+            log_path.read_text(encoding="utf-8", errors="replace")
+        )
+    override = ctx.manifest.override_for(unit.source)
+    prompt = agent_patch.build_fix_prompt(
+        source=unit.source,
+        version=unit.version,
+        flags_desc=effective_cflags(ctx.manifest.flags, override),
+        log_tail=log_tail,
+    )
+    res = agent_patch.run_coding_agent(
+        backend, tree, prompt, model=model, timeout_s=timeout_s
+    )
+    if not res.ok:
+        return None
+    patches_dir = ctx.world_dir / "patches"
+    patch_path = agent_patch.save_patch(res.patch, patches_dir, unit.source)
+    (patches_dir / f"{unit.source}.transcript.json").write_text(
+        res.transcript, encoding="utf-8"
+    )
+    return PackageOverride(
+        source_pkg=unit.source,
+        patches=[str(patch_path)],
+        reason=f"agentic patch ({backend}): {res.summary[:120]}",
+        provenance=OverrideSource.LLM_TRIAGE,
+    )
+
+
 def triage_and_retry(
     ctx: BuildContext,
     plan: WorldPlan,
@@ -881,12 +953,15 @@ def triage_and_retry(
     *,
     model: str | None = None,
     progress=None,
+    agentic_backend: str | None = None,
 ) -> list[PackageBuildRecord]:
     """One bounded triage→retry pass over this run's FTBFS records.
 
     Confirmed remedies (retry built green) persist to exceptions.json;
-    deferred / still-failing packages stay FTBFS (stock fallback).
-    Returns the updated record list.
+    deferred / still-failing packages stay FTBFS (stock fallback). With
+    ``agentic_backend`` set (claude/codex), a deferred failure escalates
+    to tier-3: a coding agent generates a source patch, validated by the
+    same rebuild. Returns the updated record list.
     """
     from autokernel.world import triage as triage_mod
 
@@ -915,6 +990,13 @@ def triage_and_retry(
         if progress is not None:
             progress(verdict, problems)
         remedy = verdict.remedy
+        if remedy is None and agentic_backend:
+            # Tier-3: no flag remedy fit → let a coding agent try a patch.
+            remedy = agentic_patch_remedy(
+                ctx, unit, record, backend=agentic_backend, model=model
+            )
+            if progress is not None and remedy is not None:
+                progress(verdict, ["agentic-patch generated"])
         if remedy is None:
             continue  # deferred (or override_check rejected it)
 
@@ -941,6 +1023,7 @@ def triage_and_retry(
                 remedy.strip_build_options,
                 remedy.profiles,
                 remedy.force_compiler,
+                remedy.patches,
             ]
         )
         if new_record.outcome == BuildOutcome.OK and changes_something:

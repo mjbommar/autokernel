@@ -3202,6 +3202,14 @@ def world_build_cmd(
             help="Skip the LLM triage→retry pass over this run's failures",
         ),
     ] = False,
+    agentic_patch: Annotated[
+        str | None,
+        typer.Option(
+            "--agentic-patch",
+            help="Escalate deferred failures to a headless coding agent "
+            "(claude/codex) that generates a source patch (tier-3, opt-in)",
+        ),
+    ] = None,
 ) -> None:
     """Rebuild the planned world: fetch → +ak → sbuild → audit → publish.
 
@@ -3306,6 +3314,7 @@ def world_build_cmd(
         progress=_progress,
         triage=not no_triage,
         triage_progress=_triage_progress,
+        agentic_backend=agentic_patch,
     )
     failed = [r for r in records if not r.ok]
     final_ok = sum(1 for r in records if r.ok)

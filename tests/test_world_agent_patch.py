@@ -118,3 +118,73 @@ def test_save_patch(tmp_path):
     p = ap.save_patch("--- a\n+++ b\n", tmp_path / "patches", "libfoo")
     assert p.read_text().startswith("--- a")
     assert p.name == "libfoo.patch"
+
+
+# ── agentic escalation wiring (triage_and_retry) ────────────────────────────
+
+
+def test_agentic_patch_remedy_builds_override(tmp_path, monkeypatch):
+    """agentic_patch_remedy fetches source, runs the agent, returns a
+    patches= override. Fetch + agent are faked."""
+    from datetime import UTC, datetime
+
+    from autokernel.world import agent_patch
+    from autokernel.world import builder as builder_mod
+    from autokernel.world.models import (
+        BaseRelease,
+        BuildCost,
+        BuildOutcome,
+        GlobalFlags,
+        PackageBuildRecord,
+        Ring,
+        SourceUnit,
+        WorldManifest,
+    )
+
+    world_dir = tmp_path / "world"
+    world_dir.mkdir()
+    manifest = WorldManifest(
+        created_at=datetime.now(UTC),
+        host="h",
+        base=BaseRelease(distro_id="ubuntu", suite="resolute", mirror="http://x",
+                         components=["main"]),
+        ring=Ring.REQUIRED,
+        flags=GlobalFlags(compiler="clang", linker="bfd"),
+        world=[],
+    )  # fmt: skip
+    ctx = builder_mod.BuildContext(
+        manifest=manifest, world_dir=world_dir,
+        chroot_tarball=tmp_path / "c.tar", apt_dir=tmp_path / "apt",
+        repo_dir=tmp_path / "repo", gnupg_dir=tmp_path / "gpg",
+        ccache_dir=None, jobs=1, publish_lock=__import__("threading").Lock(),
+    )  # fmt: skip
+    unit = SourceUnit(source="libfoo", version="1.0", binaries=["libfoo1"],
+                      build_deps_in_closure=[], wave=0, cost=BuildCost.NORMAL)  # fmt: skip
+    record = PackageBuildRecord(source="libfoo", archive_version="1.0",
+                                flags_hash="x", outcome=BuildOutcome.FTBFS, wave=0)  # fmt: skip
+
+    # fake the fetch: create an unpacked tree under the agentic scratch
+    def fake_run(argv, **kw):
+        if "source" in argv:
+            tree = Path(kw["cwd"]) / "libfoo-1.0"
+            tree.mkdir(parents=True, exist_ok=True)
+            (tree / "x.c").write_text("int a=1;\n")
+        return 0
+
+    monkeypatch.setattr(builder_mod, "_run", fake_run)
+
+    def fake_agent(backend, tree, prompt, **kw):
+        return agent_patch.AgentResult(
+            backend=backend, ok=True, gave_up=False,
+            patch="--- a/x.c\n+++ b/x.c\n@@ -1 +1 @@\n-int a=1;\n+int a=2;\n",
+            summary="fixed x.c", transcript="{}", cost_usd=0.1, exit_code=0,
+        )  # fmt: skip
+
+    monkeypatch.setattr(agent_patch, "run_coding_agent", fake_agent)
+
+    remedy = builder_mod.agentic_patch_remedy(ctx, unit, record, backend="claude")
+    assert remedy is not None
+    assert remedy.patches and remedy.patches[0].endswith("libfoo.patch")
+    assert "agentic patch (claude)" in remedy.reason
+    assert (world_dir / "patches" / "libfoo.patch").exists()
+    assert (world_dir / "patches" / "libfoo.transcript.json").exists()
