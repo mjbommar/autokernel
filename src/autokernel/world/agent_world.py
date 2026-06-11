@@ -212,6 +212,24 @@ def apply_package_policy(decisions: list[PackageDecision]) -> list[PackageDecisi
 # ── the chug ────────────────────────────────────────────────────────────────
 
 
+def _record_usage(world_dir: Path, agent: str, model: str, result) -> None:
+    """Best-effort LLM usage capture for the economics ledger."""
+    try:
+        from autokernel.world import economics
+
+        usage = result.usage()
+        economics.record_usage(
+            world_dir,
+            agent=agent,
+            label=agent,
+            model=model,
+            input_tokens=getattr(usage, "input_tokens", 0) or 0,
+            output_tokens=getattr(usage, "output_tokens", 0) or 0,
+        )
+    except Exception:  # noqa: BLE001
+        pass  # nosec B110 — telemetry must never break the chug
+
+
 def decide_dimension(
     manifest: WorldManifest,
     dimension: Dimension,
@@ -246,7 +264,9 @@ def decide_dimension(
                 + f"\n# Packages ({dimension.value} decision for each):\n"
                 + "\n".join(line for _, line in chunk)
             )
-            batch = _get_agent(model, dimension).run_sync(prompt).output
+            result = _get_agent(model, dimension).run_sync(prompt)
+            batch = result.output
+            _record_usage(world_dir, f"dim-{dimension.value}", model, result)
             cache_dir.mkdir(parents=True, exist_ok=True)
             cache_path.write_text(
                 batch.model_dump_json(indent=2) + "\n", encoding="utf-8"

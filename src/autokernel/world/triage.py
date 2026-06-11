@@ -311,6 +311,24 @@ def draft_to_verdict(source: str, draft: _TriageDraft) -> FtbfsVerdict:
 # ── exceptions table ────────────────────────────────────────────────────────
 
 
+def _record_usage(world_dir: Path, agent: str, label: str, model: str, result) -> None:
+    """Best-effort LLM usage capture for the economics ledger."""
+    try:
+        from autokernel.world import economics
+
+        usage = result.usage()
+        economics.record_usage(
+            world_dir,
+            agent=agent,
+            label=label,
+            model=model,
+            input_tokens=getattr(usage, "input_tokens", 0) or 0,
+            output_tokens=getattr(usage, "output_tokens", 0) or 0,
+        )
+    except Exception:  # noqa: BLE001
+        pass  # nosec B110 — telemetry must never break a build
+
+
 def exceptions_path(world_dir: Path) -> Path:
     return world_dir / "exceptions.json"
 
@@ -390,7 +408,9 @@ def triage_record(
         prompt = build_prompt(
             record, log_tail, flags, effective_cflags, load_exceptions(world_dir)
         )
-        draft = _get_agent(model).run_sync(prompt).output
+        result = _get_agent(model).run_sync(prompt)
+        draft = result.output
+        _record_usage(world_dir, "triage", record.source, model, result)
         cache_dir.mkdir(parents=True, exist_ok=True)
         cache_path.write_text(draft.model_dump_json(indent=2) + "\n", encoding="utf-8")
 

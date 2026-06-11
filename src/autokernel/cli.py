@@ -3146,6 +3146,24 @@ def world_plan_cmd(
     console.print(f"\n[green]✓ wrote {plan_path}[/green]")
 
 
+@world_app.command("economics")
+def world_economics_cmd(
+    world_dir: Annotated[
+        Path | None,
+        typer.Option(help="World dir to tally"),
+    ] = None,
+) -> None:
+    """Report the fork's cost: build CPU-hours + LLM spend (the thesis
+    ledger, docs/CLANG_PGO_EXPERIMENT.md Phase 5)."""
+    from autokernel.world import economics
+    from autokernel.world import manifest as world_manifest_mod
+
+    out_dir = world_dir or world_manifest_mod.default_world_dir()
+    led = economics.tally(out_dir)
+    console.rule(f"world economics: {out_dir.name}")
+    console.print(led.render())
+
+
 @world_app.command("build")
 def world_build_cmd(
     world_dir: Annotated[
