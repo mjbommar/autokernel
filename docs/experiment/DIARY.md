@@ -205,3 +205,26 @@ claude/codex patch generator (11 tests, faked CLI). Both CLIs confirmed present
 residual is known — likely it's a *flag* remedy (libxcrypt strip-lto), not a
 source-patch case, so the agentic tier may not be exercised until rings 1-2 or
 the PGO phase surface a genuine source incompatibility.
+
+### 1.4 Phase 5 economics foundation built ahead (1b21eea)
+
+`world/economics.py` + `world economics` verb: the thesis ledger (build
+CPU-hours from records + LLM spend from `costs.jsonl`). LLM usage capture wired
+into the triage + dimension agents — fires only on real (non-cached) model
+calls, so the ledger is real spend. This had to land *before* the LLM calls I
+want to measure.
+
+**Notable Phase 1 signal so far:** at 7/51 built, **0 failures and $0 LLM
+cost** — bfd + masquerade are building the symver class and the gcc-hardcoded
+packages cleanly with *no triage needed*. The LLM only earns its keep on
+genuine failures (expected: ~libxcrypt). This is the hybrid thesis in
+miniature: deterministic machinery handles the bulk; the agent is reserved for
+the hard tail.
+
+State of the experiment infrastructure:
+- Phase 0 ✅ (linker=bfd, masquerade, identity audit)
+- Phase 1 🔄 building (7/51, 0 fail)
+- Phase 4 module ✅ (agent_patch.py; triage integration pending a real case)
+- Phase 5 foundation ✅ (economics; bench + treadmill pending images)
+- Phase 2 (PGO) — deliberately deferred until Phase 1 completes, so the
+  profile-collection flow is designed against real hot-set packages.
