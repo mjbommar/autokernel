@@ -28,7 +28,7 @@ import shutil
 import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -111,7 +111,12 @@ def build_environment(
     ccache_dir: str | None,
 ) -> dict[str, str]:
     cflags = effective_cflags(flags, override)
-    options = [*flags.build_options, f"parallel={jobs}"]
+    options = [
+        *dict.fromkeys(
+            [*flags.build_options, *(override.build_options if override else [])]
+        ),
+        f"parallel={jobs}",
+    ]
     profiles = sorted({*flags.build_profiles, *(override.profiles if override else [])})
     env = {
         "DEB_CFLAGS_APPEND": cflags,
@@ -128,7 +133,10 @@ def build_environment(
 def flags_hash(flags: GlobalFlags, override: PackageOverride | None) -> str:
     payload = {
         "cflags": effective_cflags(flags, override),
-        "options": flags.build_options,
+        "options": [
+            *flags.build_options,
+            *(override.build_options if override else []),
+        ],
         "profiles": sorted(
             {*flags.build_profiles, *(override.profiles if override else [])}
         ),
@@ -393,6 +401,11 @@ def build_unit(ctx: BuildContext, unit: SourceUnit) -> PackageBuildRecord:
     # 1. fetch source (exact archive version, fallback to candidate)
     src_dir = udir / "src"
     if src_dir.exists():
+        # Preserve prior attempts' sbuild logs before wiping the tree —
+        # triage evidence must survive retries.
+        for old in src_dir.glob("*.build"):
+            if not old.is_symlink():
+                shutil.move(str(old), udir / old.name)
         shutil.rmtree(src_dir)
     src_dir.mkdir(parents=True)
     fetch_argv = [
@@ -522,6 +535,18 @@ def _host_arch() -> str:
 # ── orchestration ───────────────────────────────────────────────────────────
 
 
+def apply_exceptions(manifest: WorldManifest, world_dir: Path) -> WorldManifest:
+    """Merge the confirmed exceptions table into the manifest. Exceptions
+    are prepended so override_for() prefers them; preset gates address
+    disjoint (use_stock) sources, so precedence is moot there."""
+    from autokernel.world import triage as triage_mod
+
+    exceptions = triage_mod.load_exceptions(world_dir)
+    if not exceptions:
+        return manifest
+    return manifest.model_copy(update={"overrides": [*exceptions, *manifest.overrides]})
+
+
 def pending_units(
     manifest: WorldManifest, plan: WorldPlan, world_dir: Path
 ) -> tuple[list[SourceUnit], list[SourceUnit], list[SourceUnit]]:
@@ -552,11 +577,17 @@ def build_world(
     only: list[str] | None = None,
     limit: int = 0,
     progress=None,
+    triage: bool = False,
+    triage_model: str | None = None,
+    triage_progress=None,
 ) -> list[PackageBuildRecord]:
     """Build all pending units wave by wave. FTBFS records and
-    continues. ``progress`` is an optional callback(record)."""
+    continues; with ``triage=True`` a bounded LLM triage→retry pass
+    runs over this run's failures afterwards. ``progress`` is an
+    optional callback(record)."""
     import os
 
+    manifest = apply_exceptions(manifest, world_dir)
     base = manifest.base
     ccache_dir = default_ccache_dir() if ccache else None
     ctx = BuildContext(
@@ -596,4 +627,101 @@ def build_world(
                 records.append(record)
                 if progress is not None:
                     progress(record)
+    if triage and any(r.outcome == BuildOutcome.FTBFS for r in records):
+        records = triage_and_retry(
+            ctx, plan, records, model=triage_model, progress=triage_progress
+        )
     return records
+
+
+# ── triage + retry (W3) ─────────────────────────────────────────────────────
+
+
+def _latest_build_log(world_dir: Path, unit: SourceUnit) -> Path | None:
+    udir = unit_dir(world_dir, unit)
+    logs = sorted(
+        (
+            p
+            for pattern in ("src/*.build", "*.build")
+            for p in udir.glob(pattern)
+            if not p.is_symlink()
+        ),
+        key=lambda p: p.stat().st_mtime,
+    )
+    if logs:
+        return logs[-1]
+    fallback = udir / "build.log"
+    return fallback if fallback.exists() else None
+
+
+def triage_and_retry(
+    ctx: BuildContext,
+    plan: WorldPlan,
+    records: list[PackageBuildRecord],
+    *,
+    model: str | None = None,
+    progress=None,
+) -> list[PackageBuildRecord]:
+    """One bounded triage→retry pass over this run's FTBFS records.
+
+    Confirmed remedies (retry built green) persist to exceptions.json;
+    deferred / still-failing packages stay FTBFS (stock fallback).
+    Returns the updated record list.
+    """
+    from autokernel.world import triage as triage_mod
+
+    model = model or triage_mod.DEFAULT_MODEL
+    units = {u.source: u for u in plan.units}
+    out = {r.source: r for r in records}
+    for record in records:
+        if record.outcome != BuildOutcome.FTBFS:
+            continue
+        unit = units.get(record.source)
+        if unit is None:
+            continue
+        log_path = _latest_build_log(ctx.world_dir, unit)
+        if log_path is None:
+            continue
+        override = ctx.manifest.override_for(record.source)
+        eff = effective_cflags(ctx.manifest.flags, override)
+        verdict, problems = triage_mod.triage_record(
+            record,
+            log_text=log_path.read_text(encoding="utf-8", errors="replace"),
+            flags=ctx.manifest.flags,
+            effective_cflags=eff,
+            world_dir=ctx.world_dir,
+            model=model,
+        )
+        if progress is not None:
+            progress(verdict, problems)
+        remedy = verdict.remedy
+        if remedy is None:
+            continue  # deferred (or override_check rejected it)
+
+        if remedy.use_stock:
+            # Nothing to validate by building; persist the surrender.
+            triage_mod.save_exception(ctx.world_dir, remedy)
+            continue
+
+        # Retry with the remedy active: remedy is prepended so
+        # override_for() picks it over any earlier entry.
+        patched = ctx.manifest.model_copy(
+            update={"overrides": [remedy, *ctx.manifest.overrides]}
+        )
+        retry_ctx = replace(ctx, manifest=patched)
+        new_record = build_unit(retry_ctx, unit)
+        out[record.source] = new_record
+        if progress is not None:
+            progress(new_record, None)
+        changes_something = any(
+            [
+                remedy.strip_flags,
+                remedy.add_flags,
+                remedy.build_options,
+                remedy.profiles,
+                remedy.force_compiler,
+            ]
+        )
+        if new_record.outcome == BuildOutcome.OK and changes_something:
+            triage_mod.save_exception(ctx.world_dir, remedy)
+    return list(out.values())

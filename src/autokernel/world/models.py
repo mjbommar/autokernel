@@ -100,6 +100,8 @@ class PackageOverride(_Frozen):
     source_pkg: str
     strip_flags: list[str] = Field(default_factory=list)
     add_flags: list[str] = Field(default_factory=list)
+    build_options: list[str] = Field(default_factory=list)
+    """Extra DEB_BUILD_OPTIONS tokens for this package (e.g. nocheck)."""
     force_compiler: str | None = None
     profiles: list[str] = Field(default_factory=list)
     patches: list[str] = Field(default_factory=list)  # paths to quilt patches
@@ -298,3 +300,87 @@ class PackageBuildRecord(_Frozen):
     @property
     def ok(self) -> bool:
         return self.outcome == BuildOutcome.OK
+
+
+# ── FTBFS triage (W3) ───────────────────────────────────────────────────────
+
+
+class FailureClass(str, Enum):
+    LTO_INCOMPAT = "lto-incompat"
+    OPT_MISCOMPILE = "opt-miscompile"  # tests caught wrong behavior under -O3/march
+    MARCH_ILLEGAL_INSN = "march-illegal-insn"
+    TEST_FAILURE = "test-failure"  # deterministic, environment-caused
+    TEST_FLAKE = "test-flake"  # nondeterministic; plain retry may pass
+    DEP_SKEW = "dep-skew"  # build-dep version mismatch
+    PACKAGING = "packaging"  # debian/ machinery, not the code
+    UNKNOWN = "unknown"
+
+
+class FtbfsVerdict(_Frozen):
+    """LLM triage of one failed build. ``remedy=None`` means defer to a
+    human (surfaced via status); a remedy is only persisted to the
+    exceptions table after a real rebuild confirms it."""
+
+    source: str
+    failure_class: FailureClass
+    remedy: PackageOverride | None = None
+    confidence: float = Field(ge=0.0, le=1.0)
+    evidence: list[str] = Field(default_factory=list)
+    """Quoted build-log lines that justify the verdict."""
+
+
+# ── package dimension decisions (W3) ────────────────────────────────────────
+
+
+class Dimension(str, Enum):
+    NECESSITY = "necessity"  # keep / trim / demote-to-optional
+    FLAGS = "flags"  # proactive per-package flag hazards
+    FEATURES = "features"  # build profiles / configure toggles
+    RISK = "risk"  # blast radius for review routing / test depth
+
+
+class PackageDecision(_Frozen):
+    """One LLM judgment about one source package in one dimension —
+    the package analogue of RemovalProposal. Advisory: policy + review
+    decide what's applied."""
+
+    source: str
+    dimension: Dimension
+    decision: str  # dimension-specific vocabulary, validated by the agent layer
+    reason: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    params: dict[str, list[str]] = Field(default_factory=dict)
+    """Structured extras: flags dimension → {'strip': [...], 'add': [...]};
+    features → {'profiles': [...]}."""
+
+
+# Packages whose removal can brick the system — the package-level
+# analogue of the load-bearing CONFIG blocklist. Source-package names;
+# necessity 'trim' decisions against these are forced to 'keep' at the
+# policy layer regardless of confidence.
+LOAD_BEARING_SOURCES = frozenset(
+    {
+        "apt",
+        "base-files",
+        "base-passwd",
+        "bash",
+        "coreutils",
+        "dash",
+        "debconf",
+        "dpkg",
+        "e2fsprogs",
+        "glibc",
+        "grep",
+        "grub2",
+        "gzip",
+        "init-system-helpers",
+        "linux",
+        "pam",
+        "sed",
+        "shadow",
+        "systemd",
+        "sysvinit",
+        "tar",
+        "util-linux",
+    }
+)

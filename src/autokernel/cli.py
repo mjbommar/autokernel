@@ -3162,12 +3162,20 @@ def world_build_cmd(
         int,
         typer.Option(min=0, help="Build at most N pending units (0 = no limit)"),
     ] = 0,
+    no_triage: Annotated[
+        bool,
+        typer.Option(
+            "--no-triage",
+            help="Skip the LLM triage→retry pass over this run's failures",
+        ),
+    ] = False,
 ) -> None:
     """Rebuild the planned world: fetch → +ak → sbuild → audit → publish.
 
     Kill/restart-resumable: completed units with unchanged flags are
-    skipped. FTBFS records and continues — the triage agent (W3) picks
-    those up later.
+    skipped. FTBFS gets one LLM triage→retry pass (override_check gates
+    the remedy, a green rebuild confirms it, exceptions.json remembers
+    it); still-failing packages stay stock.
     """
     from autokernel.world import builder as world_builder_mod
     from autokernel.world import manifest as world_manifest_mod
@@ -3187,7 +3195,8 @@ def world_build_cmd(
     m = world_manifest_mod.load_manifest(manifest_path)
     plan = WorldPlan.model_validate(json.loads(plan_path.read_text(encoding="utf-8")))
 
-    to_build, done, stock = world_builder_mod.pending_units(m, plan, out_dir)
+    m_eff = world_builder_mod.apply_exceptions(m, out_dir)
+    to_build, done, stock = world_builder_mod.pending_units(m_eff, plan, out_dir)
     if only:
         wanted = set(only)
         to_build = [u for u in to_build if u.source in wanted]
@@ -3213,13 +3222,8 @@ def world_build_cmd(
         console.print("\n[dim]dry-run; pass --execute to build[/dim]")
         return
 
-    ok_count = 0
-    fail_count = 0
-
     def _progress(record) -> None:
-        nonlocal ok_count, fail_count
         if record.outcome == BuildOutcome.OK:
-            ok_count += 1
             blhc = (
                 f", blhc findings: {record.audit.blhc_finding_count}"
                 if record.audit
@@ -3230,11 +3234,32 @@ def world_build_cmd(
                 f"({record.duration_s:.0f}s{blhc})"
             )
         else:
-            fail_count += 1
             console.print(
                 f"[red]✗[/red] {record.source}: {record.outcome.value} — "
                 f"{record.note or ''} [dim]({record.log_path})[/dim]"
             )
+
+    def _triage_progress(item, problems) -> None:
+        from autokernel.world.models import FtbfsVerdict
+
+        if isinstance(item, FtbfsVerdict):
+            remedy = (
+                "defer (human)"
+                if item.remedy is None
+                else (
+                    "use-stock"
+                    if item.remedy.use_stock
+                    else f"strip={item.remedy.strip_flags} add={item.remedy.add_flags} "
+                    f"options={item.remedy.build_options}"
+                )
+            )
+            console.print(
+                f"[cyan]⚕[/cyan] {item.source}: {item.failure_class.value} "
+                f"(conf {item.confidence:.2f}) → {remedy}"
+                + (f" [red]override_check: {problems}[/red]" if problems else "")
+            )
+        else:  # a retried PackageBuildRecord
+            _progress(item)
 
     records = world_builder_mod.build_world(
         m,
@@ -3246,12 +3271,15 @@ def world_build_cmd(
         only=only,
         limit=limit,
         progress=_progress,
+        triage=not no_triage,
+        triage_progress=_triage_progress,
     )
     failed = [r for r in records if not r.ok]
+    final_ok = sum(1 for r in records if r.ok)
     console.print(
         Panel.fit(
-            f"[green]{ok_count} built[/green] · "
-            + (f"[red]{fail_count} failed[/red]" if fail_count else "0 failed")
+            f"[green]{final_ok} built[/green] · "
+            + (f"[red]{len(failed)} failed[/red]" if failed else "0 failed")
             + f"\nrepo: {out_dir / 'repo'}"
             + (
                 "\n[dim]failures recorded; W3 triage will handle them — "
@@ -3265,6 +3293,60 @@ def world_build_cmd(
     )
     if failed:
         raise typer.Exit(1)
+
+
+@world_app.command("decide")
+def world_decide_cmd(
+    world_dir: Annotated[
+        Path | None,
+        typer.Option(help="World dir holding manifest.json"),
+    ] = None,
+) -> None:
+    """Run the package dimension agents over every source — the chug.
+
+    Four batched, cached LLM passes (necessity / flags / features /
+    risk). Advisory output to <world-dir>/decisions/; the load-bearing
+    package blocklist is enforced at the policy layer. Re-running pays
+    only for changed batches.
+    """
+    from autokernel.world import agent_world as world_agent_mod
+    from autokernel.world import manifest as world_manifest_mod
+    from autokernel.world.models import Dimension
+
+    out_dir = world_dir or world_manifest_mod.default_world_dir()
+    manifest_path = out_dir / "manifest.json"
+    if not manifest_path.exists():
+        raise err.fail(
+            "no world manifest",
+            why=f"{manifest_path} does not exist",
+            fix="run `autokernel world init` first",
+            exit_code=2,
+        )
+    m = world_manifest_mod.load_manifest(manifest_path)
+
+    console.rule(f"world decide: {len(m.sources)} sources × 4 dimensions")
+
+    def _progress(dim, batch, total, cached) -> None:
+        tag = "[dim](cached)[/dim]" if cached else ""
+        console.print(f"  {dim.value}: batch {batch}/{total} {tag}")
+
+    decisions = world_agent_mod.decide_world(m, out_dir, progress=_progress)
+
+    table = Table("dimension", "decisions", "actionable", "examples")
+    for dim in Dimension:
+        ds = decisions[dim]
+        if dim == Dimension.NECESSITY:
+            actionable = [d for d in ds if d.decision == "trim"]
+        elif dim == Dimension.FLAGS:
+            actionable = [d for d in ds if d.decision == "override"]
+        elif dim == Dimension.FEATURES:
+            actionable = [d for d in ds if d.decision == "profiles"]
+        else:
+            actionable = [d for d in ds if d.decision == "boot-critical"]
+        examples = ", ".join(f"{d.source}({d.confidence:.1f})" for d in actionable[:5])
+        table.add_row(dim.value, str(len(ds)), str(len(actionable)), examples)
+    console.print(table)
+    console.print(f"\n[green]✓ wrote {out_dir / 'decisions'}/*.json[/green]")
 
 
 @world_app.command("adopt")
