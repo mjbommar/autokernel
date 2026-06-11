@@ -186,5 +186,22 @@ masquerade and counts as a real-gcc violation. Validated on the real bzip2 log
 is self-protecting anyway: real gcc + `-flto=thin` FTBFS at compile, so it
 can't silently ship.)
 
-Also landed `apply_patches()` (the Phase-4 prerequisite — `PackageOverride.patches`
-modeled since W3 but never honored).
+Also landed `apt_patches()` — `apply_patches()` (the Phase-4 prerequisite —
+`PackageOverride.patches` modeled since W3 but never honored).
+
+### 1.2 Restart healthy; masquerade proven end-to-end
+
+Restarted ring0-clang with the fixed audit (eb71af0 / 95d076d). bzip2 ✓ (73s) —
+**conclusive proof the masquerade works end-to-end**: bzip2 forces `CC=gcc` in
+debian/rules yet built successfully with `-flto=thin` in its flags, which real
+gcc rejects outright — so clang compiled it via the masquerade. Build
+progressing through the waves.
+
+### 1.3 Phase 4 module built ahead (eb71af0)
+
+While Phase 1 builds, landed `world/agent_patch.py` — the tier-3 headless
+claude/codex patch generator (11 tests, faked CLI). Both CLIs confirmed present
+(claude 2.1.173, codex 0.139.0). Triage integration deferred until Phase 1's
+residual is known — likely it's a *flag* remedy (libxcrypt strip-lto), not a
+source-patch case, so the agentic tier may not be exercised until rings 1-2 or
+the PGO phase surface a genuine source incompatibility.
