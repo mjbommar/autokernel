@@ -196,7 +196,7 @@ def build_environment(
 
 
 def flags_hash(flags: GlobalFlags, override: PackageOverride | None) -> str:
-    payload = {
+    payload: dict[str, object] = {
         "cflags": effective_cflags(flags, override),
         "options": effective_build_options(flags, override),
         "profiles": effective_profiles(flags, override),
@@ -314,30 +314,88 @@ def extra_package_args(repo_dir: Path) -> list[str]:
     return [f"--extra-package={deb}" for deb in sorted(repo_dir.glob("*.deb"))]
 
 
+def apply_patches(unpacked: Path, patches: list[str]) -> tuple[bool, str]:
+    """Install override patches as quilt patches (debian/patches/ +
+    series). For 3.0 (quilt) packages dpkg-source applies the series at
+    build time. Each patch is verified to apply cleanly with a dry-run
+    before it's committed to the series. Returns (ok, problem)."""
+    patches_dir = unpacked / "debian" / "patches"
+    patches_dir.mkdir(parents=True, exist_ok=True)
+    series = patches_dir / "series"
+    existing = (
+        series.read_text(encoding="utf-8").splitlines() if series.exists() else []
+    )
+    added: list[str] = []
+    for src in patches:
+        src_path = Path(src)
+        if not src_path.is_file():
+            return False, f"patch not found: {src}"
+        name = f"autokernel-{src_path.name}"
+        if not name.endswith((".patch", ".diff")):
+            name += ".patch"
+        # dry-run apply against the tree (strip level 1, the dpkg default)
+        check = subprocess.run(
+            ["patch", "-p1", "--dry-run", "-i", str(src_path)],
+            cwd=unpacked,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if check.returncode != 0:
+            return (
+                False,
+                f"{src_path.name} does not apply: {check.stdout.strip()[:200]}",
+            )
+        shutil.copy2(src_path, patches_dir / name)
+        added.append(name)
+    new_series = [*existing, *(n for n in added if n not in existing)]
+    series.write_text("\n".join(new_series) + "\n", encoding="utf-8")
+    return True, f"applied {len(added)} patch(es)"
+
+
 # ── audit ───────────────────────────────────────────────────────────────────
 
 # Compile invocations: a compiler driver name followed (anywhere) by a
 # `-c ` compile flag. Anchored to word boundaries so "clang" doesn't
 # match inside paths.
 _CLANG_COMPILE = re.compile(r"(?:^|[\s/])(?:clang\+\+|clang)\b[^\n]*?\s-c\s", re.M)
+# Any gcc-family driver compiling — used when the masquerade is OFF.
 _GCC_COMPILE = re.compile(
     r"(?:^|[\s/])(?:x86_64-linux-gnu-)?(?:gcc|g\+\+|cc|c\+\+)\b[^\n]*?\s-c\s", re.M
 )
+# gcc that BYPASSES the masquerade: an absolute path not under ak-masq,
+# or a version-suffixed driver (gcc-15) the masquerade doesn't shadow.
+# Bare `gcc`/`cc` under masquerade resolve via PATH to clang, so they do
+# NOT count here (Phase 1 finding: bzip2's debian/rules forces CC=gcc,
+# but masqueraded gcc→clang built it — the log says "gcc -c" yet clang ran).
+_GCC_BYPASS = re.compile(
+    r"(?:/(?:usr|lib|bin)\S*?/(?:x86_64-linux-gnu-)?(?:gcc|g\+\+)"
+    r"|(?:^|\s)(?:x86_64-linux-gnu-)?(?:gcc|g\+\+)-\d+)"
+    r"\b[^\n]*?\s-c\s",
+    re.M,
+)
 
 
-def compiler_identity_audit(log_text: str, want: str) -> tuple[bool, str]:
+def compiler_identity_audit(
+    log_text: str, want: str, *, masquerade: bool = False
+) -> tuple[bool, str]:
     """Did the requested compiler actually compile the objects? (Phase 0
     §0.5: build systems that hardcode gcc silently produced gcc objects
-    despite CC=clang.) Returns (ok, detail). For want='clang', any gcc
-    compile invocation is a violation; a build that compiled *nothing*
-    (data/script package) passes vacuously."""
+    despite CC=clang.) Returns (ok, detail).
+
+    With the masquerade ON, bare gcc/cc names are clang (PATH-redirected),
+    so only an absolute-path or version-suffixed gcc — which bypasses the
+    masquerade — counts as a real-gcc violation. A build that compiled
+    *nothing* (data/script package) passes vacuously."""
     clang_n = len(_CLANG_COMPILE.findall(log_text))
-    gcc_n = len(_GCC_COMPILE.findall(log_text))
-    if want == "clang":
-        if gcc_n > 0:
-            return False, f"gcc compiled {gcc_n} object(s) (clang did {clang_n})"
-        return True, f"clang={clang_n} gcc=0"
-    return True, f"clang={clang_n} gcc={gcc_n}"
+    if want != "clang":
+        return True, f"clang={clang_n} gcc={len(_GCC_COMPILE.findall(log_text))}"
+    gcc_pat = _GCC_BYPASS if masquerade else _GCC_COMPILE
+    gcc_n = len(gcc_pat.findall(log_text))
+    if gcc_n > 0:
+        kind = "masquerade-bypassing gcc" if masquerade else "gcc"
+        return False, f"{kind} compiled {gcc_n} object(s) (clang did {clang_n})"
+    return True, f"clang={clang_n} gcc=0"
 
 
 def audit_build_log(
@@ -548,6 +606,14 @@ def build_unit(ctx: BuildContext, unit: SourceUnit) -> PackageBuildRecord:
     if unpacked is None:
         return finish(BuildOutcome.FETCH_FAILED, note="no unpacked source dir")
 
+    # 1b. apply override patches (agentic-patch remedy, Phase 4) — into
+    # debian/patches/ + series so dpkg-source -b ships them and the
+    # chroot build applies them.
+    if override and override.patches:
+        applied, problem = apply_patches(unpacked, override.patches)
+        if not applied:
+            return finish(BuildOutcome.FTBFS, note=f"patch apply failed: {problem}")
+
     # 2. +ak suffix
     rc = _run(
         ["dch", "--local", LOCAL_SUFFIX, f"Rebuild by autokernel world ({fhash})."],
@@ -647,7 +713,9 @@ def build_unit(ctx: BuildContext, unit: SourceUnit) -> PackageBuildRecord:
     # unless force_compiler=gcc was explicitly declared.
     want = effective_compiler(ctx.manifest.flags, override)
     if want == "clang":
-        cc_ok, cc_detail = compiler_identity_audit(build_log_text, "clang")
+        cc_ok, cc_detail = compiler_identity_audit(
+            build_log_text, "clang", masquerade=masq
+        )
         if not cc_ok:
             return finish(
                 BuildOutcome.FTBFS,

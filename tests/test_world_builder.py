@@ -349,6 +349,27 @@ def test_compiler_identity_audit_ignores_clang_in_paths():
     assert not ok  # the gcc invocation is the violation
 
 
+def test_compiler_identity_audit_masquerade_bare_gcc_is_clang():
+    # Phase 1: bzip2's debian/rules forces CC=gcc, but the masquerade
+    # redirects bare gcc → clang. "gcc -c" in the log is really clang.
+    log = "gcc -march=native -flto=thin -c blocksort.c -o blocksort.o\n"
+    ok, detail = builder_mod.compiler_identity_audit(log, "clang", masquerade=True)
+    assert ok, detail
+
+
+def test_compiler_identity_audit_masquerade_catches_bypass():
+    # absolute-path or versioned gcc bypasses the masquerade → violation
+    for bypass in (
+        "/usr/bin/gcc -O2 -c a.c -o a.o\n",
+        "gcc-15 -O2 -c a.c -o a.o\n",
+        "/usr/bin/x86_64-linux-gnu-gcc -c a.c -o a.o\n",
+    ):
+        ok, detail = builder_mod.compiler_identity_audit(
+            bypass, "clang", masquerade=True
+        )
+        assert not ok, f"should flag bypass: {bypass!r} ({detail})"
+
+
 def test_masquerade_hook_links_gcc_names_to_clang():
     hook = builder_mod.masquerade_hook()
     assert "ak-masq/gcc" in hook and "/usr/bin/clang" in hook
@@ -376,3 +397,41 @@ def test_masquerade_in_flags_hash_only_for_clang():
     h_forced = builder_mod.flags_hash(clang_masq, forced)
     h_forced_plain = builder_mod.flags_hash(clang_plain, forced)
     assert h_forced == h_forced_plain  # masquerade key absent for gcc-forced pkg
+
+
+# ── override patch application (Phase 4 prerequisite) ───────────────────────
+
+
+def test_apply_patches_adds_to_series(tmp_path):
+    tree = tmp_path / "pkg-1.0"
+    (tree / "debian" / "patches").mkdir(parents=True)
+    (tree / "debian" / "patches" / "series").write_text("existing.patch\n")
+    (tree / "foo.c").write_text("int x = 1;\n")
+    # a patch that applies cleanly
+    patch = tmp_path / "fix.patch"
+    patch.write_text(
+        "--- a/foo.c\n+++ b/foo.c\n@@ -1 +1 @@\n-int x = 1;\n+int x = 2;\n"
+    )
+    ok, detail = builder_mod.apply_patches(tree, [str(patch)])
+    assert ok, detail
+    series = (tree / "debian" / "patches" / "series").read_text()
+    assert "existing.patch" in series
+    assert "autokernel-fix.patch" in series
+    assert (tree / "debian" / "patches" / "autokernel-fix.patch").exists()
+
+
+def test_apply_patches_rejects_nonapplying(tmp_path):
+    tree = tmp_path / "pkg-1.0"
+    tree.mkdir()
+    (tree / "foo.c").write_text("int x = 1;\n")
+    bad = tmp_path / "bad.patch"
+    bad.write_text("--- a/foo.c\n+++ b/foo.c\n@@ -1 +1 @@\n-int y = 9;\n+int y = 8;\n")
+    ok, problem = builder_mod.apply_patches(tree, [str(bad)])
+    assert not ok and "does not apply" in problem
+
+
+def test_apply_patches_missing_file(tmp_path):
+    tree = tmp_path / "pkg-1.0"
+    tree.mkdir()
+    ok, problem = builder_mod.apply_patches(tree, ["/nonexistent.patch"])
+    assert not ok and "not found" in problem
