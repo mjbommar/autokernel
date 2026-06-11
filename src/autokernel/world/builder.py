@@ -107,6 +107,16 @@ def effective_cflags(flags: GlobalFlags, override: PackageOverride | None) -> st
     return " ".join(tokens)
 
 
+def effective_build_options(
+    flags: GlobalFlags, override: PackageOverride | None
+) -> list[str]:
+    merged = dict.fromkeys(
+        [*flags.build_options, *(override.build_options if override else [])]
+    )
+    strip = set(override.strip_build_options) if override else set()
+    return [o for o in merged if o not in strip]
+
+
 def build_environment(
     flags: GlobalFlags,
     override: PackageOverride | None,
@@ -116,12 +126,7 @@ def build_environment(
 ) -> dict[str, str]:
     compiler = effective_compiler(flags, override)
     cflags = effective_cflags(flags, override)
-    options = [
-        *dict.fromkeys(
-            [*flags.build_options, *(override.build_options if override else [])]
-        ),
-        f"parallel={jobs}",
-    ]
+    options = [*effective_build_options(flags, override), f"parallel={jobs}"]
     profiles = sorted({*flags.build_profiles, *(override.profiles if override else [])})
     env = {
         "DEB_CFLAGS_APPEND": cflags,
@@ -134,6 +139,11 @@ def build_environment(
     if compiler == "clang":
         env["CC"] = "clang"
         env["CXX"] = "clang++"
+        # Drop the distro's gcc-flavored LTO defaults (-flto=auto,
+        # -ffat-lto-objects) from dpkg-buildflags output; our ThinLTO
+        # flags are appended instead. Best-effort: rules that set their
+        # own MAINT_OPTIONS shadow this.
+        env["DEB_BUILD_MAINT_OPTIONS"] = "optimize=-lto"
     elif flags.compiler == "clang":  # clang world, this package forced to gcc
         env["CC"] = "gcc"
         env["CXX"] = "g++"
@@ -150,10 +160,7 @@ def build_environment(
 def flags_hash(flags: GlobalFlags, override: PackageOverride | None) -> str:
     payload = {
         "cflags": effective_cflags(flags, override),
-        "options": [
-            *flags.build_options,
-            *(override.build_options if override else []),
-        ],
+        "options": effective_build_options(flags, override),
         "profiles": sorted(
             {*flags.build_profiles, *(override.profiles if override else [])}
         ),

@@ -77,6 +77,12 @@ class GlobalFlags(_Frozen):
         parallel LTO is ThinLTO. gcc output is byte-identical to the
         pre-clang-plumbing behavior (flags_hash stability for resumes)."""
         parts = [f"-march={self.march}", self.opt]
+        if compiler == "clang":
+            # Ubuntu's dwz (0.16) can't parse clang's DWARF5 sections
+            # (.debug_str_offsets) and dh_dwz hard-fails on every
+            # binary-producing package. DWARF4 keeps debug info and dwz
+            # working. Found live; the Firefox/LLVM packages do the same.
+            parts.append("-gdwarf-4")
         if self.lto != Lto.NONE:
             if compiler == "clang":
                 parts.append("-flto" if self.lto == Lto.FULL else "-flto=thin")
@@ -122,6 +128,11 @@ class PackageOverride(_Frozen):
     add_flags: list[str] = Field(default_factory=list)
     build_options: list[str] = Field(default_factory=list)
     """Extra DEB_BUILD_OPTIONS tokens for this package (e.g. nocheck)."""
+
+    strip_build_options: list[str] = Field(default_factory=list)
+    """Global DEB_BUILD_OPTIONS tokens to drop for this package — e.g.
+    nodoc for packages whose debian/rules aren't nodoc-clean (found
+    live: sed, bash)."""
     force_compiler: str | None = None
     profiles: list[str] = Field(default_factory=list)
     patches: list[str] = Field(default_factory=list)  # paths to quilt patches

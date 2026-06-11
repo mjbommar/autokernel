@@ -40,7 +40,7 @@ from autokernel.world.models import (
 )
 
 DEFAULT_MODEL = os.environ.get("AUTOKERNEL_MODEL", "anthropic:claude-sonnet-4-6")
-SYSTEM_PROMPT_VERSION = "v2"  # v2: force-gcc action + clang rule 5b
+SYSTEM_PROMPT_VERSION = "v3"  # v3: strip-build-options (nodoc-dirty rules)
 LOG_TAIL_LINES = 250
 
 
@@ -52,7 +52,9 @@ class _RemedyDraft(BaseModel):
         description=(
             "'retry' (flake, no change) | 'nocheck' (skip tests: ONLY for "
             "environment-caused or flaky test failures) | 'strip-flags' "
-            "(remove offending optimization flags) | 'force-gcc' (clang "
+            "(remove offending optimization flags) | 'strip-build-options' "
+            "(drop a global DEB_BUILD_OPTIONS token like nodoc for a package "
+            "whose debian/rules can't handle it) | 'force-gcc' (clang "
             "world only: build this package with gcc) | 'use-stock' (give "
             "up, keep distro binary) | 'defer' (needs human)"
         )
@@ -64,6 +66,10 @@ class _RemedyDraft(BaseModel):
     add_flags: list[str] = Field(
         default_factory=list,
         description="For strip-flags: replacement tokens (e.g. -O2 when stripping -O3)",
+    )
+    strip_options: list[str] = Field(
+        default_factory=list,
+        description="For strip-build-options: exact DEB_BUILD_OPTIONS tokens to drop",
     )
     reason: str = Field(description="One sentence: why this remedy fits the evidence")
 
@@ -119,7 +125,10 @@ Classify the failure and pick ONE remedy. Decision rules, in order:
    retry (the repo may have caught up) or defer.
 
 7. debian/rules or packaging machinery errors unrelated to our flags →
-   packaging; remedy defer.
+   packaging. If the error is a doc/test path that the global
+   DEB_BUILD_OPTIONS broke (e.g. rules that rmdir/cd doc directories
+   which nodoc made empty or absent), remedy strip-build-options with
+   the offending token (usually nodoc). Otherwise defer.
 
 8. When genuinely unsure, defer. A wrong nocheck ships broken binaries;
    a defer just leaves the stock package in place. Bias to safety.

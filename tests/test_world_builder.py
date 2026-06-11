@@ -232,8 +232,12 @@ def test_clang_world_translates_lto_and_sets_compiler_env():
     env = builder_mod.build_environment(flags, None, jobs=2, ccache_dir=None)
     assert "-flto=thin" in env["DEB_CFLAGS_APPEND"]
     assert "-flto=auto" not in env["DEB_CFLAGS_APPEND"]
+    # DWARF4: Ubuntu's dwz can't parse clang's DWARF5 (dh_dwz hard-fails).
+    assert "-gdwarf-4" in env["DEB_CFLAGS_APPEND"]
     assert env["CC"] == "clang" and env["CXX"] == "clang++"
     assert env["DEB_LDFLAGS_APPEND"] == "-flto=thin -fuse-ld=lld"
+    # Distro gcc-LTO defaults dropped from dpkg-buildflags output.
+    assert env["DEB_BUILD_MAINT_OPTIONS"] == "optimize=-lto"
 
 
 def test_force_gcc_override_in_clang_world():
