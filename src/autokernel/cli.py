@@ -2994,6 +2994,13 @@ def world_init_cmd(
         str,
         typer.Option(help="permissive / balanced / paranoid → hardening tier"),
     ] = "balanced",
+    compiler: Annotated[
+        str,
+        typer.Option(
+            help="gcc (archive-native, default) / clang (llvm world: "
+            "ThinLTO via lld; AutoFDO/BOLT-ready)"
+        ),
+    ] = "gcc",
     world_dir: Annotated[
         Path | None,
         typer.Option(
@@ -3011,11 +3018,19 @@ def world_init_cmd(
     from autokernel.world import manifest as world_manifest_mod
     from autokernel.world.models import Ring
 
+    if compiler not in ("gcc", "clang"):
+        raise err.fail(
+            "unknown --compiler",
+            why=f"{compiler!r} is not supported",
+            fix="use gcc or clang",
+            exit_code=2,
+        )
     try:
         m = world_manifest_mod.init_manifest(
             ring=Ring(ring),
             aggression=Aggression(aggression),
             threat=ThreatModel(threat),
+            compiler=compiler,
         )
     except (ValueError, RuntimeError, subprocess.CalledProcessError) as exc:
         raise err.fail(

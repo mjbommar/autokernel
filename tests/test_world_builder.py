@@ -222,3 +222,37 @@ def test_adopt_execute_stops_on_failure():
     rc = repo_mod.adopt_execute(plan, runner=runner)
     assert rc == 1
     assert len(calls) == 2  # stopped at the failing step
+
+
+# ── clang plumbing ──────────────────────────────────────────────────────────
+
+
+def test_clang_world_translates_lto_and_sets_compiler_env():
+    flags = GlobalFlags(march="native", opt="-O3", lto=Lto.AUTO, compiler="clang")
+    env = builder_mod.build_environment(flags, None, jobs=2, ccache_dir=None)
+    assert "-flto=thin" in env["DEB_CFLAGS_APPEND"]
+    assert "-flto=auto" not in env["DEB_CFLAGS_APPEND"]
+    assert env["CC"] == "clang" and env["CXX"] == "clang++"
+    assert env["DEB_LDFLAGS_APPEND"] == "-flto=thin -fuse-ld=lld"
+
+
+def test_force_gcc_override_in_clang_world():
+    flags = GlobalFlags(march="native", opt="-O3", lto=Lto.AUTO, compiler="clang")
+    forced = _override(force_compiler="gcc")
+    env = builder_mod.build_environment(flags, forced, jobs=2, ccache_dir=None)
+    # gcc dialect for this one package, explicit CC since cc→clang isn't set
+    assert "-flto=auto" in env["DEB_CFLAGS_APPEND"]
+    assert env["CC"] == "gcc" and env["CXX"] == "g++"
+    assert "DEB_LDFLAGS_APPEND" not in env
+    assert builder_mod.flags_hash(flags, forced) != builder_mod.flags_hash(flags, None)
+
+
+def test_gcc_world_env_unchanged_by_clang_plumbing():
+    """Baseline stability: gcc worlds must not grow CC/LDFLAGS keys and
+    the flags string must be byte-identical to the pre-clang behavior —
+    otherwise every cached gcc build record is invalidated."""
+    flags = GlobalFlags(march="native", opt="-O3", lto=Lto.AUTO)  # compiler=gcc
+    env = builder_mod.build_environment(flags, None, jobs=2, ccache_dir=None)
+    assert "CC" not in env and "CXX" not in env
+    assert "DEB_LDFLAGS_APPEND" not in env
+    assert env["DEB_CFLAGS_APPEND"] == "-march=native -O3 -flto=auto"

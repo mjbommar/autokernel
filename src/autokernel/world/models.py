@@ -70,14 +70,34 @@ class GlobalFlags(_Frozen):
     @property
     def cflags_append(self) -> str:
         """Value for DEB_CFLAGS_APPEND / DEB_CXXFLAGS_APPEND."""
+        return self.cflags_for(self.compiler)
+
+    def cflags_for(self, compiler: str) -> str:
+        """Compiler-dialect-aware flags: clang has no -flto=auto, its
+        parallel LTO is ThinLTO. gcc output is byte-identical to the
+        pre-clang-plumbing behavior (flags_hash stability for resumes)."""
         parts = [f"-march={self.march}", self.opt]
-        if self.lto in (Lto.AUTO, Lto.FULL):
-            parts.append("-flto=auto" if self.lto == Lto.AUTO else "-flto")
-        elif self.lto == Lto.THIN:
-            parts.append("-flto=thin")
+        if self.lto != Lto.NONE:
+            if compiler == "clang":
+                parts.append("-flto" if self.lto == Lto.FULL else "-flto=thin")
+            elif self.lto == Lto.AUTO:
+                parts.append("-flto=auto")
+            elif self.lto == Lto.FULL:
+                parts.append("-flto")
+            else:  # THIN on gcc: nearest equivalent is plain parallel LTO
+                parts.append("-flto=auto")
         if self.hardening != HardeningTier.DISTRO_DEFAULT:
             parts.append("-D_FORTIFY_SOURCE=3")
         return " ".join(parts)
+
+    def ldflags_for(self, compiler: str) -> str:
+        """Link-stage appends. clang ThinLTO needs the LTO flag at link
+        time and a plugin-capable linker (lld); gcc handles both via
+        collect2, so gcc gets nothing (baseline env stability)."""
+        if compiler == "clang" and self.lto != Lto.NONE:
+            lto = "-flto" if self.lto == Lto.FULL else "-flto=thin"
+            return f"{lto} -fuse-ld=lld"
+        return ""
 
 
 # ── overrides ───────────────────────────────────────────────────────────────
@@ -307,6 +327,7 @@ class PackageBuildRecord(_Frozen):
 
 class FailureClass(str, Enum):
     LTO_INCOMPAT = "lto-incompat"
+    NEEDS_GCC = "needs-gcc"  # clang-hostile: gcc extensions, configure rejects clang
     OPT_MISCOMPILE = "opt-miscompile"  # tests caught wrong behavior under -O3/march
     MARCH_ILLEGAL_INSN = "march-illegal-insn"
     TEST_FAILURE = "test-failure"  # deterministic, environment-caused

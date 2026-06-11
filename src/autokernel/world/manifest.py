@@ -157,6 +157,7 @@ def init_manifest(
     ring: Ring,
     aggression: Aggression,
     threat: ThreatModel,
+    compiler: str = "gcc",
     base: BaseRelease | None = None,
     entries: list[WorldEntry] | None = None,
     host: str | None = None,
@@ -164,7 +165,7 @@ def init_manifest(
     base = base or detect_base()
     entries = entries if entries is not None else installed_entries()
     world = filter_ring(entries, ring)
-    flags = flags_for_axes(aggression, threat)
+    flags = flags_for_axes(aggression, threat, compiler=compiler)
     sources = sorted({e.source for e in world})
     return WorldManifest(
         created_at=datetime.now(UTC),

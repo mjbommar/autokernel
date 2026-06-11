@@ -78,7 +78,18 @@ sources excepted); ring 2 is days — resumable, so fine. Chimera
 Linux's `cbuild` (whole distro, one toolchain, consistent flags,
 handful of maintainers) is the existence proof for the end state;
 Alpine's `/etc/apk/world` file independently validates the manifest
-design.
+design. **CachyOS** is the closest commercial-grade proof of the
+*payoff*: an Arch derivative shipping its whole repo compiled at
+x86-64-v3/v4/Zen4 + LTO, with PGO and BOLT on core packages, plus
+CPU-optimized kernels — a real user base validating that optimized
+rebuilds of a binary distro are wanted and maintainable. The
+differences define our niche: CachyOS centrally builds a few fixed
+ISA tiers; autokernel builds per-host (`-march=native`, the host's
+own workload for PGO) on Debian/Ubuntu sources, with LLM judgment
+replacing their human packaging team — and BOLT (post-link layout
+optimization from the same perf profiles AutoFDO uses) slots
+naturally into the W8+/PGO arc as the third stage of the
+clang/llvm pipeline.
 
 ## The pipeline
 
@@ -375,6 +386,27 @@ recipes from `knowledge/` rendered into the prompt.
    `provenance=LLM_TRIAGE`. Unconfirmed → `use_stock` + defer to
    human in `world status`. Aggression axis sets the confidence
    floor, same as kernel proposals.
+
+   **Remedy escalation ladder.** The triage vocabulary is tiered by
+   invasiveness; each tier is tried (and rebuild-validated) before
+   the next, and `use_stock`/defer is the floor, not the second
+   resort:
+
+   | Tier | Remedy | Mechanism |
+   |---|---|---|
+   | 0 | retry | flake — same flags, run it again |
+   | 1 | flag surgery | strip/add/translate tokens — incl. gcc↔clang dialect translation (`-flto=auto`→`-flto=thin`, drop `-ffat-lto-objects`, …) when the world compiler differs from the archive's |
+   | 2 | build shaping | per-pkg `DEB_BUILD_OPTIONS` / profiles / `force_compiler` (NEEDS_GCC verdicts under a clang world) |
+   | 3 | **agentic patching** | hand the failing package to a coding agent in headless CLI mode (claude / codex) with the source tree + build log; it produces a quilt patch into `PackageOverride.patches`, validated like any remedy by a real rebuild, persisted with patch + provenance + the agent transcript |
+   | 4 | use_stock / defer | honesty debt, surfaced in `world status` |
+
+   Tier 3 is what makes a compiler migration (gcc→clang world) an
+   engineering task instead of a research project: material source
+   incompatibilities stop being dead ends and become generated,
+   validated, *reviewable* patches. Patches are pinned to the source
+   version they were generated against; the watcher re-validates
+   them on every upstream bump and demotes to defer when they stop
+   applying.
 
 Axes → flags mapping (defaults; manifest agent may tighten, never
 loosen, hardening):

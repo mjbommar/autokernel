@@ -82,9 +82,9 @@ def publish(
     """Copy .debs into the flat repo and regenerate signed indices."""
     repo_dir.mkdir(parents=True, exist_ok=True)
     for deb in debs:
-        target = repo_dir / deb.name
-        if not target.exists():
-            shutil.copy2(deb, target)
+        # Always overwrite: a flag change rebuilds the same +akN version
+        # with different contents — latest build wins.
+        shutil.copy2(deb, repo_dir / deb.name)
     reindex(repo_dir, gnupg_dir=gnupg_dir, arch=arch, runner=runner)
 
 

@@ -95,8 +95,12 @@ def _run(
 # ── flags / env composition ─────────────────────────────────────────────────
 
 
+def effective_compiler(flags: GlobalFlags, override: PackageOverride | None) -> str:
+    return (override.force_compiler if override else None) or flags.compiler
+
+
 def effective_cflags(flags: GlobalFlags, override: PackageOverride | None) -> str:
-    tokens = flags.cflags_append.split()
+    tokens = flags.cflags_for(effective_compiler(flags, override)).split()
     if override:
         tokens = [t for t in tokens if t not in set(override.strip_flags)]
         tokens.extend(override.add_flags)
@@ -110,6 +114,7 @@ def build_environment(
     jobs: int,
     ccache_dir: str | None,
 ) -> dict[str, str]:
+    compiler = effective_compiler(flags, override)
     cflags = effective_cflags(flags, override)
     options = [
         *dict.fromkeys(
@@ -123,6 +128,18 @@ def build_environment(
         "DEB_CXXFLAGS_APPEND": cflags,
         "DEB_BUILD_OPTIONS": " ".join(options),
     }
+    # gcc worlds get no CC/CXX/LDFLAGS keys at all: /usr/bin/cc is
+    # already gcc, and key-set stability keeps the gcc baseline's
+    # flags_hashes (and cached builds) valid.
+    if compiler == "clang":
+        env["CC"] = "clang"
+        env["CXX"] = "clang++"
+    elif flags.compiler == "clang":  # clang world, this package forced to gcc
+        env["CC"] = "gcc"
+        env["CXX"] = "g++"
+    ldflags = flags.ldflags_for(compiler)
+    if ldflags:
+        env["DEB_LDFLAGS_APPEND"] = ldflags
     if profiles:
         env["DEB_BUILD_PROFILES"] = " ".join(profiles)
     if ccache_dir:
@@ -140,9 +157,14 @@ def flags_hash(flags: GlobalFlags, override: PackageOverride | None) -> str:
         "profiles": sorted(
             {*flags.build_profiles, *(override.profiles if override else [])}
         ),
-        "compiler": (override.force_compiler if override else None) or flags.compiler,
+        "compiler": effective_compiler(flags, override),
         "patches": override.patches if override else [],
     }
+    # Key only present when non-empty so gcc-world hashes (and their
+    # cached build records) are unchanged by the clang plumbing.
+    ldflags = flags.ldflags_for(effective_compiler(flags, override))
+    if ldflags:
+        payload["ldflags"] = ldflags
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
 
 
@@ -347,11 +369,16 @@ def ensure_chroot_tarball(ctx: BuildContext, log: Path) -> None:
     base = ctx.manifest.base
     ctx.chroot_tarball.parent.mkdir(parents=True, exist_ok=True)
     comps = " ".join(base.components)
+    include = "ccache"
+    if ctx.manifest.flags.compiler == "clang":
+        # clang isn't a build-dep of anything; it must live in the
+        # chroot image. lld: ThinLTO needs a plugin-capable linker.
+        include = "ccache,clang,lld"
     argv = [
         "mmdebstrap",
         "--variant=buildd",
         "--mode=unshare",
-        "--include=ccache",
+        f"--include={include}",
         # sbuild's unshare bind mounts need pre-existing mountpoints.
         f'--customize-hook=mkdir -p "$1{_CCACHE_MOUNT}"',
         base.suite,
@@ -590,13 +617,14 @@ def build_world(
     manifest = apply_exceptions(manifest, world_dir)
     base = manifest.base
     ccache_dir = default_ccache_dir() if ccache else None
+    tarball_tag = "-clang" if manifest.flags.compiler == "clang" else ""
     ctx = BuildContext(
         manifest=manifest,
         world_dir=world_dir,
         chroot_tarball=Path.home()
         / ".cache"
         / "sbuild"
-        / f"{base.suite}-{_host_arch()}-world.tar.zst",
+        / f"{base.suite}-{_host_arch()}-world{tarball_tag}.tar.zst",
         apt_dir=world_dir / "apt",
         repo_dir=world_dir / "repo",
         gnupg_dir=world_dir / "gnupg",

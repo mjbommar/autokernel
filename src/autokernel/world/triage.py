@@ -40,7 +40,7 @@ from autokernel.world.models import (
 )
 
 DEFAULT_MODEL = os.environ.get("AUTOKERNEL_MODEL", "anthropic:claude-sonnet-4-6")
-SYSTEM_PROMPT_VERSION = "v1"
+SYSTEM_PROMPT_VERSION = "v2"  # v2: force-gcc action + clang rule 5b
 LOG_TAIL_LINES = 250
 
 
@@ -52,8 +52,9 @@ class _RemedyDraft(BaseModel):
         description=(
             "'retry' (flake, no change) | 'nocheck' (skip tests: ONLY for "
             "environment-caused or flaky test failures) | 'strip-flags' "
-            "(remove offending optimization flags) | 'use-stock' (give up, "
-            "keep distro binary) | 'defer' (needs human)"
+            "(remove offending optimization flags) | 'force-gcc' (clang "
+            "world only: build this package with gcc) | 'use-stock' (give "
+            "up, keep distro binary) | 'defer' (needs human)"
         )
     )
     strip_flags: list[str] = Field(
@@ -107,6 +108,12 @@ Classify the failure and pick ONE remedy. Decision rules, in order:
 
 5. LTO symbol/section errors (lto1, ld plugin, symbol versioning) →
    lto-incompat: strip-flags removing the -flto token.
+
+5b. When the world compiler is clang and the failure is clang-specific
+   (error: unknown argument/warning option, gcc extensions like nested
+   functions or computed gotos rejected, configure hard-coding gcc) →
+   needs-gcc; remedy force-gcc. Don't use this for plain warnings
+   promoted to errors that strip-flags could fix.
 
 6. Unsatisfiable build-deps, version conflicts → dep-skew; remedy
    retry (the repo may have caught up) or defer.
@@ -181,7 +188,7 @@ def build_prompt(
 # ── static validation (the config_check analogue) ───────────────────────────
 
 _FLAG_RE = re.compile(r"^-[A-Za-z][A-Za-z0-9=_+,.-]*$")
-_VALID_ACTIONS = {"retry", "nocheck", "strip-flags", "use-stock", "defer"}
+_VALID_ACTIONS = {"retry", "nocheck", "strip-flags", "force-gcc", "use-stock", "defer"}
 
 
 def override_check(draft: _TriageDraft, *, effective_tokens: list[str]) -> list[str]:
@@ -227,6 +234,13 @@ def draft_to_verdict(source: str, draft: _TriageDraft) -> FtbfsVerdict:
             source_pkg=source,
             strip_flags=draft.remedy.strip_flags,
             add_flags=draft.remedy.add_flags,
+            reason=draft.remedy.reason,
+            provenance=OverrideSource.LLM_TRIAGE,
+        )
+    elif action == "force-gcc":
+        remedy = PackageOverride(
+            source_pkg=source,
+            force_compiler="gcc",
             reason=draft.remedy.reason,
             provenance=OverrideSource.LLM_TRIAGE,
         )
