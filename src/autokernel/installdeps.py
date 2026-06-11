@@ -16,7 +16,12 @@ Design is parallel to ``install.py``:
    * ``build`` — kernel build deps (``DistroSpec.build_deps``)
    * ``boot-test`` — qemu (and optionally pip-install virtme-ng)
    * ``install`` — bootloader tools (usually already present)
-   * ``all`` — union of the above
+   * ``world`` — Debian source-rebuild toolchain (sbuild, mmdebstrap,
+     blhc, …) for ``autokernel world`` / the W0 spike; see
+     docs/WORLD.md. Debian-family only, and deliberately *not* part
+     of ``all`` — it's a different pipeline with a much bigger
+     footprint than the kernel verbs need.
+   * ``all`` — union of build + boot-test + install
 
 Recommended (non-required) packages are included by default but can
 be skipped with ``--no-recommended``. Most useful: ``ccache``
@@ -41,6 +46,7 @@ class Target(str, Enum):
     BUILD = "build"
     BOOT_TEST = "boot-test"
     INSTALL = "install"
+    WORLD = "world"
     ALL = "all"
 
 
@@ -88,6 +94,31 @@ _BOOTLOADER_PKG: dict[Family, list[str]] = {
     Family.ALPINE: ["grub-bios"],
     Family.UNKNOWN: [],
     Family.NIXOS: [],
+}
+
+
+# Debian source-rebuild toolchain for `autokernel world` (docs/WORLD.md).
+# Only meaningful on the Debian family: the whole pipeline is built on
+# deb-src + sbuild. plan() rejects Target.WORLD for other families.
+#   sbuild/mmdebstrap/uidmap — unshare-mode clean-chroot builds
+#   devscripts              — dch (the +ak version suffix), dget
+#   dpkg-dev                — dpkg-source, dpkg-buildpackage plumbing
+#   apt-utils               — apt-ftparchive (flat local repo)
+#   blhc                    — build-log flag/hardening audit
+#   autopkgtest             — per-package regression oracle (W4+)
+#   gnupg                   — repo Release signing
+_WORLD_PKG: dict[Family, list[str]] = {
+    Family.DEBIAN: [
+        "sbuild",
+        "mmdebstrap",
+        "uidmap",
+        "devscripts",
+        "dpkg-dev",
+        "apt-utils",
+        "blhc",
+        "autopkgtest",
+        "gnupg",
+    ],
 }
 
 
@@ -172,6 +203,11 @@ def _packages_for_target(
 
     if target in (Target.INSTALL, Target.ALL):
         _extend(_BOOTLOADER_PKG.get(spec.family, []))
+
+    if target == Target.WORLD:
+        _extend(_WORLD_PKG.get(spec.family, []))
+        if recommended:
+            _extend(_RECOMMENDED_PKG.get(spec.family, []))
 
     return pkgs
 
@@ -264,6 +300,21 @@ def plan(
                 "distro family is UNKNOWN; can't pick a package manager. "
                 "Install build-essential / flex / bison / libssl-dev / libelf-dev / "
                 "libncurses-dev / dwarves / zstd / qemu-system-x86 by hand."
+            ),
+        )
+
+    if target == Target.WORLD and spec.family != Family.DEBIAN:
+        return InstallDepsPlan(
+            family=spec.family,
+            target=target,
+            install_cmd=[],
+            requested=[],
+            missing=[],
+            already_installed=[],
+            rejected_reason=(
+                "`--for world` is Debian/Ubuntu-only: the world pipeline is "
+                "built on deb-src + sbuild (see docs/WORLD.md). Detected "
+                f"family: {spec.family.value!r}."
             ),
         )
 

@@ -101,6 +101,40 @@ def test_target_all_unions(monkeypatch):
     assert "grub2-common" in p.requested  # install-target extras
 
 
+def test_target_world_includes_rebuild_toolchain(monkeypatch):
+    info = _info(Family.DEBIAN)
+    monkeypatch.setattr(id_mod, "_query_installed", lambda fam, pkgs: (pkgs, []))
+    p = plan(distro=info, spec=spec_for(info), target=Target.WORLD)
+    for pkg in ("sbuild", "mmdebstrap", "blhc", "autopkgtest", "devscripts"):
+        assert pkg in p.requested
+    # world is its own pipeline: no kernel build deps, no qemu, no virtme
+    assert "build-essential" not in p.requested
+    assert "qemu-system-x86" not in p.requested
+    assert p.optional_python_pkgs == []
+    # ccache rides along as a recommended package
+    assert "ccache" in p.requested
+
+
+def test_target_world_rejected_on_non_debian(monkeypatch):
+    info = _info(Family.FEDORA)
+    monkeypatch.setattr(id_mod, "_query_installed", lambda fam, pkgs: (pkgs, []))
+    p = plan(distro=info, spec=spec_for(info), target=Target.WORLD)
+    assert not p.is_valid
+    assert p.rejected_reason is not None
+    assert "Debian" in p.rejected_reason
+
+
+def test_target_all_excludes_world_toolchain(monkeypatch):
+    """`all` is the kernel-pipeline trio; the world toolchain must stay
+    opt-in via --for world."""
+    info = _info(Family.DEBIAN)
+    monkeypatch.setattr(id_mod, "_query_installed", lambda fam, pkgs: (pkgs, []))
+    monkeypatch.setattr(id_mod, "_virtme_installed", lambda: False)
+    p = plan(distro=info, spec=spec_for(info), target=Target.ALL)
+    assert "sbuild" not in p.requested
+    assert "mmdebstrap" not in p.requested
+
+
 def test_recommended_includes_ccache_by_default(monkeypatch):
     info = _info(Family.DEBIAN)
     monkeypatch.setattr(id_mod, "_query_installed", lambda fam, pkgs: (pkgs, []))

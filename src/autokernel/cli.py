@@ -2022,7 +2022,9 @@ def install_deps_cmd(
     target: Annotated[
         installdeps_mod.Target,
         typer.Option(
-            "--for", help="What to install for: build / boot-test / install / all"
+            "--for",
+            help="What to install for: build / boot-test / install / world / all "
+            "(world = Debian source-rebuild toolchain, not part of all)",
         ),
     ] = installdeps_mod.Target.ALL,
     execute: Annotated[
@@ -2111,7 +2113,11 @@ def install_deps_cmd(
                 if p.optional_python_pkgs
                 else ""
             )
-            + f"\n\n[dim]next: `autokernel preflight --for {target.value}` should now be all-green[/dim]",
+            + (
+                "\n\n[dim]next: `scripts/world-spike.sh` runs the W0 end-to-end spike[/dim]"
+                if target == installdeps_mod.Target.WORLD
+                else f"\n\n[dim]next: `autokernel preflight --for {target.value}` should now be all-green[/dim]"
+            ),
             title="autokernel install-deps",
         )
     )
