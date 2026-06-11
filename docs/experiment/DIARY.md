@@ -278,3 +278,32 @@ the cost is ~2-4 gcc-tooling packages become declared force-gcc). The
 experiment is doing exactly its job: measuring where the clang boundary
 actually falls. Residual now: gmp, libxcrypt, rust-coreutils, libselinux,
 libsemanage — all triage-remediable (force-gcc / strip-lto / stock).
+
+### 1.7 apt — the prime agentic-patch demonstration target
+
+apt FTBFS with a genuine **clang C++ strictness error**:
+`solver3.h:59: error: subscript of pointer to incomplete type
+'APT::Solver::Solver::State'` — clang rejects subscripting an incomplete
+(forward-declared) type that gcc accepts. This is a **source** issue no flag
+remedy covers, in a **load-bearing** package.
+
+This is the ideal **Phase 4 live demonstration**: triage defaults to force-gcc
+(honest — apt-via-gcc works), but `world build --agentic-patch claude --only
+apt` should let the agent patch solver3.h (complete the State type before use)
+to build apt with clang. Planned as a concrete Phase 4 validation + thesis
+demo after the Phase 1 force-gcc baseline.
+
+### 1.8 The honest clang boundary (the thesis answer taking shape)
+
+Final residual: **7 of 51** — apt, gmp, libselinux, libsemanage, libxcrypt,
+rust-coreutils, sed. ~44/51 (86%) build clean as clang+ThinLTO+bfd. The 7 are
+genuine, categorized incompatibilities, each honestly remediable:
+- **clang C++/code strictness**: apt (incomplete-type subscript) → force-gcc or agentic patch
+- **gcc-only build tooling**: libselinux, libsemanage (`-aux-info`), gmp (libtool munging) → force-gcc or agentic patch
+- **deep `@@`-compat + LTO**: libxcrypt → strip-lto
+- **rust toolchain**: rust-coreutils → stock (not load-bearing; gnu-coreutils is real)
+- **nodoc-dirty packaging**: sed → strip-nodoc (not clang-specific)
+
+This *is* the experiment's answer to "how much of Debian can be clang": ~86%
+cleanly, the rest a small, categorized, honestly-handled tail — exactly the
+hybrid the thesis predicts.
