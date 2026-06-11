@@ -117,6 +117,37 @@ def effective_build_options(
     return [o for o in merged if o not in strip]
 
 
+def effective_ldflags(flags: GlobalFlags, override: PackageOverride | None) -> str:
+    """Link-stage flags, honoring strip_flags: a remedy that strips the
+    LTO token must reach the *link* too, and lld goes with it (it's
+    only there for ThinLTO). Found live: strip-flags retries kept
+    failing because DEB_LDFLAGS_APPEND still carried -flto=thin."""
+    base = flags.ldflags_for(effective_compiler(flags, override))
+    if not base or not override:
+        return base
+    tokens = base.split()
+    stripped = set(override.strip_flags)
+    if any(t.startswith("-flto") for t in stripped):
+        tokens = [
+            t for t in tokens if not t.startswith("-flto") and t != "-fuse-ld=lld"
+        ]
+    else:
+        tokens = [t for t in tokens if t not in stripped]
+    return " ".join(tokens)
+
+
+def effective_profiles(
+    flags: GlobalFlags, override: PackageOverride | None
+) -> list[str]:
+    """Build profiles, with strip_build_options applied here too:
+    debhelper honors nodoc/nocheck from DEB_BUILD_OPTIONS *or*
+    DEB_BUILD_PROFILES, so a strip must clear both (found live: bash
+    kept failing with the option stripped but the profile present)."""
+    merged = {*flags.build_profiles, *(override.profiles if override else [])}
+    strip = set(override.strip_build_options) if override else set()
+    return sorted(merged - strip)
+
+
 def build_environment(
     flags: GlobalFlags,
     override: PackageOverride | None,
@@ -127,7 +158,7 @@ def build_environment(
     compiler = effective_compiler(flags, override)
     cflags = effective_cflags(flags, override)
     options = [*effective_build_options(flags, override), f"parallel={jobs}"]
-    profiles = sorted({*flags.build_profiles, *(override.profiles if override else [])})
+    profiles = effective_profiles(flags, override)
     env = {
         "DEB_CFLAGS_APPEND": cflags,
         "DEB_CXXFLAGS_APPEND": cflags,
@@ -147,7 +178,7 @@ def build_environment(
     elif flags.compiler == "clang":  # clang world, this package forced to gcc
         env["CC"] = "gcc"
         env["CXX"] = "g++"
-    ldflags = flags.ldflags_for(compiler)
+    ldflags = effective_ldflags(flags, override)
     if ldflags:
         env["DEB_LDFLAGS_APPEND"] = ldflags
     if profiles:
@@ -161,15 +192,13 @@ def flags_hash(flags: GlobalFlags, override: PackageOverride | None) -> str:
     payload = {
         "cflags": effective_cflags(flags, override),
         "options": effective_build_options(flags, override),
-        "profiles": sorted(
-            {*flags.build_profiles, *(override.profiles if override else [])}
-        ),
+        "profiles": effective_profiles(flags, override),
         "compiler": effective_compiler(flags, override),
         "patches": override.patches if override else [],
     }
     # Key only present when non-empty so gcc-world hashes (and their
     # cached build records) are unchanged by the clang plumbing.
-    ldflags = flags.ldflags_for(effective_compiler(flags, override))
+    ldflags = effective_ldflags(flags, override)
     if ldflags:
         payload["ldflags"] = ldflags
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
@@ -753,6 +782,7 @@ def triage_and_retry(
                 remedy.strip_flags,
                 remedy.add_flags,
                 remedy.build_options,
+                remedy.strip_build_options,
                 remedy.profiles,
                 remedy.force_compiler,
             ]

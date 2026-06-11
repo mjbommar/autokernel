@@ -260,3 +260,25 @@ def test_gcc_world_env_unchanged_by_clang_plumbing():
     assert "CC" not in env and "CXX" not in env
     assert "DEB_LDFLAGS_APPEND" not in env
     assert env["DEB_CFLAGS_APPEND"] == "-march=native -O3 -flto=auto"
+
+
+def test_strip_build_options_clears_profile_too():
+    flags = GlobalFlags(
+        build_options=["nocheck", "nodoc"], build_profiles=["nocheck", "nodoc"]
+    )
+    remedy = _override(strip_build_options=["nodoc"])
+    env = builder_mod.build_environment(flags, remedy, jobs=1, ccache_dir=None)
+    assert "nodoc" not in env["DEB_BUILD_OPTIONS"]
+    # debhelper honors the profile as well as the option — both cleared.
+    assert env["DEB_BUILD_PROFILES"] == "nocheck"
+    assert builder_mod.flags_hash(flags, remedy) != builder_mod.flags_hash(flags, None)
+
+
+def test_strip_lto_reaches_link_stage_in_clang_world():
+    flags = GlobalFlags(march="native", opt="-O3", lto=Lto.AUTO, compiler="clang")
+    remedy = _override(strip_flags=["-flto=thin"])
+    env = builder_mod.build_environment(flags, remedy, jobs=1, ccache_dir=None)
+    assert "-flto" not in env["DEB_CFLAGS_APPEND"]
+    # The strip must clear the link stage too — and lld with it.
+    assert "DEB_LDFLAGS_APPEND" not in env
+    assert builder_mod.flags_hash(flags, remedy) != builder_mod.flags_hash(flags, None)

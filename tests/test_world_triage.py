@@ -154,3 +154,43 @@ def test_extract_log_tail_strips_apt_noise():
     tail = triage_mod.extract_log_tail(log, lines=10)
     assert "Get:1" not in tail
     assert "FAIL: test_mount" in tail
+
+
+# ── strip-build-options remedy ──────────────────────────────────────────────
+
+
+def test_override_check_strip_build_options():
+    draft = _draft(
+        "strip-build-options",
+        failure=FailureClass.PACKAGING,
+        strip_options=["nodoc"],
+    )
+    assert (
+        triage_mod.override_check(
+            draft, effective_tokens=EFFECTIVE, global_options=["nocheck", "nodoc"]
+        )
+        == []
+    )
+    # Token not actually in the global options → rejected.
+    problems = triage_mod.override_check(
+        draft, effective_tokens=EFFECTIVE, global_options=["nocheck"]
+    )
+    assert any("not in global build options" in p for p in problems)
+    # Empty strip set → rejected.
+    empty = _draft("strip-build-options", failure=FailureClass.PACKAGING)
+    assert triage_mod.override_check(
+        empty, effective_tokens=EFFECTIVE, global_options=["nodoc"]
+    )
+
+
+def test_draft_to_verdict_strip_build_options():
+    v = triage_mod.draft_to_verdict(
+        "sed",
+        _draft(
+            "strip-build-options",
+            failure=FailureClass.PACKAGING,
+            strip_options=["nodoc"],
+        ),
+    )
+    assert v.remedy is not None
+    assert v.remedy.strip_build_options == ["nodoc"]

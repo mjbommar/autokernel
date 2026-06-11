@@ -197,10 +197,23 @@ def build_prompt(
 # ── static validation (the config_check analogue) ───────────────────────────
 
 _FLAG_RE = re.compile(r"^-[A-Za-z][A-Za-z0-9=_+,.-]*$")
-_VALID_ACTIONS = {"retry", "nocheck", "strip-flags", "force-gcc", "use-stock", "defer"}
+_VALID_ACTIONS = {
+    "retry",
+    "nocheck",
+    "strip-flags",
+    "strip-build-options",
+    "force-gcc",
+    "use-stock",
+    "defer",
+}
 
 
-def override_check(draft: _TriageDraft, *, effective_tokens: list[str]) -> list[str]:
+def override_check(
+    draft: _TriageDraft,
+    *,
+    effective_tokens: list[str],
+    global_options: list[str] | None = None,
+) -> list[str]:
     """Reject hallucinated remedies before any slow rebuild. Returns a
     list of problems; empty = sane."""
     problems: list[str] = []
@@ -220,6 +233,17 @@ def override_check(draft: _TriageDraft, *, effective_tokens: list[str]) -> list[
                 problems.append(f"add_flags token {tok!r} doesn't look like a flag")
     elif remedy.strip_flags or remedy.add_flags:
         problems.append(f"flags given but action is {remedy.action!r}")
+    if remedy.action == "strip-build-options":
+        if not remedy.strip_options:
+            problems.append("strip-build-options action with empty strip_options")
+        if global_options is not None:
+            for tok in remedy.strip_options:
+                if tok not in global_options:
+                    problems.append(
+                        f"strip_options token {tok!r} not in global build options"
+                    )
+    elif remedy.strip_options:
+        problems.append(f"strip_options given but action is {remedy.action!r}")
     if (
         remedy.action == "nocheck"
         and draft.failure_class == FailureClass.OPT_MISCOMPILE
@@ -243,6 +267,13 @@ def draft_to_verdict(source: str, draft: _TriageDraft) -> FtbfsVerdict:
             source_pkg=source,
             strip_flags=draft.remedy.strip_flags,
             add_flags=draft.remedy.add_flags,
+            reason=draft.remedy.reason,
+            provenance=OverrideSource.LLM_TRIAGE,
+        )
+    elif action == "strip-build-options":
+        remedy = PackageOverride(
+            source_pkg=source,
+            strip_build_options=draft.remedy.strip_options,
             reason=draft.remedy.reason,
             provenance=OverrideSource.LLM_TRIAGE,
         )
@@ -363,7 +394,11 @@ def triage_record(
         cache_dir.mkdir(parents=True, exist_ok=True)
         cache_path.write_text(draft.model_dump_json(indent=2) + "\n", encoding="utf-8")
 
-    problems = override_check(draft, effective_tokens=effective_cflags.split())
+    problems = override_check(
+        draft,
+        effective_tokens=effective_cflags.split(),
+        global_options=flags.build_options,
+    )
     verdict = draft_to_verdict(record.source, draft)
     if problems:
         # Failed override_check → treat as defer, keep the classification.
