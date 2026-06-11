@@ -167,10 +167,14 @@ def init_manifest(
     world = filter_ring(entries, ring)
     flags = flags_for_axes(aggression, threat, compiler=compiler)
     if compiler == "clang":
-        # clang-world defaults (Phase 0): bfd+LLVMgold preserves .symver
-        # versioned symbols under ThinLTO where lld hard-fails; the
-        # masquerade forces clang through build systems that hardcode gcc.
-        flags = flags.model_copy(update={"linker": "bfd", "masquerade": True})
+        # clang-world default (Phase 0): bfd+LLVMgold preserves .symver
+        # versioned symbols under ThinLTO where lld hard-fails. The
+        # masquerade (gcc→clang) is NOT default: it breaks build-time gcc
+        # helpers in important packages (systemd's BPF, libselinux's
+        # -aux-info — Phase 1.9). CC=clang + the majority identity audit
+        # let those stay clang while hardcoded-gcc packages become honest
+        # force-gcc. Opt in with masquerade=True for maximal force-clang.
+        flags = flags.model_copy(update={"linker": "bfd"})
     sources = sorted({e.source for e in world})
     return WorldManifest(
         created_at=datetime.now(UTC),

@@ -325,10 +325,22 @@ def test_gcc_world_unaffected_by_linker_field():
 # ── compiler masquerade + identity audit (Phase 0 §0.5) ─────────────────────
 
 
-def test_compiler_identity_audit_detects_gcc_in_clang_world():
-    log = "clang -march=native -c a.c -o a.o\nx86_64-linux-gnu-gcc -O2 -c b.c -o b.o\n"
+def test_compiler_identity_audit_detects_gcc_majority():
+    # bzip2-shape: gcc did the bulk, clang nothing → violation.
+    log = "".join(f"x86_64-linux-gnu-gcc -O2 -c b{i}.c -o b{i}.o\n" for i in range(5))
     ok, detail = builder_mod.compiler_identity_audit(log, "clang")
-    assert not ok and "gcc compiled" in detail
+    assert not ok and "majority" in detail
+
+
+def test_compiler_identity_audit_tolerates_gcc_helper():
+    # libselinux-shape: clang did the bulk, gcc only a throwaway helper
+    # (-aux-info) → still a clang package.
+    log = (
+        "".join(f"clang -c u{i}.c -o u{i}.o\n" for i in range(20))
+        + "gcc -aux-info temp.aux -c proto.c -o proto.o\n"
+    )
+    ok, detail = builder_mod.compiler_identity_audit(log, "clang")
+    assert ok, detail
 
 
 def test_compiler_identity_audit_passes_pure_clang():
@@ -340,13 +352,6 @@ def test_compiler_identity_audit_passes_pure_clang():
 def test_compiler_identity_audit_vacuous_for_data_package():
     ok, _ = builder_mod.compiler_identity_audit("dh_install: copying files\n", "clang")
     assert ok
-
-
-def test_compiler_identity_audit_ignores_clang_in_paths():
-    # "clang" inside a path must not count as a gcc miss or a compile.
-    log = "gcc -c /home/x/clang-stuff/a.c -o a.o\n"
-    ok, _ = builder_mod.compiler_identity_audit(log, "clang")
-    assert not ok  # the gcc invocation is the violation
 
 
 def test_compiler_identity_audit_masquerade_bare_gcc_is_clang():

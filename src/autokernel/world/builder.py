@@ -379,23 +379,33 @@ _GCC_BYPASS = re.compile(
 def compiler_identity_audit(
     log_text: str, want: str, *, masquerade: bool = False
 ) -> tuple[bool, str]:
-    """Did the requested compiler actually compile the objects? (Phase 0
-    §0.5: build systems that hardcode gcc silently produced gcc objects
-    despite CC=clang.) Returns (ok, detail).
+    """Did the requested compiler actually compile the *package*? (Phase 0
+    §0.5 / 1.9.) Returns (ok, detail).
 
-    With the masquerade ON, bare gcc/cc names are clang (PATH-redirected),
-    so only an absolute-path or version-suffixed gcc — which bypasses the
-    masquerade — counts as a real-gcc violation. A build that compiled
-    *nothing* (data/script package) passes vacuously."""
+    A package is "clang" if clang did the **majority** of compiles. A
+    handful of gcc invocations are tolerated because some packages
+    legitimately use gcc for throwaway build-time helpers (libselinux's
+    `gcc -aux-info` to extract SWIG prototypes, etc.) while compiling the
+    shipped objects with clang. The violation is when gcc did the bulk —
+    e.g. bzip2's debian/rules forces CC=gcc and clang ran nothing.
+
+    With the masquerade ON, bare gcc/cc names are PATH-redirected to clang
+    and show as "gcc" in the log, so the majority test would miscount;
+    there, only absolute-path/version-suffixed gcc (a real bypass) counts.
+    A build that compiled *nothing* (data/script package) passes vacuously."""
     clang_n = len(_CLANG_COMPILE.findall(log_text))
     if want != "clang":
         return True, f"clang={clang_n} gcc={len(_GCC_COMPILE.findall(log_text))}"
-    gcc_pat = _GCC_BYPASS if masquerade else _GCC_COMPILE
-    gcc_n = len(gcc_pat.findall(log_text))
-    if gcc_n > 0:
-        kind = "masquerade-bypassing gcc" if masquerade else "gcc"
-        return False, f"{kind} compiled {gcc_n} object(s) (clang did {clang_n})"
-    return True, f"clang={clang_n} gcc=0"
+    if masquerade:
+        gcc_n = len(_GCC_BYPASS.findall(log_text))
+        if gcc_n > 0:
+            return False, f"masquerade-bypassing gcc compiled {gcc_n} (clang {clang_n})"
+        return True, f"clang={clang_n} gcc=0 (masq)"
+    gcc_n = len(_GCC_COMPILE.findall(log_text))
+    # Majority rule: gcc only a violation if it out-compiled clang.
+    if gcc_n > clang_n:
+        return False, f"gcc compiled the majority: gcc={gcc_n} clang={clang_n}"
+    return True, f"clang={clang_n} gcc={gcc_n}"
 
 
 def audit_build_log(
@@ -809,7 +819,9 @@ def build_world(
     # regenerates rather than reusing a stale chroot (e.g. the masquerade
     # + llvm additions for the 100%-clang world).
     if manifest.flags.compiler == "clang":
-        tarball_tag = "-clang-masq" if manifest.flags.masquerade else "-clang"
+        # v2: the clang chroot now includes llvm (LLVMgold for linker=bfd);
+        # bump so pre-llvm -clang tarballs regenerate instead of reused.
+        tarball_tag = "-clang2-masq" if manifest.flags.masquerade else "-clang2"
     else:
         tarball_tag = ""
     ctx = BuildContext(
