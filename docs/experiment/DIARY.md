@@ -121,3 +121,70 @@ Hand-replicating attr's autoconf build hit diminishing returns (`EXPORT` macro,
 include layout). Moving to the definitive test: rebuild real attr through the
 builder with each remedy and let real `dpkg-gensymbols` referee. This needs
 `linker` support in `GlobalFlags` + builder — also required for Phase 1.
+
+### 0.7 Real-package validation — `linker=bfd` is the answer (decisive)
+
+Added `GlobalFlags.linker`; built real packages with `linker=bfd`, full clang,
+ThinLTO on, no LTO strip, no force-gcc:
+
+| package | result | note |
+|---|---|---|
+| attr | ✓ | 26 versioned ATTR symbols intact; 39 clang/0 gcc; 60 flto=thin; gensymbols passed |
+| libbsd | ✓ | clean |
+| libmd | ✓ | clean |
+| libsepol | ✓ | clean |
+| libselinux | ✓ | clean — the `version script assignment` lld-error class, fixed |
+| **libxcrypt** | ✗ | `LLVM gold plugin: default version symbol crypt_r@@XCRYPT_2.0 must be defined` + **plugin segfault** — the hard `@@`-compat residual bfd can't fix |
+
+(pam, systemd confirmation running.)
+
+**Tiered remedy decided:** `linker=bfd` is the clang-world default (kills the
+common symver class with zero per-package cost, ThinLTO preserved, genuinely
+clang); the hard residual (libxcrypt-class) falls to the existing triage
+`strip -flto=thin`. Per-TU `-fno-lto` held in reserve (bfd made it unnecessary
+and it doesn't help the gold-plugin segfault).
+
+### 0.8 Compiler masquerade proven + infrastructure landed
+
+Verified `gcc`→clang masquerade: clang invoked as `gcc` accepts the full Debian
+gcc flag set (incl. the conflicting `-flto=auto -ffat-lto-objects ... -flto=thin`,
+rc=0). Implemented for Phase 1:
+- `GlobalFlags.linker` (default bfd for clang) + `masquerade` (default True for
+  clang); both in flags_hash; `force_compiler=gcc` packages exempt from masquerade.
+- `compiler_identity_audit` — fails a clang build if gcc compiled any object
+  (unless force-gcc declared).
+- chroot bakes `llvm` (LLVMgold) + the masquerade symlinks; tag `-clang-masq`.
+- `world init --compiler clang` → `linker=bfd, masquerade=True` automatically.
+
+831 tests pass. Committed c400c5d.
+
+**Phase 0 exit criterion met.** Phase 1 ring0-clang world dir initialized at
+`/nas4/data/autokernel/world/ring0-clang` (51 sources, ~7 CPU-h est). The full
+build is the live test of bfd + masquerade + triage together: the symver class
+should build clean (bfd), libcap2/bash/zlib now masqueraded to clang (or
+triage→force-gcc), libxcrypt → triage strip-lto.
+
+---
+
+## Phase 1 — 100% clang ThinLTO world
+
+### 1.1 First launch caught a false-positive in my own audit (bzip2)
+
+Launched ring0-clang (bfd + masquerade). Chroot regenerated clean (20s, llvm +
+masquerade baked in). First failure: `bzip2: compiler-identity audit failed:
+gcc compiled 16 objects`. Investigated: bzip2's `debian/rules` **forces
+`CC=gcc`**, but the masquerade PATH (`/usr/local/lib/ak-masq/gcc → clang`,
+confirmed on the build's PATH line) redirected it — the `gcc -c` invocations
+**actually ran clang** (proof: the build *succeeded* with `-flto=thin` present,
+which real gcc rejects with `unrecognized argument`). My naive identity audit
+counted log `gcc -c` lines as gcc and false-failed it.
+
+**Fix (95d076d):** under masquerade, bare `gcc`/`cc` are clang; only
+absolute-path or version-suffixed gcc (`/usr/bin/gcc`, `gcc-15`) bypasses the
+masquerade and counts as a real-gcc violation. Validated on the real bzip2 log
+(now PASS; old logic FAIL). Stopped Phase 1, fixed, restarting. (The masquerade
+is self-protecting anyway: real gcc + `-flto=thin` FTBFS at compile, so it
+can't silently ship.)
+
+Also landed `apply_patches()` (the Phase-4 prerequisite — `PackageOverride.patches`
+modeled since W3 but never honored).
