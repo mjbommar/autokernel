@@ -250,3 +250,31 @@ residual has flag remedies), but ready for genuine source-incompat cases.
 
 Awaiting Phase 1's big waves + the triage pass (gmp→force-gcc, libxcrypt→
 strip-lto), then: economics capture → bootable clang image → Phase 2 PGO.
+
+### 1.6 The masquerade's real cost — gcc-only *build tooling* (libselinux)
+
+libselinux + libsemanage FTBFS with `clang: error: unknown argument: '-aux-info'`.
+Their SWIG Python-binding step uses `gcc -aux-info temp.aux` (a **gcc-only**
+flag) to extract function prototypes for the exception headers. The masquerade
+redirects that helper `gcc → clang`, which rejects `-aux-info`.
+
+**This corrects my Phase 0 §0.7 confirmation**: the "libselinux ✓ with bfd"
+build ran on the bfdtest world *before* the identity audit + masquerade existed
+— so it silently used gcc for that helper and nobody checked. The masquerade +
+audit now surface it honestly.
+
+**The real finding (the thesis boundary):** "100% clang on Debian" has an
+asterisk not just for libc/toolchain, but for packages with genuinely
+**gcc-specific build tooling** (libselinux's `-aux-info`, gmp's libtool
+flag-munging). Two honest answers:
+1. `force-gcc` (whole package built with gcc, declared) — the triage default.
+2. A **tier-3 agentic patch** removing the gcc dependency (libselinux could
+   generate its exception headers without `-aux-info`) — a genuine future
+   demonstration of the patch tier, since this is a *source/build* fix no flag
+   remedy covers.
+
+Masquerade is still net-positive (it makes bzip2/libcap2/bash genuinely clang;
+the cost is ~2-4 gcc-tooling packages become declared force-gcc). The
+experiment is doing exactly its job: measuring where the clang boundary
+actually falls. Residual now: gmp, libxcrypt, rust-coreutils, libselinux,
+libsemanage — all triage-remediable (force-gcc / strip-lto / stock).
