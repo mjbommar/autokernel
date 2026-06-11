@@ -3131,6 +3131,194 @@ def world_plan_cmd(
     console.print(f"\n[green]✓ wrote {plan_path}[/green]")
 
 
+@world_app.command("build")
+def world_build_cmd(
+    world_dir: Annotated[
+        Path | None,
+        typer.Option(help="World dir holding manifest.json + plan.json"),
+    ] = None,
+    execute: Annotated[
+        bool,
+        typer.Option(help="Actually build. Default: dry-run (show pending work)."),
+    ] = False,
+    parallel: Annotated[
+        int,
+        typer.Option(min=1, max=16, help="Concurrent sbuilds within a wave"),
+    ] = 1,
+    jobs: Annotated[
+        int,
+        typer.Option(
+            min=0, help="make-level parallelism per build (0 = cores/parallel)"
+        ),
+    ] = 0,
+    no_ccache: Annotated[
+        bool, typer.Option("--no-ccache", help="Disable the shared ccache")
+    ] = False,
+    only: Annotated[
+        list[str] | None,
+        typer.Option("--only", help="Build only these source packages (repeatable)"),
+    ] = None,
+    limit: Annotated[
+        int,
+        typer.Option(min=0, help="Build at most N pending units (0 = no limit)"),
+    ] = 0,
+) -> None:
+    """Rebuild the planned world: fetch → +ak → sbuild → audit → publish.
+
+    Kill/restart-resumable: completed units with unchanged flags are
+    skipped. FTBFS records and continues — the triage agent (W3) picks
+    those up later.
+    """
+    from autokernel.world import builder as world_builder_mod
+    from autokernel.world import manifest as world_manifest_mod
+    from autokernel.world.models import BuildOutcome, WorldPlan
+
+    out_dir = world_dir or world_manifest_mod.default_world_dir()
+    manifest_path = out_dir / "manifest.json"
+    plan_path = out_dir / "plan.json"
+    for p, verb in ((manifest_path, "world init"), (plan_path, "world plan")):
+        if not p.exists():
+            raise err.fail(
+                f"missing {p.name}",
+                why=f"{p} does not exist",
+                fix=f"run `autokernel {verb}` first",
+                exit_code=2,
+            )
+    m = world_manifest_mod.load_manifest(manifest_path)
+    plan = WorldPlan.model_validate(json.loads(plan_path.read_text(encoding="utf-8")))
+
+    to_build, done, stock = world_builder_mod.pending_units(m, plan, out_dir)
+    if only:
+        wanted = set(only)
+        to_build = [u for u in to_build if u.source in wanted]
+    if limit:
+        to_build = to_build[:limit]
+
+    console.rule(f"world build: ring {int(m.ring)}, {m.base.suite}")
+    console.print(
+        f"pending [bold]{len(to_build)}[/bold] · already built {len(done)} · "
+        f"declared stock {len(stock)}"
+    )
+    if not to_build:
+        console.print("[green]✓ nothing to build — world is up to date[/green]")
+        return
+    preview = Table("wave", "source", "version", "cost")
+    for u in to_build[:15]:
+        preview.add_row(str(u.wave), u.source, u.version, u.cost.value)
+    if len(to_build) > 15:
+        preview.add_row("…", f"+{len(to_build) - 15} more", "", "")
+    console.print(preview)
+
+    if not execute:
+        console.print("\n[dim]dry-run; pass --execute to build[/dim]")
+        return
+
+    ok_count = 0
+    fail_count = 0
+
+    def _progress(record) -> None:
+        nonlocal ok_count, fail_count
+        if record.outcome == BuildOutcome.OK:
+            ok_count += 1
+            blhc = (
+                f", blhc findings: {record.audit.blhc_finding_count}"
+                if record.audit
+                else ""
+            )
+            console.print(
+                f"[green]✓[/green] {record.source} {record.local_version} "
+                f"({record.duration_s:.0f}s{blhc})"
+            )
+        else:
+            fail_count += 1
+            console.print(
+                f"[red]✗[/red] {record.source}: {record.outcome.value} — "
+                f"{record.note or ''} [dim]({record.log_path})[/dim]"
+            )
+
+    records = world_builder_mod.build_world(
+        m,
+        plan,
+        out_dir,
+        parallel=parallel,
+        jobs=jobs,
+        ccache=not no_ccache,
+        only=only,
+        limit=limit,
+        progress=_progress,
+    )
+    failed = [r for r in records if not r.ok]
+    console.print(
+        Panel.fit(
+            f"[green]{ok_count} built[/green] · "
+            + (f"[red]{fail_count} failed[/red]" if fail_count else "0 failed")
+            + f"\nrepo: {out_dir / 'repo'}"
+            + (
+                "\n[dim]failures recorded; W3 triage will handle them — "
+                "those packages stay stock for now[/dim]"
+                if failed
+                else "\n[dim]next: `autokernel world adopt` (or mmdebstrap "
+                "from the repo)[/dim]"
+            ),
+            title="autokernel world build",
+        )
+    )
+    if failed:
+        raise typer.Exit(1)
+
+
+@world_app.command("adopt")
+def world_adopt_cmd(
+    world_dir: Annotated[
+        Path | None,
+        typer.Option(help="World dir holding the built repo"),
+    ] = None,
+    execute: Annotated[
+        bool,
+        typer.Option(help="Actually wire the repo into the host's apt (sudo)."),
+    ] = False,
+) -> None:
+    """Pin the local world repo on this host (origin pin 1001).
+
+    WARNING (until the watcher lands, W6): adopted packages do NOT
+    track security updates automatically. Stock fixes are pinned BELOW
+    your rebuilds — you must re-run `world build` after archive
+    updates, or un-adopt by removing the pin.
+    """
+    from autokernel.world import manifest as world_manifest_mod
+    from autokernel.world import repo as world_repo_mod
+
+    out_dir = world_dir or world_manifest_mod.default_world_dir()
+    repo_dir = out_dir / "repo"
+    if not (repo_dir / "InRelease").exists():
+        raise err.fail(
+            "no signed repo to adopt",
+            why=f"{repo_dir} has no InRelease",
+            fix="run `autokernel world build --execute` first",
+            exit_code=2,
+        )
+
+    plan = world_repo_mod.adopt_plan(repo_dir)
+    console.rule("world adopt")
+    console.print(
+        "[yellow]⚠ no security watcher yet (W6): adopted packages will not "
+        "track DSA/USN fixes until you rebuild. Know what you're opting "
+        "into.[/yellow]\n"
+    )
+    for step in plan.steps:
+        console.print(f"  · {step.description}")
+        console.print(f"    [dim]$ {' '.join(step.argv)}[/dim]")
+    if not execute:
+        console.print("\n[dim]dry-run; pass --execute to apply (uses sudo)[/dim]")
+        return
+    if not typer.confirm("Pin this repo above the distro archive?"):
+        raise typer.Exit(1)
+    rc = world_repo_mod.adopt_execute(plan)
+    if rc != 0:
+        raise typer.Exit(rc)
+    console.print("[green]✓ adopted — apt now prefers the world repo[/green]")
+
+
 def _main() -> None:
     app()
 

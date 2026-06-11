@@ -248,3 +248,53 @@ class WorldPlan(_Frozen):
         for u in self.units:
             out[u.wave].append(u)
         return out
+
+
+# ── build records (W2) ──────────────────────────────────────────────────────
+
+
+class AuditVerdict(str, Enum):
+    OK = "ok"
+    NO_COMPILER = "no-compiler"  # data/script package: nothing to audit
+    MISSING_FLAGS = "missing-flags"  # our appends never reached a compiler
+
+
+class FlagsAudit(_Frozen):
+    """Did our flags actually shape the binaries? (docs/WORLD.md W0
+    learning: blhc findings need a stock baseline to judge, so they are
+    recorded informationally; the hard gate is our-flags-present.)"""
+
+    verdict: AuditVerdict
+    expected: list[str] = Field(default_factory=list)
+    missing: list[str] = Field(default_factory=list)
+    blhc_finding_count: int = 0
+    blhc_summary: list[str] = Field(default_factory=list)  # deduped finding kinds
+
+
+class BuildOutcome(str, Enum):
+    OK = "ok"
+    FTBFS = "ftbfs"
+    FETCH_FAILED = "fetch-failed"
+    SKIPPED_STOCK = "skipped-stock"
+
+
+class PackageBuildRecord(_Frozen):
+    """Result of one build attempt; keyed on (source, version,
+    flags_hash) for kill/restart resumability."""
+
+    source: str
+    archive_version: str
+    local_version: str | None = None
+    flags_hash: str
+    outcome: BuildOutcome
+    wave: int
+    duration_s: float = 0.0
+    audit: FlagsAudit | None = None
+    debs: list[str] = Field(default_factory=list)
+    log_path: str | None = None
+    finished_at: datetime | None = None
+    note: str | None = None
+
+    @property
+    def ok(self) -> bool:
+        return self.outcome == BuildOutcome.OK

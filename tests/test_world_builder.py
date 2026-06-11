@@ -1,0 +1,224 @@
+"""Tests for the world builder + repo (W2). Subprocess-free: pure
+functions (env composition, audit, sbuildrc, resume keying, adopt
+plan) tested directly; runners injected where needed."""
+
+from __future__ import annotations
+
+from datetime import UTC, datetime
+
+from autokernel.world import builder as builder_mod
+from autokernel.world import repo as repo_mod
+from autokernel.world.models import (
+    AuditVerdict,
+    BuildCost,
+    BuildOutcome,
+    GlobalFlags,
+    Lto,
+    OverrideSource,
+    PackageBuildRecord,
+    PackageOverride,
+    SourceUnit,
+)
+
+
+def _flags(**kw) -> GlobalFlags:
+    return GlobalFlags(march="native", opt="-O3", lto=Lto.AUTO, **kw)
+
+
+def _override(**kw) -> PackageOverride:
+    return PackageOverride(
+        source_pkg="zlib",
+        reason="test",
+        provenance=OverrideSource.USER,
+        **kw,
+    )
+
+
+def _unit(source="zlib", wave=0, use_stock=False) -> SourceUnit:
+    return SourceUnit(
+        source=source,
+        version="1:1.3-2",
+        binaries=["zlib1g"],
+        build_deps_in_closure=[],
+        wave=wave,
+        cost=BuildCost.NORMAL,
+        use_stock=use_stock,
+    )
+
+
+# ── flags / env composition ─────────────────────────────────────────────────
+
+
+def test_effective_cflags_applies_override():
+    flags = _flags()
+    assert "-flto=auto" in builder_mod.effective_cflags(flags, None)
+    stripped = builder_mod.effective_cflags(
+        flags, _override(strip_flags=["-flto=auto"], add_flags=["-fno-lto"])
+    )
+    assert "-flto=auto" not in stripped
+    assert stripped.endswith("-fno-lto")
+
+
+def test_build_environment_composition():
+    env = builder_mod.build_environment(
+        GlobalFlags(build_options=["nocheck"], build_profiles=["nodoc"]),
+        _override(profiles=["pkg.zlib.minimal"]),
+        jobs=4,
+        ccache_dir="/srv/world-ccache",
+    )
+    assert env["DEB_CFLAGS_APPEND"] == env["DEB_CXXFLAGS_APPEND"]
+    assert "nocheck" in env["DEB_BUILD_OPTIONS"]
+    assert "parallel=4" in env["DEB_BUILD_OPTIONS"]
+    assert env["DEB_BUILD_PROFILES"] == "nodoc pkg.zlib.minimal"
+    assert env["CCACHE_DIR"] == "/srv/world-ccache"
+
+
+def test_flags_hash_changes_with_override():
+    flags = _flags()
+    base = builder_mod.flags_hash(flags, None)
+    assert builder_mod.flags_hash(flags, None) == base  # deterministic
+    assert builder_mod.flags_hash(flags, _override(strip_flags=["-O3"])) != base
+    assert builder_mod.flags_hash(flags, _override(force_compiler="clang")) != base
+
+
+# ── sbuildrc rendering ──────────────────────────────────────────────────────
+
+
+def test_render_sbuildrc_minimal(tmp_path):
+    rc = builder_mod.render_sbuildrc(env={"DEB_CFLAGS_APPEND": "-O3"}, ccache_dir=None)
+    assert "$chroot_mode = 'unshare';" in rc
+    assert "'DEB_CFLAGS_APPEND' => '-O3'" in rc
+    assert "$unshare_bind_mounts = [];" in rc
+    assert "/usr/lib/ccache" in rc  # harmless when absent
+
+
+def test_render_sbuildrc_with_ccache(tmp_path):
+    rc = builder_mod.render_sbuildrc(env={}, ccache_dir=tmp_path / "ccache")
+    assert f"directory => '{tmp_path / 'ccache'}'" in rc
+    assert "'CCACHE_DIR' => '/srv/world-ccache'" in rc
+
+
+def test_extra_package_args_lists_published_debs(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "b_1_amd64.deb").write_bytes(b"")
+    (repo / "a_1_amd64.deb").write_bytes(b"")
+    (repo / "Packages").write_text("", encoding="utf-8")  # not a .deb
+    args = builder_mod.extra_package_args(repo)
+    assert args == [
+        f"--extra-package={repo / 'a_1_amd64.deb'}",
+        f"--extra-package={repo / 'b_1_amd64.deb'}",
+    ]
+
+
+def test_extra_package_args_empty_repo(tmp_path):
+    assert builder_mod.extra_package_args(tmp_path) == []
+
+
+# ── audit semantics (W0 learnings) ──────────────────────────────────────────
+
+_BLHC_FINDINGS = """\
+NONVERBOSE BUILD: Building shared library libz.so
+CFLAGS missing (-fPIE): gcc -O3 -march=native -c x.c
+CFLAGS missing (-fPIE): gcc -O3 -march=native -c y.c
+LDFLAGS missing (-fPIE -pie): gcc -o x x.o
+"""
+
+
+def test_audit_ok_with_informational_blhc():
+    audit = builder_mod.audit_build_log(
+        "gcc -march=native -O3 -c x.c",
+        ["-march=native", "-O3"],
+        blhc_output=_BLHC_FINDINGS,
+        blhc_rc=1,
+    )
+    assert audit.verdict == AuditVerdict.OK
+    assert audit.missing == []
+    assert audit.blhc_finding_count == 4
+    assert "CFLAGS missing (-fPIE)" in audit.blhc_summary
+
+
+def test_audit_missing_flags_fails():
+    audit = builder_mod.audit_build_log(
+        "gcc -O2 -c x.c",
+        ["-march=native", "-O3"],
+        blhc_output="",
+        blhc_rc=0,
+    )
+    assert audit.verdict == AuditVerdict.MISSING_FLAGS
+    assert audit.missing == ["-march=native", "-O3"]
+
+
+def test_audit_no_compiler_is_not_a_failure():
+    audit = builder_mod.audit_build_log(
+        "dh_install: data only",
+        ["-march=native"],
+        blhc_output="No compiler commands were found in the log.",
+        blhc_rc=1,
+    )
+    assert audit.verdict == AuditVerdict.NO_COMPILER
+
+
+# ── resume keying ───────────────────────────────────────────────────────────
+
+
+def _record(unit: SourceUnit, fhash: str, outcome=BuildOutcome.OK):
+    return PackageBuildRecord(
+        source=unit.source,
+        archive_version=unit.version,
+        flags_hash=fhash,
+        outcome=outcome,
+        wave=unit.wave,
+        finished_at=datetime.now(UTC),
+    )
+
+
+def test_needs_build_resume_logic(tmp_path):
+    unit = _unit()
+    assert builder_mod.needs_build(tmp_path, unit, "abc")  # no record
+    builder_mod._save_record(tmp_path, unit, _record(unit, "abc"))
+    assert not builder_mod.needs_build(tmp_path, unit, "abc")  # done
+    assert builder_mod.needs_build(tmp_path, unit, "xyz")  # flags changed
+    builder_mod._save_record(tmp_path, unit, _record(unit, "abc", BuildOutcome.FTBFS))
+    assert builder_mod.needs_build(tmp_path, unit, "abc")  # failed → retry
+
+
+def test_needs_build_stock_never_builds(tmp_path):
+    assert not builder_mod.needs_build(tmp_path, _unit(use_stock=True), "abc")
+
+
+def test_unit_dir_escapes_epoch(tmp_path):
+    d = builder_mod.unit_dir(tmp_path, _unit())
+    assert ":" not in d.name
+    assert "%3a" in d.name
+
+
+# ── adopt plan ──────────────────────────────────────────────────────────────
+
+
+def test_adopt_plan_contents(tmp_path):
+    plan = repo_mod.adopt_plan(tmp_path / "repo")
+    rendered = "\n".join(f"{' '.join(s.argv)}\n{s.stdin or ''}" for s in plan.steps)
+    assert "Pin-Priority: 1001" in rendered
+    assert f"o={repo_mod.ORIGIN}" in rendered
+    assert "signed-by=/usr/share/keyrings/autokernel-world-keyring.gpg" in rendered
+    assert f"file://{tmp_path / 'repo'} ./" in rendered
+    # Everything mutating goes through sudo; nothing writes /etc directly.
+    assert all(s.argv[0] == "sudo" for s in plan.steps)
+
+
+def test_adopt_execute_stops_on_failure():
+    calls = []
+
+    class _R:
+        def __init__(self, rc):
+            self.returncode = rc
+
+    def runner(argv, **kw):
+        calls.append(argv)
+        return _R(1 if len(calls) == 2 else 0)
+
+    plan = repo_mod.adopt_plan(repo_dir=__import__("pathlib").Path("/tmp/r"))
+    rc = repo_mod.adopt_execute(plan, runner=runner)
+    assert rc == 1
+    assert len(calls) == 2  # stopped at the failing step
