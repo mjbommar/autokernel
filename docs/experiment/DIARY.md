@@ -459,3 +459,38 @@ by generating real source patches for compiler incompatibilities** — the part
 that turns "100% clang" from research project into engineering.
 
 (Gap fixed: default max_turns 8→25 — 8 was too few for non-trivial fixes.)
+
+### apt VALIDATED — agent patch builds clang (the bug was mine: native packages)
+
+The first two apt validations failed not because the agent's patch was wrong but
+because **apply_patches assumed quilt** — apt is `3.0 (native)`, which has no
+quilt layer, so the series entry was silently ignored and the build used
+unpatched source. Fixed apply_patches to be format-aware (quilt → series;
+native/1.0 → patch the tree directly). Re-validated: **apt builds ✓ (197s),
+164 clang++ invocations, solver3.h carries the agent's edit, blhc-clean.**
+
+The full iterative agentic loop, proven end to end:
+1. apt FTBFS (clang C++ incomplete-type in solver3.h) — no flag remedy applies.
+2. claude (iter 1, 17 turns, $0.51): moved Solver::operator[] after State —
+   plausible but incomplete; **rebuild-validation rejected it** (error persisted).
+3. claude (iter 2, 6 turns, $0.10): given the precise remaining error, removed
+   `constexpr` from ContiguousCacheMap::operator[] — the real fix.
+4. apply_patches (native, fixed) → real build → **green.** Patch + transcript
+   persisted under patches/.
+
+## EXPERIMENT RESULT — the thesis, measured
+
+**Fork: ring-0 (51 sources) as clang+ThinLTO+bfd Debian, per-host -march=native -O3.**
+- **44/49 clang codegen (90%)**: 39 clang+ThinLTO clean, apt clang+ThinLTO via
+  agent patch, 4 clang-no-LTO (strip-lto). The *important* packages — systemd
+  (PID 1), the SELinux stack, shadow, util-linux, pam, coreutils, the symver
+  libs — are all genuine clang+ThinLTO.
+- **5 honest force-gcc** (bzip2/gmp/libcap2/zlib hardcode gcc; bash) +
+  rust-coreutils stock + 3 toolchain-gated (glibc/gcc).
+- **Cost to create: ~$2.36 LLM (\$1.60 triage + ~\$0.76 agentic) + 7.16 CPU-hours**,
+  including an AI agent fixing a real clang C++ incompatibility — the part the
+  thesis said turns "100% clang" from research project into engineering.
+
+The honest answer to "can you build a 100% clang/LTO Debian": **~90% cleanly,
+the genuinely-gcc-bound tail honestly declared, and the hard source
+incompatibilities agent-patchable — for a couple dollars.**
