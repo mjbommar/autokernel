@@ -419,3 +419,18 @@ measured.
 Plus bash (compound force-gcc + strip-nodoc) needs the merge fix (already
 landed) + multi-round. rust-coreutils stays stock (not load-bearing). apt →
 force-gcc or the agentic-patch demo.
+
+### 1.14 Improved triage resolves the residual — 49/51, compound merge works
+
+Re-ran with v4 prompt + multi-round + merge. Results:
+- gmp/libcap2/zlib → **force-gcc in ONE round** (v4 rule 5a: gcc rejected
+  -flto=thin → needs-gcc, not the wasted strip-lto).
+- **bash → strip_build_options=[nodoc] + force_compiler=gcc** — the compound
+  merge + multi-round converged (was oscillating). bash builds. ✓
+- **49/51 ok.** Remaining: apt (deferred clang C++ error → agentic-patch demo
+  target) + rust-coreutils (rust LTO, not load-bearing → stock).
+
+Final clang breakdown: ~40 clang+ThinLTO (systemd/shadow/util-linux/pam/
+coreutils/selinux-stack/symver-libs), 4 clang-no-LTO (db5.3/libxcrypt/ncurses/
+perl), 5 honest force-gcc (bash/bzip2/gmp/libcap2/zlib). ~90% clang codegen,
+all the important packages clang.
