@@ -67,6 +67,10 @@ class GlobalFlags(_Frozen):
     masquerade: bool = False  # PATH-prepend gcc/cc → compiler (force clang
     # through build systems that hardcode gcc; clang-world default)
     hardening: HardeningTier = HardeningTier.DISTRO_DEFAULT
+    pgo: str = "off"  # "off" | "instrument" (-fprofile-generate) |
+    # "use" (-fprofile-use=<profiles/<src>.profdata>, per-package). The
+    # profile is a *build input*: collected once by a workload harness,
+    # version-pinned, never regenerated inside the reproducible build.
     build_options: list[str] = Field(default_factory=list)  # DEB_BUILD_OPTIONS
     build_profiles: list[str] = Field(default_factory=list)  # DEB_BUILD_PROFILES
 

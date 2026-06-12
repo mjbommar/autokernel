@@ -3210,6 +3210,15 @@ def world_build_cmd(
             "(claude/codex) that generates a source patch (tier-3, opt-in)",
         ),
     ] = None,
+    pgo: Annotated[
+        str,
+        typer.Option(
+            "--pgo",
+            help="PGO axis for this run: off | instrument (-fprofile-generate) "
+            "| use (-fprofile-use=<world>/profiles/<src>.profdata). Overrides "
+            "the manifest for this run only.",
+        ),
+    ] = "off",
 ) -> None:
     """Rebuild the planned world: fetch → +ak → sbuild → audit → publish.
 
@@ -3235,6 +3244,17 @@ def world_build_cmd(
             )
     m = world_manifest_mod.load_manifest(manifest_path)
     plan = WorldPlan.model_validate(json.loads(plan_path.read_text(encoding="utf-8")))
+
+    if pgo not in ("off", "instrument", "use"):
+        raise err.fail(
+            f"invalid --pgo {pgo!r}",
+            why="must be off, instrument, or use",
+            fix="pass --pgo instrument|use|off",
+            exit_code=2,
+        )
+    if pgo != "off":
+        m = m.model_copy(update={"flags": m.flags.model_copy(update={"pgo": pgo})})
+        console.print(f"[cyan]PGO: {pgo}[/cyan]")
 
     m_eff = world_builder_mod.apply_exceptions(m, out_dir)
     to_build, done, stock = world_builder_mod.pending_units(m_eff, plan, out_dir)

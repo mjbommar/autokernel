@@ -481,10 +481,11 @@ The full iterative agentic loop, proven end to end:
 ## EXPERIMENT RESULT — the thesis, measured
 
 **Fork: ring-0 (51 sources) as clang+ThinLTO+bfd Debian, per-host -march=native -O3.**
-- **44/49 clang codegen (90%)**: 39 clang+ThinLTO clean, apt clang+ThinLTO via
-  agent patch, 4 clang-no-LTO (strip-lto). The *important* packages — systemd
-  (PID 1), the SELinux stack, shadow, util-linux, pam, coreutils, the symver
-  libs — are all genuine clang+ThinLTO.
+- **44/49 clang codegen (90%)**: 38 clang+ThinLTO clean, apt clang+ThinLTO via
+  agent patch, 5 clang-no-LTO (strip-lto: libxcrypt/ncurses/db5.3/perl +
+  systemd). The *important* packages — systemd (PID 1, clang-no-LTO), the
+  SELinux stack, shadow, util-linux, pam, coreutils, the symver libs — are all
+  genuine clang.
 - **5 honest force-gcc** (bzip2/gmp/libcap2/zlib hardcode gcc; bash) +
   rust-coreutils stock + 3 toolchain-gated (glibc/gcc).
 - **Cost to create: ~$2.36 LLM (\$1.60 triage + ~\$0.76 agentic) + 7.16 CPU-hours**,
@@ -494,3 +495,169 @@ The full iterative agentic loop, proven end to end:
 The honest answer to "can you build a 100% clang/LTO Debian": **~90% cleanly,
 the genuinely-gcc-bound tail honestly declared, and the hard source
 incompatibilities agent-patchable — for a couple dollars.**
+
+### Capstone result: the image BOOTS (clang, per-host `-march=native`)
+
+After the one-package no-LTO remedy for systemd, the assembled image boots
+clean under KVM + `-cpu host` (native CPU, `-march=native` exercised for real):
+
+```
+Welcome to Ubuntu 26.04 LTS!
+[  OK  ] Reached target multi-user.target - Multi-User System.
+AUTOKERNEL_WORLD_BOOT_OK
+[  OK  ] Reached target poweroff.target - System Power Off.
+[   12.085229] reboot: Power down
+```
+
+`world boot-test` → **✓ BOOT OK — sentinel reached (multi-user.target up)**,
+**zero** crash/fault lines. PID 1 is the clang systemd; the SELinux stack, pam,
+shadow, util-linux, coreutils, apt, dpkg underneath it are the clang+ThinLTO
++ak1 builds. The thesis' concrete proof — *a per-host-optimized, ~90%-clang
+Debian userland that actually boots, built and self-repaired for ~$2.36* — is
+on the board. The single runtime miscompile it hit was caught, root-caused to a
+documented compiler-divergence (not the headline flags), and fixed with a
+narrow exception that kept clang + `-O3` + `-march=native` + FORTIFY=3.
+
+## Phase 5 capstone — the bootable image, and the bug it surfaced
+
+Assembled a 522 MB ext4 rootfs from the +ak1 repo (94 packages, 110 +ak1
+refs: apt/bash/coreutils/systemd/util-linux all clang-stack) + the gcc kernel,
+and booted it under QEMU.
+
+**First boot: PID 1 dies.** `systemd[1]` takes a *general protection fault
+inside libc.so.6* at 2.3 s → `Kernel panic … Attempted to kill init!
+exitcode=0x0000000b`. It reproduced identically under real **KVM + `-cpu host`**
+(native CPU, `-march=native` fully legal), so it was never an emulation
+artifact — a real runtime miscompile in the fork.
+
+**Bisected without a rebuild.** Booting `init=/bin/dash` instead reached an
+interactive shell with zero faults → base userspace + the *stock* gcc glibc are
+healthy; the crash is *specifically* the aggressive clang systemd. Then
+extracted the clang systemd + libsystemd-shared from the +ak1 debs and ran them
+on the host (same Meteor Lake) under gdb. The backtrace is unambiguous:
+
+```
+*** buffer overflow detected ***: terminated
+__GI___fortify_fail ("buffer overflow detected")
+__GI___chk_fail → __GI___read_chk (fd, buf, nbytes, buflen)
+read_virtual_file_at ()   ← libsystemd-shared
+get_oom_score_adjust ()   ← systemd manager startup
+```
+
+**First hypothesis (wrong): the FORTIFY *level*.** The `__read_chk` frame
+pointed at `_FORTIFY_SOURCE=3`, so I rebuilt systemd at `_FORTIFY_SOURCE=2`. It
+*still* aborted — and a tiny `__builtin_object_size` probe showed why: clang
+returns the *requested* `malloc()` size (17), gcc returns `SIZE_MAX` ("unknown",
+so no check fires). The level was a red herring; the divergence is deeper.
+
+**Actual root cause (confirmed by a 2-TU reproducer): clang + ThinLTO sees
+through systemd's `malloc_usable_size` conduit.** systemd deliberately reads
+into the *usable* slack of a `malloc()` block (faster, fewer reallocs) and hides
+that from the optimizer with `expand_to_usable()` — a `noinline` + `alloc_size`
+"conduit" reached via an opaque `malloc_sizeof_safe(void**)` in another TU. Its
+own comment warns it *"must not be inlined … because LTO otherwise tries to
+inline it"* (gcc#96503). A faithful two-translation-unit reproducer nails it:
+
+```
+clang -O3  FORTIFY=3  no LTO  → read 24 bytes, exit 0   ✓
+clang -O3  FORTIFY=3  ThinLTO → fortify abort, exit 1   ✗
+```
+
+Under ThinLTO clang imports `malloc_sizeof_safe`, sees through the conduit back
+to the original `malloc(17)`, sizes the buffer at 17, and the `read()` of the
+24-byte usable region trips `__read_chk`. **FORTIFY level is irrelevant — LTO is
+the culprit**, exactly as systemd's source predicts.
+
+**Remedy (surgical, drops an optimization not a protection):** strip
+`-flto=thin` for systemd only. Keeps clang + `-O3` + `-march=native` +
+**FORTIFY=3 (full hardening)** — systemd joins the existing `clang-no-LTO`
+category (db5.3/perl/ncurses/libxcrypt). Recorded as a `user` exception. The
+whole diagnosis — KVM repro → `init=/bin/dash` bisect → host gdb → 2-TU
+reproducer → one targeted rebuild — cost one debugging session, no flag-bisect
+across 27-min rebuilds. This is the per-package escape hatch the consistent-flags
+thesis predicted, found and *correctly* attributed.
+
+## Phase 2 — PGO machinery, and an honest first measurement (xz)
+
+Built the PGO axis as a first-class part of the builder: `GlobalFlags.pgo`
+(`off`/`instrument`/`use`), a `--pgo` flag on `world build`, `pgo_extra()`
+threaded through `effective_cflags`/`ldflags`/`build_environment`/`flags_hash`
+(the profile **content digest** joins the hash, so a re-collected profile
+invalidates exactly that one package). `instrument` appends `-fprofile-generate`;
+`use` appends a per-package `-fprofile-use=<profile>`, with the profile
+**bind-mounted into the sbuild chroot** at `/srv/world-profiles` (the /nas4 host
+path is invisible inside the unshare namespace — same subuid constraint as the
+ccache, so profiles stage to /var/tmp). 37 builder tests stay green; pgo=off
+hashes are byte-identical to before.
+
+Drove the full pipeline on **xz-utils** (clang+ThinLTO, the cleanest leaf tool):
+instrument build → collect → `llvm-profdata merge` → use build → benchmark.
+Two gotchas worth recording:
+- **xz's Landlock sandbox silently eats the profile.** The instrumented `xz`
+  produced 0-byte `.profraw` on every successful compression — xz enables a
+  Landlock sandbox for the single-file-to-stdout path, which blocks the profile
+  runtime's file write at exit. (The only writes I got were from arg-parse
+  *errors* that exit before sandboxing — a misleading 493-"function" profile of
+  all-zero counters.) Fix: collect in **multi-file mode** (`xz -k file1 file2…`),
+  which xz doesn't sandbox. Real profile: 188 functions, hottest block 4.9e9.
+- **Profile representativeness is load-bearing.** A profile trained on *text*
+  made `-6` compression ~3% *slower* on *binary* data; retraining on held-out
+  binary data narrowed that to ~1.5%. PGO optimizes branch layout for the
+  training distribution — the plan's warning ("a test suite alone is not
+  representative") is real.
+
+**Result (binary-trained profile, held-out binary test data, 1 core, min-of-N):**
+
+| workload      | Phase-1 clang+LTO | + PGO   | Δ        |
+|---------------|-------------------|---------|----------|
+| compress -2   | 7.49 s            | 7.26 s  | **+3.2%**|
+| compress -6   | 29.26 s           | 29.71 s | −1.6%    |
+| compress -9   | 36.42 s           | 37.14 s | −2.0%    |
+| decompress    | 0.730 s           | 0.748 s | −2.5%    |
+| liblzma size  | 239,840 B         | 223,456 B | **−6.8%** |
+
+**Honest reading:** the machinery is proven end-to-end and the resume/digest
+integrity works, but **xz was a poor throughput showcase.** liblzma's heavy
+levels are dominated by the bt4 match-finder — pointer-chasing, memory-latency
+bound — where PGO has almost no leverage; it only helped the light, compute-bound
+`-2` path. The unambiguous win PGO *did* deliver is **−6.8% binary size** (cold-code
+outlining + more selective inlining), which at distro scale is real (icache,
+download size). For a throughput win PGO needs a **branchy** target — which is
+why the next probe is `grep`/regex matching, not another codec.
+
+### The PGO win: sqlite3 +12–20% (the real deal)
+
+xz/grep taught me *where* PGO pays. The packages it transforms are interpreters
+with a hot dispatch loop in their **own** code — so I drove the full pipeline on
+**sqlite3** (the vdbe bytecode VM; SQLite's authors officially recommend PGO and
+document ~10%). The profile told the story before the rebuild even finished: 887
+functions, **hottest block executed 33 million times** (vs grep's 33 *thousand*).
+
+Collected on an in-memory query workload (300k-row insert + index + group-by/join/
+aggregate), rebuilt `pgo=use`, and benchmarked the clang+ThinLTO baseline vs
+clang+ThinLTO+PGO on a **held-out** query workload (different schema, params,
+queries), pinned to one core, identical query output verified:
+
+| runs       | baseline | + PGO   | speedup       |
+|------------|----------|---------|---------------|
+| min-of-7   | 0.650 s  | 0.569 s | +12.5%        |
+| min-of-12  | 0.646 s  | 0.547 s | +15.3%        |
+| min-of-15  | 0.644 s  | 0.511 s | **+20.6%**    |
+
+**~+15% typical, up to +20%** — *exceeding* SQLite's documented ~10%. The baseline
+is rock-stable (~0.645 s); PGO's best case is 0.51 s. And the size moved the
+*opposite* way from xz: libsqlite3 grew +5.7% (1.997 MB → 2.111 MB) because PGO
+*inlines* the hot vdbe opcodes (more code, faster) — the mirror image of outlining
+cold code in a codec.
+
+**Phase 2 conclusion.** The PGO machinery is proven end-to-end (instrument →
+collect → merge → use, profile bind-mounted, content-digest in `flags_hash`), and
+the measured payoff matches the theory exactly:
+- **system tools** (xz, grep) — hot loop is in libc primitives (memchr,
+  match-finder); PGO gives a consistent **size** win (xz −6.8%), throughput flat.
+- **interpreters** (sqlite3) — hot loop is in their own code; PGO gives a large
+  **throughput** win (+12–20%) at a small size cost.
+
+At distro scale that's the whole argument: per-host PGO across the hot set buys
+aggregate size reductions on the tool-shaped packages and double-digit speedups
+on the engine-shaped ones — for the price of one profile-collection run each.

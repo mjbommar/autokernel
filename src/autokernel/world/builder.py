@@ -100,11 +100,63 @@ def effective_compiler(flags: GlobalFlags, override: PackageOverride | None) -> 
     return (override.force_compiler if override else None) or flags.compiler
 
 
-def effective_cflags(flags: GlobalFlags, override: PackageOverride | None) -> str:
+# PGO profiles are bind-mounted into the chroot here (the host path under
+# /nas4 isn't visible inside sbuild's unshare namespace); -fprofile-use
+# references this in-chroot path. Staged to a subuid-traversable /var/tmp
+# dir like the ccache (stage_profiles), bind-mounted by render_sbuildrc.
+_PROFILES_MOUNT = "/srv/world-profiles"
+
+
+def pgo_extra(
+    flags: GlobalFlags,
+    *,
+    source: str = "",
+    profiles_dir: Path | None = None,
+) -> tuple[str, str, str]:
+    """The PGO axis → (cflags_extra, ldflags_extra, profile_digest).
+
+    ``instrument`` appends ``-fprofile-generate`` to compile+link; the
+    ``.profraw`` is written at *run* time by the workload harness, not
+    during the build. ``use`` appends a per-package
+    ``-fprofile-use=<_PROFILES_MOUNT>/<src>.profdata`` *iff* that profile
+    exists on the host (read here only to compute the digest) — a graceful
+    no-op otherwise, so a partially-collected hot set still builds. The
+    returned digest (profile content hash, or the literal ``"instrument"``)
+    joins ``flags_hash`` so a re-collected profile invalidates exactly that
+    package and nothing else (Phase 2 resume integrity)."""
+    if flags.pgo == "instrument":
+        return "-fprofile-generate", "-fprofile-generate", "instrument"
+    if flags.pgo == "use" and source and profiles_dir is not None:
+        prof = profiles_dir / f"{source}.profdata"
+        if prof.exists():
+            digest = hashlib.sha256(prof.read_bytes()).hexdigest()[:16]
+            inchroot = f"{_PROFILES_MOUNT}/{source}.profdata"
+            cf = (
+                f"-fprofile-use={inchroot} "
+                "-Wno-profile-instr-unprofiled "
+                "-Wno-profile-instr-out-of-date"
+            )
+            return cf, f"-fprofile-use={inchroot}", digest
+    return "", "", ""
+
+
+def effective_cflags(
+    flags: GlobalFlags,
+    override: PackageOverride | None,
+    *,
+    source: str = "",
+    profiles_dir: Path | None = None,
+) -> str:
     tokens = flags.cflags_for(effective_compiler(flags, override)).split()
     if override:
         tokens = [t for t in tokens if t not in set(override.strip_flags)]
         tokens.extend(override.add_flags)
+    # PGO is a clang-only axis here (profiles are llvm-profdata); a
+    # force_compiler=gcc package gets none.
+    if effective_compiler(flags, override) == "clang":
+        pgo_cf = pgo_extra(flags, source=source, profiles_dir=profiles_dir)[0]
+        if pgo_cf:
+            tokens.extend(pgo_cf.split())
     return " ".join(tokens)
 
 
@@ -118,7 +170,13 @@ def effective_build_options(
     return [o for o in merged if o not in strip]
 
 
-def effective_ldflags(flags: GlobalFlags, override: PackageOverride | None) -> str:
+def effective_ldflags(
+    flags: GlobalFlags,
+    override: PackageOverride | None,
+    *,
+    source: str = "",
+    profiles_dir: Path | None = None,
+) -> str:
     """Link-stage flags, honoring strip_flags: a remedy that strips the
     LTO token must reach the *link* too. The default lld goes with it
     (it's only there for ThinLTO) — but an *explicit* linker choice
@@ -126,20 +184,26 @@ def effective_ldflags(flags: GlobalFlags, override: PackageOverride | None) -> s
     retries kept failing because DEB_LDFLAGS_APPEND still carried
     -flto=thin."""
     base = flags.ldflags_for(effective_compiler(flags, override))
-    if not base or not override:
-        return base
     tokens = base.split()
-    stripped = set(override.strip_flags)
-    # The implicit lld is dropped with LTO; an explicit linker is not.
-    implicit_lld = not flags.linker
-    if any(t.startswith("-flto") for t in stripped):
-        tokens = [
-            t
-            for t in tokens
-            if not t.startswith("-flto") and not (implicit_lld and t == "-fuse-ld=lld")
-        ]
-    else:
-        tokens = [t for t in tokens if t not in stripped]
+    if base and override:
+        stripped = set(override.strip_flags)
+        # The implicit lld is dropped with LTO; an explicit linker is not.
+        implicit_lld = not flags.linker
+        if any(t.startswith("-flto") for t in stripped):
+            tokens = [
+                t
+                for t in tokens
+                if not t.startswith("-flto")
+                and not (implicit_lld and t == "-fuse-ld=lld")
+            ]
+        else:
+            tokens = [t for t in tokens if t not in stripped]
+    # PGO link flag (clang only) — appended after any LTO strip so the
+    # instrument/use runtime is linked even when a package opted out of LTO.
+    if effective_compiler(flags, override) == "clang":
+        pgo_lf = pgo_extra(flags, source=source, profiles_dir=profiles_dir)[1]
+        if pgo_lf:
+            tokens.extend(pgo_lf.split())
     return " ".join(tokens)
 
 
@@ -161,9 +225,11 @@ def build_environment(
     *,
     jobs: int,
     ccache_dir: str | None,
+    source: str = "",
+    profiles_dir: Path | None = None,
 ) -> dict[str, str]:
     compiler = effective_compiler(flags, override)
-    cflags = effective_cflags(flags, override)
+    cflags = effective_cflags(flags, override, source=source, profiles_dir=profiles_dir)
     options = [*effective_build_options(flags, override), f"parallel={jobs}"]
     profiles = effective_profiles(flags, override)
     env = {
@@ -185,7 +251,9 @@ def build_environment(
     elif flags.compiler == "clang":  # clang world, this package forced to gcc
         env["CC"] = "gcc"
         env["CXX"] = "g++"
-    ldflags = effective_ldflags(flags, override)
+    ldflags = effective_ldflags(
+        flags, override, source=source, profiles_dir=profiles_dir
+    )
     if ldflags:
         env["DEB_LDFLAGS_APPEND"] = ldflags
     if profiles:
@@ -195,9 +263,17 @@ def build_environment(
     return env
 
 
-def flags_hash(flags: GlobalFlags, override: PackageOverride | None) -> str:
+def flags_hash(
+    flags: GlobalFlags,
+    override: PackageOverride | None,
+    *,
+    source: str = "",
+    profiles_dir: Path | None = None,
+) -> str:
     payload: dict[str, object] = {
-        "cflags": effective_cflags(flags, override),
+        "cflags": effective_cflags(
+            flags, override, source=source, profiles_dir=profiles_dir
+        ),
         "options": effective_build_options(flags, override),
         "profiles": effective_profiles(flags, override),
         "compiler": effective_compiler(flags, override),
@@ -205,11 +281,18 @@ def flags_hash(flags: GlobalFlags, override: PackageOverride | None) -> str:
     }
     # Key only present when non-empty/true so gcc-world hashes (and their
     # cached build records) are unchanged by the clang plumbing.
-    ldflags = effective_ldflags(flags, override)
+    ldflags = effective_ldflags(
+        flags, override, source=source, profiles_dir=profiles_dir
+    )
     if ldflags:
         payload["ldflags"] = ldflags
     if flags.masquerade and effective_compiler(flags, override) == "clang":
         payload["masquerade"] = True
+    # The profile digest (or "instrument") invalidates exactly the PGO
+    # builds; absent for pgo=off so existing world hashes are unchanged.
+    pgo_digest = pgo_extra(flags, source=source, profiles_dir=profiles_dir)[2]
+    if pgo_digest:
+        payload["pgo"] = pgo_digest
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()[:16]
 
 
@@ -237,11 +320,34 @@ def masquerade_hook() -> str:
     return f'mkdir -p "$1{_MASQ_DIR}" && {cc_links} && {cxx_links}'
 
 
+def stage_profiles(world_dir: Path) -> Path | None:
+    """Copy the world's PGO profiles into a subuid-traversable /var/tmp dir
+    so they can be bind-mounted into sbuild's unshare namespace at
+    _PROFILES_MOUNT (the /nas4 world dir generally isn't traversable by the
+    subuid range — same constraint as the ccache). Returns the stage dir, or
+    None if there are no profiles to mount."""
+    import os
+
+    src = world_dir / "profiles"
+    profs = sorted(src.glob("*.profdata")) if src.exists() else []
+    if not profs:
+        return None
+    stage = Path(f"/var/tmp/autokernel-world-profiles-{os.getuid()}")  # noqa: S108
+    stage.mkdir(parents=True, exist_ok=True)
+    stage.chmod(0o777)
+    for p in profs:
+        dst = stage / p.name
+        shutil.copyfile(p, dst)
+        dst.chmod(0o644)
+    return stage
+
+
 def render_sbuildrc(
     *,
     env: dict[str, str],
     ccache_dir: Path | None,
     masquerade: bool = False,
+    profiles_stage: Path | None = None,
 ) -> str:
     """Generated SBUILD_CONFIG.
 
@@ -259,6 +365,10 @@ def render_sbuildrc(
         env_in_chroot["CCACHE_DIR"] = _CCACHE_MOUNT
         mounts.append(
             f"{{ directory => '{ccache_dir}', mountpoint => '{_CCACHE_MOUNT}' }}"
+        )
+    if profiles_stage is not None:
+        mounts.append(
+            f"{{ directory => '{profiles_stage}', mountpoint => '{_PROFILES_MOUNT}' }}"
         )
 
     env_lines = ",\n".join(
@@ -339,7 +449,10 @@ def apply_patches(unpacked: Path, patches: list[str]) -> tuple[bool, str]:
             check=False,
         )
         if check.returncode != 0:
-            return False, f"{Path(src).name} does not apply: {check.stdout.strip()[:200]}"
+            return (
+                False,
+                f"{Path(src).name} does not apply: {check.stdout.strip()[:200]}",
+            )
 
     if is_quilt:
         patches_dir = unpacked / "debian" / "patches"
@@ -556,7 +669,9 @@ def ensure_chroot_tarball(ctx: BuildContext, log: Path) -> None:
         # clang isn't a build-dep of anything; it must live in the chroot.
         # lld+llvm: ThinLTO needs a plugin-capable linker; llvm provides
         # LLVMgold.so so linker=bfd works (the symver remedy, Phase 0).
-        include = "ccache,clang,lld,llvm"
+        # libclang-rt-dev carries libclang_rt.profile, linked by
+        # -fprofile-generate (Phase 2 PGO instrument); harmless otherwise.
+        include = "ccache,clang,lld,llvm,libclang-rt-dev"
     if ctx.manifest.flags.masquerade:
         extra_hooks.append(f"--customize-hook={masquerade_hook()}")
     argv = [
@@ -582,7 +697,12 @@ def build_unit(ctx: BuildContext, unit: SourceUnit) -> PackageBuildRecord:
     """Fetch, bump, build, audit, publish, record — one source unit."""
     started = datetime.now(UTC)
     override = ctx.manifest.override_for(unit.source)
-    fhash = flags_hash(ctx.manifest.flags, override)
+    fhash = flags_hash(
+        ctx.manifest.flags,
+        override,
+        source=unit.source,
+        profiles_dir=ctx.world_dir / "profiles",
+    )
     udir = unit_dir(ctx.world_dir, unit)
     log = udir / "build.log"
 
@@ -671,6 +791,8 @@ def build_unit(ctx: BuildContext, unit: SourceUnit) -> PackageBuildRecord:
         override,
         jobs=ctx.jobs,
         ccache_dir=_CCACHE_MOUNT if ctx.ccache_dir else None,
+        source=unit.source,
+        profiles_dir=ctx.world_dir / "profiles",
     )
     sbuildrc = udir / "sbuildrc"
     # Masquerade only when this package's effective compiler is clang —
@@ -679,8 +801,17 @@ def build_unit(ctx: BuildContext, unit: SourceUnit) -> PackageBuildRecord:
         ctx.manifest.flags.masquerade
         and effective_compiler(ctx.manifest.flags, override) == "clang"
     )
+    # PGO use: stage + bind-mount the profiles so -fprofile-use=<mount>/... resolves.
+    profiles_stage = (
+        stage_profiles(ctx.world_dir) if ctx.manifest.flags.pgo == "use" else None
+    )
     sbuildrc.write_text(
-        render_sbuildrc(env=env, ccache_dir=ctx.ccache_dir, masquerade=masq),
+        render_sbuildrc(
+            env=env,
+            ccache_dir=ctx.ccache_dir,
+            masquerade=masq,
+            profiles_stage=profiles_stage,
+        ),
         encoding="utf-8",
     )
     base = ctx.manifest.base
@@ -801,7 +932,12 @@ def pending_units(
         if unit.use_stock:
             stock.append(unit)
             continue
-        fhash = flags_hash(manifest.flags, manifest.override_for(unit.source))
+        fhash = flags_hash(
+            manifest.flags,
+            manifest.override_for(unit.source),
+            source=unit.source,
+            profiles_dir=world_dir / "profiles",
+        )
         if needs_build(world_dir, unit, fhash):
             to_build.append(unit)
         else:
@@ -839,9 +975,9 @@ def build_world(
     # regenerates rather than reusing a stale chroot (e.g. the masquerade
     # + llvm additions for the 100%-clang world).
     if manifest.flags.compiler == "clang":
-        # v2: the clang chroot now includes llvm (LLVMgold for linker=bfd);
-        # bump so pre-llvm -clang tarballs regenerate instead of reused.
-        tarball_tag = "-clang2-masq" if manifest.flags.masquerade else "-clang2"
+        # v3: the clang chroot now also includes libclang-rt-dev (the
+        # PGO profile runtime); bump so -clang2 tarballs regenerate.
+        tarball_tag = "-clang3-masq" if manifest.flags.masquerade else "-clang3"
     else:
         tarball_tag = ""
     ctx = BuildContext(
