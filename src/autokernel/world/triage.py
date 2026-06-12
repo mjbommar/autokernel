@@ -344,11 +344,39 @@ def load_exceptions(world_dir: Path) -> list[PackageOverride]:
         return []
 
 
+def merge_overrides(old: PackageOverride, new: PackageOverride) -> PackageOverride:
+    """Union two remedies for the same package so a second triage round
+    *adds* to the first instead of clobbering it (Phase 1.x: bash needs
+    force-gcc AND strip-nodoc; the exceptions table used to replace, so
+    the two oscillated). use_stock and force_compiler are last-wins; list
+    fields are unioned; reason is concatenated."""
+
+    def _union(a: list[str], b: list[str]) -> list[str]:
+        return list(dict.fromkeys([*a, *b]))
+
+    return PackageOverride(
+        source_pkg=new.source_pkg,
+        strip_flags=_union(old.strip_flags, new.strip_flags),
+        add_flags=_union(old.add_flags, new.add_flags),
+        build_options=_union(old.build_options, new.build_options),
+        strip_build_options=_union(old.strip_build_options, new.strip_build_options),
+        force_compiler=new.force_compiler or old.force_compiler,
+        profiles=_union(old.profiles, new.profiles),
+        patches=_union(old.patches, new.patches),
+        use_stock=new.use_stock or old.use_stock,
+        reason=f"{old.reason} + {new.reason}"
+        if old.reason != new.reason
+        else new.reason,
+        provenance=new.provenance,
+    )
+
+
 def save_exception(world_dir: Path, override: PackageOverride) -> None:
-    current = [
-        o for o in load_exceptions(world_dir) if o.source_pkg != override.source_pkg
-    ]
-    current.append(override)
+    existing = load_exceptions(world_dir)
+    prior = next((o for o in existing if o.source_pkg == override.source_pkg), None)
+    merged = merge_overrides(prior, override) if prior else override
+    current = [o for o in existing if o.source_pkg != override.source_pkg]
+    current.append(merged)
     exceptions_path(world_dir).write_text(
         json.dumps(
             [

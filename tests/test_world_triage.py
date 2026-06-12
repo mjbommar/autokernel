@@ -194,3 +194,38 @@ def test_draft_to_verdict_strip_build_options():
     )
     assert v.remedy is not None
     assert v.remedy.strip_build_options == ["nodoc"]
+
+
+# ── compound remedy merge (Phase 1.x: bash needs force-gcc + strip-nodoc) ────
+
+
+def test_save_exception_merges_compound_remedies(tmp_path):
+    # first round: strip-nodoc (packaging)
+    triage_mod.save_exception(
+        tmp_path,
+        PackageOverride(
+            source_pkg="bash", strip_build_options=["nodoc"], reason="nodoc"
+        ),
+    )
+    # second round: force-gcc (hardcoded gcc) — must NOT clobber the first
+    triage_mod.save_exception(
+        tmp_path,
+        PackageOverride(
+            source_pkg="bash", force_compiler="gcc", reason="hardcoded gcc"
+        ),
+    )
+    loaded = {o.source_pkg: o for o in triage_mod.load_exceptions(tmp_path)}
+    bash = loaded["bash"]
+    assert bash.strip_build_options == ["nodoc"]  # preserved
+    assert bash.force_compiler == "gcc"  # added
+    assert "nodoc" in bash.reason and "hardcoded gcc" in bash.reason
+
+
+def test_merge_overrides_unions_lists():
+    a = PackageOverride(source_pkg="x", strip_flags=["-flto=thin"], reason="lto")
+    b = PackageOverride(
+        source_pkg="x", strip_flags=["-O3"], add_flags=["-O2"], reason="opt"
+    )
+    m = triage_mod.merge_overrides(a, b)
+    assert m.strip_flags == ["-flto=thin", "-O3"]
+    assert m.add_flags == ["-O2"]
