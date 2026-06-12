@@ -40,7 +40,7 @@ from autokernel.world.models import (
 )
 
 DEFAULT_MODEL = os.environ.get("AUTOKERNEL_MODEL", "anthropic:claude-sonnet-4-6")
-SYSTEM_PROMPT_VERSION = "v3"  # v3: strip-build-options (nodoc-dirty rules)
+SYSTEM_PROMPT_VERSION = "v4"  # v4: gcc-rejects-clang-flag → needs-gcc (not lto)
 LOG_TAIL_LINES = 250
 
 
@@ -115,11 +115,24 @@ Classify the failure and pick ONE remedy. Decision rules, in order:
 5. LTO symbol/section errors (lto1, ld plugin, symbol versioning) →
    lto-incompat: strip-flags removing the -flto token.
 
+5a. CRITICAL — tell apart "clang's LTO failed" from "gcc rejected a clang
+   flag". If the compiler that errored is GCC (the line shows `cc1:`,
+   `gcc:`, `x86_64-linux-gnu-gcc:`) and it rejects a clang-only flag
+   (`unrecognized argument to '-flto=' option: 'thin'`, `unknown
+   argument: '-gdwarf-4'`), that means the package's BUILD SYSTEM
+   hardcodes gcc and ignored CC=clang — the package is gcc-based.
+   Classify **needs-gcc** and remedy **force-gcc** (NOT lto-incompat /
+   strip-flags — stripping the flag just lets gcc build the package,
+   which then fails the clang-identity audit). Only use lto-incompat
+   when CLANG itself (clang:/ld.lld:/LLVM gold plugin) failed on LTO.
+
 5b. When the world compiler is clang and the failure is clang-specific
    (error: unknown argument/warning option, gcc extensions like nested
-   functions or computed gotos rejected, configure hard-coding gcc) →
-   needs-gcc; remedy force-gcc. Don't use this for plain warnings
-   promoted to errors that strip-flags could fix.
+   functions or computed gotos rejected, configure hard-coding gcc,
+   C++ subscript-of-incomplete-type and similar clang-strictness
+   errors, clang `-m32`/multilib failures) → needs-gcc; remedy
+   force-gcc. Don't use this for plain warnings promoted to errors that
+   strip-flags could fix.
 
 6. Unsatisfiable build-deps, version conflicts → dep-skew; remedy
    retry (the repo may have caught up) or defer.

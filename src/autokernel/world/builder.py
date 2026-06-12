@@ -958,6 +958,21 @@ def agentic_patch_remedy(
     )
 
 
+def _remedy_changes_something(remedy: PackageOverride) -> bool:
+    return any(
+        [
+            remedy.strip_flags,
+            remedy.add_flags,
+            remedy.build_options,
+            remedy.strip_build_options,
+            remedy.profiles,
+            remedy.force_compiler,
+            remedy.patches,
+            remedy.use_stock,
+        ]
+    )
+
+
 def triage_and_retry(
     ctx: BuildContext,
     plan: WorldPlan,
@@ -966,78 +981,89 @@ def triage_and_retry(
     model: str | None = None,
     progress=None,
     agentic_backend: str | None = None,
+    max_rounds: int = 3,
 ) -> list[PackageBuildRecord]:
-    """One bounded triage→retry pass over this run's FTBFS records.
+    """Multi-round triage→retry over this run's FTBFS records.
 
-    Confirmed remedies (retry built green) persist to exceptions.json;
-    deferred / still-failing packages stay FTBFS (stock fallback). With
-    ``agentic_backend`` set (claude/codex), a deferred failure escalates
-    to tier-3: a coding agent generates a source patch, validated by the
-    same rebuild. Returns the updated record list.
+    Each round re-triages the *latest* failure of every still-failing
+    package and **accumulates** remedies (so a compound case like bash —
+    strip-nodoc round 1, then force-gcc round 2 after the identity audit
+    fires — converges instead of oscillating). Confirmed remedies persist
+    to exceptions.json. With ``agentic_backend`` set, a deferred failure
+    escalates to tier-3 (a coding agent patch). Stops early when a round
+    makes no progress (no new success and no new remedy). Returns the
+    updated record list.
     """
     from autokernel.world import triage as triage_mod
 
     model = model or triage_mod.DEFAULT_MODEL
     units = {u.source: u for u in plan.units}
     out = {r.source: r for r in records}
-    for record in records:
-        if record.outcome != BuildOutcome.FTBFS:
-            continue
-        unit = units.get(record.source)
-        if unit is None:
-            continue
-        log_path = _latest_build_log(ctx.world_dir, unit)
-        if log_path is None:
-            continue
-        override = ctx.manifest.override_for(record.source)
-        eff = effective_cflags(ctx.manifest.flags, override)
-        verdict, problems = triage_mod.triage_record(
-            record,
-            log_text=log_path.read_text(encoding="utf-8", errors="replace"),
-            flags=ctx.manifest.flags,
-            effective_cflags=eff,
-            world_dir=ctx.world_dir,
-            model=model,
-        )
-        if progress is not None:
-            progress(verdict, problems)
-        remedy = verdict.remedy
-        if remedy is None and agentic_backend:
-            # Tier-3: no flag remedy fit → let a coding agent try a patch.
-            remedy = agentic_patch_remedy(
-                ctx, unit, record, backend=agentic_backend, model=model
+    # accumulated remedy per package across rounds
+    acc: dict[str, PackageOverride] = {}
+
+    for _round in range(max_rounds):
+        failing = [
+            r
+            for r in out.values()
+            if r.outcome == BuildOutcome.FTBFS and r.source in units
+        ]
+        if not failing:
+            break
+        progressed = False
+        for record in failing:
+            unit = units[record.source]
+            log_path = _latest_build_log(ctx.world_dir, unit)
+            if log_path is None:
+                continue
+            base_override = ctx.manifest.override_for(record.source)
+            eff = effective_cflags(
+                ctx.manifest.flags, acc.get(record.source) or base_override
             )
-            if progress is not None and remedy is not None:
-                progress(verdict, ["agentic-patch generated"])
-        if remedy is None:
-            continue  # deferred (or override_check rejected it)
+            verdict, problems = triage_mod.triage_record(
+                record,
+                log_text=log_path.read_text(encoding="utf-8", errors="replace"),
+                flags=ctx.manifest.flags,
+                effective_cflags=eff,
+                world_dir=ctx.world_dir,
+                model=model,
+            )
+            if progress is not None:
+                progress(verdict, problems)
+            remedy = verdict.remedy
+            if remedy is None and agentic_backend:
+                remedy = agentic_patch_remedy(
+                    ctx, unit, record, backend=agentic_backend, model=model
+                )
+                if progress is not None and remedy is not None:
+                    progress(verdict, ["agentic-patch generated"])
+            if remedy is None:
+                continue  # deferred this round
 
-        if remedy.use_stock:
-            # Nothing to validate by building; persist the surrender.
-            triage_mod.save_exception(ctx.world_dir, remedy)
-            continue
+            # accumulate with any prior-round remedy for this package
+            prior = acc.get(record.source)
+            merged = triage_mod.merge_overrides(prior, remedy) if prior else remedy
+            if prior is not None and merged == prior:
+                continue  # no new information → don't re-burn a build
+            acc[record.source] = merged
 
-        # Retry with the remedy active: remedy is prepended so
-        # override_for() picks it over any earlier entry.
-        patched = ctx.manifest.model_copy(
-            update={"overrides": [remedy, *ctx.manifest.overrides]}
-        )
-        retry_ctx = replace(ctx, manifest=patched)
-        new_record = build_unit(retry_ctx, unit)
-        out[record.source] = new_record
-        if progress is not None:
-            progress(new_record, None)
-        changes_something = any(
-            [
-                remedy.strip_flags,
-                remedy.add_flags,
-                remedy.build_options,
-                remedy.strip_build_options,
-                remedy.profiles,
-                remedy.force_compiler,
-                remedy.patches,
-            ]
-        )
-        if new_record.outcome == BuildOutcome.OK and changes_something:
-            triage_mod.save_exception(ctx.world_dir, remedy)
+            if merged.use_stock:
+                triage_mod.save_exception(ctx.world_dir, merged)
+                progressed = True
+                continue
+
+            patched = ctx.manifest.model_copy(
+                update={"overrides": [merged, *ctx.manifest.overrides]}
+            )
+            new_record = build_unit(replace(ctx, manifest=patched), unit)
+            out[record.source] = new_record
+            if progress is not None:
+                progress(new_record, None)
+            progressed = True  # a remedy was applied + rebuilt
+            if new_record.outcome == BuildOutcome.OK and _remedy_changes_something(
+                merged
+            ):
+                triage_mod.save_exception(ctx.world_dir, merged)
+        if not progressed:
+            break
     return list(out.values())
