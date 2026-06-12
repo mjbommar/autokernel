@@ -410,6 +410,8 @@ def test_masquerade_in_flags_hash_only_for_clang():
 def test_apply_patches_adds_to_series(tmp_path):
     tree = tmp_path / "pkg-1.0"
     (tree / "debian" / "patches").mkdir(parents=True)
+    (tree / "debian" / "source").mkdir(parents=True)
+    (tree / "debian" / "source" / "format").write_text("3.0 (quilt)\n")
     (tree / "debian" / "patches" / "series").write_text("existing.patch\n")
     (tree / "foo.c").write_text("int x = 1;\n")
     # a patch that applies cleanly
@@ -440,3 +442,17 @@ def test_apply_patches_missing_file(tmp_path):
     tree.mkdir()
     ok, problem = builder_mod.apply_patches(tree, ["/nonexistent.patch"])
     assert not ok and "not found" in problem
+
+
+def test_apply_patches_native_applies_to_tree(tmp_path):
+    # native package (no quilt) — patch applied directly to the tree
+    tree = tmp_path / "apt-3.0"
+    (tree / "debian" / "source").mkdir(parents=True)
+    (tree / "debian" / "source" / "format").write_text("3.0 (native)\n")
+    (tree / "foo.c").write_text("int x = 1;\n")
+    patch = tmp_path / "fix.patch"
+    patch.write_text("--- a/foo.c\n+++ b/foo.c\n@@ -1 +1 @@\n-int x = 1;\n+int x = 2;\n")
+    ok, detail = builder_mod.apply_patches(tree, [str(patch)])
+    assert ok and "native" in detail
+    assert (tree / "foo.c").read_text() == "int x = 2;\n"  # applied to tree
+    assert not (tree / "debian" / "patches").exists()  # no quilt series

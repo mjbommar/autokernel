@@ -315,42 +315,62 @@ def extra_package_args(repo_dir: Path) -> list[str]:
 
 
 def apply_patches(unpacked: Path, patches: list[str]) -> tuple[bool, str]:
-    """Install override patches as quilt patches (debian/patches/ +
-    series). For 3.0 (quilt) packages dpkg-source applies the series at
-    build time. Each patch is verified to apply cleanly with a dry-run
-    before it's committed to the series. Returns (ok, problem)."""
-    patches_dir = unpacked / "debian" / "patches"
-    patches_dir.mkdir(parents=True, exist_ok=True)
-    series = patches_dir / "series"
-    existing = (
-        series.read_text(encoding="utf-8").splitlines() if series.exists() else []
+    """Apply override patches to an unpacked source tree, format-aware.
+
+    3.0 (quilt) packages get the patch added to debian/patches/series
+    (dpkg-source applies the series at build time). **Native** (3.0
+    native / 1.0) packages have no quilt layer — the tree *is* the
+    source — so the patch is applied directly to the tree (found live:
+    apt is native, so a series entry was silently ignored, the agent's
+    correct patch never reached the build). Each patch is dry-run-checked
+    first. Returns (ok, problem)."""
+    fmt_file = unpacked / "debian" / "source" / "format"
+    is_quilt = (
+        fmt_file.exists() and "quilt" in fmt_file.read_text(encoding="utf-8").lower()
     )
-    added: list[str] = []
     for src in patches:
-        src_path = Path(src)
-        if not src_path.is_file():
+        if not Path(src).is_file():
             return False, f"patch not found: {src}"
-        name = f"autokernel-{src_path.name}"
-        if not name.endswith((".patch", ".diff")):
-            name += ".patch"
-        # dry-run apply against the tree (strip level 1, the dpkg default)
         check = subprocess.run(
-            ["patch", "-p1", "--dry-run", "-i", str(src_path)],
+            ["patch", "-p1", "--dry-run", "-i", str(src)],
             cwd=unpacked,
             capture_output=True,
             text=True,
             check=False,
         )
         if check.returncode != 0:
-            return (
-                False,
-                f"{src_path.name} does not apply: {check.stdout.strip()[:200]}",
-            )
-        shutil.copy2(src_path, patches_dir / name)
-        added.append(name)
-    new_series = [*existing, *(n for n in added if n not in existing)]
-    series.write_text("\n".join(new_series) + "\n", encoding="utf-8")
-    return True, f"applied {len(added)} patch(es)"
+            return False, f"{Path(src).name} does not apply: {check.stdout.strip()[:200]}"
+
+    if is_quilt:
+        patches_dir = unpacked / "debian" / "patches"
+        patches_dir.mkdir(parents=True, exist_ok=True)
+        series = patches_dir / "series"
+        existing = (
+            series.read_text(encoding="utf-8").splitlines() if series.exists() else []
+        )
+        added: list[str] = []
+        for src in patches:
+            name = f"autokernel-{Path(src).name}"
+            if not name.endswith((".patch", ".diff")):
+                name += ".patch"
+            shutil.copy2(src, patches_dir / name)
+            added.append(name)
+        new_series = [*existing, *(n for n in added if n not in existing)]
+        series.write_text("\n".join(new_series) + "\n", encoding="utf-8")
+        return True, f"quilt: added {len(added)} patch(es) to series"
+
+    # native / 1.0 — apply directly to the tree (no quilt layer)
+    for src in patches:
+        rc = subprocess.run(
+            ["patch", "-p1", "-i", str(src)],
+            cwd=unpacked,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if rc.returncode != 0:
+            return False, f"native patch apply failed: {rc.stdout.strip()[:200]}"
+    return True, f"native: applied {len(patches)} patch(es) to tree"
 
 
 # ── audit ───────────────────────────────────────────────────────────────────
