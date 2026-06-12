@@ -156,9 +156,9 @@ def run_coding_agent(
     prompt: str,
     *,
     model: str | None = None,
-    max_turns: int = 8,
-    max_budget_usd: float = 1.0,
-    timeout_s: int = 600,
+    max_turns: int = 25,
+    max_budget_usd: float = 3.0,
+    timeout_s: int = 900,
     runner=subprocess.run,
 ) -> AgentResult:
     """Run a headless coding agent in ``tree`` and capture its patch.
