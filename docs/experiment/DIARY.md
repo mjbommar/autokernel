@@ -434,3 +434,28 @@ Final clang breakdown: ~40 clang+ThinLTO (systemd/shadow/util-linux/pam/
 coreutils/selinux-stack/symver-libs), 4 clang-no-LTO (db5.3/libxcrypt/ncurses/
 perl), 5 honest force-gcc (bash/bzip2/gmp/libcap2/zlib). ~90% clang codegen,
 all the important packages clang.
+
+## Phase 4 (agentic patch) — LIVE DEMO SUCCESS
+
+### apt: claude fixed a real clang C++ incompatibility
+
+apt's clang C++ error — `solver3.h:59: error: subscript of pointer to
+incomplete type 'APT::Solver::State'` — is a genuine clang-vs-gcc strictness
+issue: `ContiguousCacheMap<Package,State>::operator[]` is `constexpr` and
+subscripts `State*`, which clang requires `State` to be *complete* for at the
+constexpr operator's definition point (it's only forward-declared there); gcc
+doesn't. No flag remedy fixes a source-language issue.
+
+**The agentic-patch tier (claude --bare, headless) fixed it.** First bounded
+run (8 turns) gave up. With a real hint + 25 turns, claude (17 turns, **$0.51**)
+produced the correct minimal patch: **move the four `constexpr operator[]`
+bodies out of the `Solver` class to after `struct State` is fully defined**, so
+clang instantiates `data_[key->ID]` only when `State` is complete. 61-line
+diff, clean and correct C++.
+
+Captured to patches/apt.patch, applied via builder.apply_patches, rebuilding to
+validate. This is the user's thesis realized: **an AI agent maintaining a fork
+by generating real source patches for compiler incompatibilities** — the part
+that turns "100% clang" from research project into engineering.
+
+(Gap fixed: default max_turns 8→25 — 8 was too few for non-trivial fixes.)
