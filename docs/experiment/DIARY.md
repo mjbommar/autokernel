@@ -371,3 +371,25 @@ set: bzip2/libcap2 (hardcoded CC=gcc), gmp (clang libtool flag-munging), ncurses
 build), libxcrypt (@@-compat), rust-coreutils (rust+bfd). 28 ok / 6 ftbfs at
 check time. The masquerade-drop is the correct call: maximal *meaningful* clang,
 honest force-gcc on the rest.
+
+### 1.12 ThinLTO bitcode vs gcc-link — the mixed-build category (perl, db5.3)
+
+Under no-masquerade, perl + db5.3 FTBFS with a new-but-coherent cause: they
+**compile** XS modules / helper tools with clang (`-flto=thin` → the `.o` is
+LLVM *bitcode*) but **link/helper-compile** with hardcoded
+`x86_64-linux-gnu-gcc`, whose plain bfd linker can't read clang bitcode:
+`B.o: file format not recognized` (perl), `cc1: unrecognized -flto=thin`
+(db5.3's install helper). The masquerade had masked this (gcc→clang).
+
+Honest remedy: **strip-lto** — without ThinLTO the objects are real ELF the gcc
+step can consume, and the package **stays clang** (loses only LTO). So these are
+still clang codegen, just clang+no-LTO.
+
+**Revised honest tally (post-triage projection):** of 48 buildable —
+~37 clang+ThinLTO, ~3 clang-no-LTO (perl/db5.3/libxcrypt strip-lto), ~7 honest
+force-gcc (bzip2/libcap2/zlib/gmp/ncurses/apt/bash — hardcoded gcc or clang
+incompat), 1 stock (rust-coreutils). So **~40/48 (83%) clang codegen**, with the
+*right* packages clang (systemd, SELinux stack, symver libs) — vs the masquerade
+run's higher raw count but gcc systemd. The no-masquerade result is lower-% but
+more *meaningful* and *honest*. Triage cost: perl/db5.3 strip-lto rebuilds are
+~36m each — the expensive part of the run.
