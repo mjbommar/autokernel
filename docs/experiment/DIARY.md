@@ -393,3 +393,29 @@ incompat), 1 stock (rust-coreutils). So **~40/48 (83%) clang codegen**, with the
 run's higher raw count but gcc systemd. The no-masquerade result is lower-% but
 more *meaningful* and *honest*. Triage cost: perl/db5.3 strip-lto rebuilds are
 ~36m each — the expensive part of the run.
+
+### 1.13 Clean run complete — economics + two triage-robustness gaps
+
+**Result: 44/51 ok, 7 still-FTBFS.** Triage remedies that landed (clean, in
+exceptions.json): db5.3/libxcrypt/ncurses/perl → strip-lto (stay clang, no LTO),
+sed → strip-nodoc (stays clang+LTO). So **48 of 51 are clang codegen**
+(44 clang+ThinLTO incl. systemd/shadow/util-linux/selinux-stack, + 4 clang-no-LTO).
+
+**ECONOMICS (the thesis number): 12 triage LLM calls, 219k in / 4.1k out tokens,
+$0.72.** Build compute: 7.24 CPU-hours. So creating this optimized fork's
+residual remedies cost **\$0.72 of LLM judgment** — the "~\$1 to create" thesis,
+measured.
+
+**Two triage-robustness gaps the run exposed (both now real fixes):**
+1. **Single-pass triage** — `triage_and_retry` triages each FTBFS once. The
+   hardcoded-gcc packages (bzip2/gmp/libcap2/zlib) need TWO rounds: strip-lto
+   (round 1, fixes the `cc1: unrecognized -flto=thin`) → the gcc rebuild then
+   fails the majority identity audit → needs round 2 (force-gcc). Single-pass
+   left them FTBFS. → make triage multi-round (loop until stable).
+2. **Misdiagnosis** — triage classifies "gcc choked on -flto=thin" as
+   lto-incompat (strip-lto) when it should recognize *gcc* errored → the package
+   is gcc-based → needs-gcc (force-gcc) in one round. → triage prompt v4.
+
+Plus bash (compound force-gcc + strip-nodoc) needs the merge fix (already
+landed) + multi-round. rust-coreutils stays stock (not load-bearing). apt →
+force-gcc or the agentic-patch demo.
