@@ -353,9 +353,31 @@ def boot_image(
         # SECURITY_FINISH and GENERATORS_START (measured via systemd's own phase
         # timestamps); the two knobs collapse that to ~6ms. Both are documented
         # systemd knobs -- no patch, just declare what the serial can't report.
+        #
+        # round 5 (-21%, 311->246ms, n=13; see DIARY round 5). Two validated
+        # bundles, each ~44ms, additive and confirmed to leave the system
+        # "running" (not degraded), zero failed units:
+        #   * kernel: rcu_expedited (the big single win, +32ms -- expedites RCU
+        #     grace periods during boot instead of waiting out normal ones);
+        #     audit=0 (no auditd on an appliance); no_timer_check (skip the timer
+        #     IRQ-routing probe, safe under KVM); random.trust_{cpu,bootloader}
+        #     (use the CPU RNG instead of blocking on entropy).
+        #   * systemd.mask: units an appliance never needs. e2scrub_reap (ext4
+        #     online-scrub), getty-static (VT gettys -- we're serial-only),
+        #     modprobe@{drm,efi_pstore,configfs,fuse} (pointless module loads on a
+        #     MODULES=n kernel), and the dev-hugepages/dev-mqueue/sys-kernel-debug/
+        #     sys-kernel-tracing pseudo-mounts. Drop a mask if your workload needs
+        #     that facility (e.g. hugepages or POSIX mqueues).
         "root=/dev/vda rw quiet loglevel=3 systemd.show_status=0 "
         "tsc=reliable nowatchdog "
         "TERM=linux systemd.tty.rows.console=24 systemd.tty.columns.console=80 "
+        "rcupdate.rcu_expedited=1 audit=0 no_timer_check "
+        "random.trust_cpu=on random.trust_bootloader=on "
+        "systemd.mask=e2scrub_reap.service systemd.mask=getty-static.service "
+        "systemd.mask=modprobe@drm.service systemd.mask=modprobe@efi_pstore.service "
+        "systemd.mask=modprobe@configfs.service systemd.mask=modprobe@fuse.service "
+        "systemd.mask=dev-hugepages.mount systemd.mask=dev-mqueue.mount "
+        "systemd.mask=sys-kernel-debug.mount systemd.mask=sys-kernel-tracing.mount "
         "console=ttyS0 systemd.unit=multi-user.target autokernel.boottest",
         "-drive", f"file={img_path},if=virtio,format=raw",
     ]  # fmt: skip

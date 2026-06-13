@@ -870,3 +870,57 @@ userspace time went — and it was never CPU, it was a 685 ms `poll()` on silenc
 
 Artifacts: `gapprobe.py` (phase-timestamp attribution harness), the round-4 A/B
 above reproducible via `bootbench.py --ab`.
+
+## Boot time, round 5 — measured grab-bag: RCU-expedite + mask the dead weight (−21%)
+
+With the `poll()`-on-silence gone, the remaining ~207 ms userspace is *real* work.
+`systemd-analyze blame`/`critical-chain` on the fixed boot showed the serial path
+is `-.mount`@44 → tmpfiles-dev → udevd@98 → sysinit@127 → getty-static (+47) →
+multi-user@198, with a parallel tail of `dev-vda.device` (110), `e2scrub_reap`
+(67), four `modprobe@*` of modules that don't exist on a `MODULES=n` kernel
+(15/14/13/13), and the hugepages/mqueue/debug/tracing pseudo-mounts (~20 each).
+
+Instead of guessing, ran an **A/B campaign** (`campaign.py`): one shared baseline
+(n=9) vs. each candidate (n=9), keeping only deltas above a noise floor set to half
+the baseline spread (±29 ms — the tmpfs boot jitters that much). Results:
+
+| candidate | Δ vs base | verdict |
+|---|---|---|
+| `rcupdate.rcu_expedited=1` | +32 ms | **WIN** (clears floor alone) |
+| kernel bundle (rcu + audit=0 + no_timer_check + random.trust_*) | +44 ms | **WIN** |
+| mask bundle (e2scrub, getty-static, modprobe@×4, 4 pseudo-mounts) | +44 ms | **WIN** |
+| cryptomgr.notests / init_on_*=0 / nokaslr / noresume | −6…−3 ms | dropped (no gain, some cost hardening) |
+| any single mask | +8…+12 ms | sub-floor alone — only additive |
+
+The instructive bit: **no single mask beats the noise** (each unit is ~10 ms and
+mostly parallel), but the *bundle* of ten is a clean +44 ms. So the honest method
+is bundle-then-confirm, not chase-each-sliver. `rcu_expedited` is the one knob big
+enough to read solo — expediting RCU grace periods during the boot storm of
+synchronize_rcu() calls is a long-known guest win.
+
+**Confirmation (n=13, combined kernel+mask stack vs round-4 baseline):**
+
+| | total | kernel | userspace | stdev |
+|---|---|---|---|---|
+| round-4 baseline | 311 ms | 95 | 215 | ±19 |
+| **+ kernel + mask stack** | **246 ms** | 95 | ~150 | **±9** |
+
+**−20.9%**, and the spread *halved* (±19→±9) — the boot got faster *and* more
+deterministic (less contention = less jitter). Health-checked: the optimized boot
+reports `systemctl is-system-running` = **running** (not degraded), **zero failed
+units** — every masked unit was genuinely unwanted, nothing depended on it.
+
+Eight validated optimizations, all baked into `world/image.py`'s cmdline (with a
+note to drop a mask if the workload needs hugepages/mqueues). Tradeoff knobs that
+*didn't* pay (memory-init poisoning off, KASLR off) were rejected on principle —
+no measured gain isn't worth weakening hardening.
+
+**Cumulative, all harness-measured: 1619 ms → 246 ms = −85%.** Remaining poles are
+now genuine: ~95 ms kernel (initcall/PCI/ACPI probe) and ~150 ms of real udev +
+tmpfiles + getty activation. The next real swing is architectural, not tuning —
+QEMU `microvm` + virtio-mmio (needs a no-PCI/no-ACPI kernel rebuild;
+`CONFIG_VIRTIO_MMIO` is currently off) or snapshot/restore — both deliberately left
+for a decision about what the image *is*, not bolted on speculatively.
+
+Artifacts: `campaign.py` (noise-floored A/B sweep over a candidate list, reusing
+`bootbench.boot_once`).
