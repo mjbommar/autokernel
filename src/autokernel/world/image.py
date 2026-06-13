@@ -329,8 +329,13 @@ def boot_image(
         "-no-reboot",
         "-kernel", str(kernel),
         "-append",
-        "root=/dev/vda rw console=ttyS0 systemd.unit=multi-user.target "
-        "autokernel.boottest",
+        # quiet+show_status=0 cut ~11% off boot by not blocking on the
+        # emulated serial UART for every printk / [ OK ] line (measured
+        # with bootbench.py; the win is entirely console I/O, not CPU).
+        # loglevel=3 keeps KERN_ERR+ and panics visible so the sentinel
+        # parser still sees init death.
+        "root=/dev/vda rw quiet loglevel=3 systemd.show_status=0 "
+        "console=ttyS0 systemd.unit=multi-user.target autokernel.boottest",
         "-drive", f"file={img_path},if=virtio,format=raw",
     ]  # fmt: skip
     if kvm == "sg":

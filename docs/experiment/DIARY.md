@@ -661,3 +661,44 @@ the measured payoff matches the theory exactly:
 At distro scale that's the whole argument: per-host PGO across the hot set buys
 aggregate size reductions on the tool-shaped packages and double-digit speedups
 on the engine-shaped ones — for the price of one profile-collection run each.
+
+## Boot time — measure, then cut it ≥10% (with a real harness)
+
+First, a measurement trap worth recording: the image was booting in **8.33 s**,
+and `systemd-analyze blame` fingered `dev-vda.device` (2.3 s). It looked like a
+kernel/virtio/KVM problem. It wasn't. dmesg showed the kernel probing virtio-blk
+at 0.28 s, mounting root at 0.69 s, `Run /sbin/init` at 0.74 s — all fast. The
+real serializer was `systemd-journal-flush.service +2.217 s`, and the disk image
+lived on an **NFS mount** (`nas4:/volume1/data`), so every journald fsync paid a
+network round-trip. Moving the same image to local NVMe / tmpfs dropped boot to
+**~1.6 s** (journal-flush 2217 ms → 25 ms). *Lesson: never time a VM off NFS.*
+
+**The harness** (`scripts/bootbench.py`). Boots an image under KVM N times,
+drives the autologin serial shell (syncing on a marker's *output* line so it
+never races the boot), parses `systemd-analyze`'s own (kernel, userspace, total),
+and reports min/median/mean/stdev + optional critical-chain. tmpfs image +
+`cache=unsafe` so storage is never the variable. Typical noise: ±8–30 ms over 7
+runs — tight enough to resolve a 10% move at many sigma.
+
+**Baseline (tmpfs, n=7):** median **1619 ms** (kernel 462 + userspace 1154).
+
+**What actually moved it — decomposed, not guessed:**
+
+| config | median | Δ |
+|---|---|---|
+| baseline | 1619 ms | — |
+| `mitigations=off` only | 1618 ms | ~0% |
+| **`quiet loglevel=0 systemd.show_status=0` (+udev quiet)** | **1424 ms** | **+12.0%** |
+| safe variant `loglevel=3` (keeps panics visible) | 1444 ms | +11.1% |
+
+The entire win is **console I/O**: under `-nographic`, every kernel printk and
+systemd `[ OK ]` line blocks on the emulated serial UART. Quieting it cut kernel
+462→354 ms and userspace 1154→1069 ms. `mitigations=off` did *nothing* (KVM
+`-cpu host`; the mitigation cost is negligible across a 1.6 s boot) — so it was
+dropped, no security tradeoff taken.
+
+**Made durable:** `boot_image()` now appends `quiet loglevel=3
+systemd.show_status=0` (loglevel=3 keeps KERN_ERR+/panics so the sentinel parser
+still detects init death — verified `world boot-test` still passes). The
+interactive `launch-vm.sh` carries the same. Net: **−11% boot, pure win**, and a
+reusable harness to keep us honest on the next regression.
