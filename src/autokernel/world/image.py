@@ -323,11 +323,16 @@ def boot_image(
     accel = "kvm" if kvm in ("direct", "sg") else "tcg"
     argv = [
         "qemu-system-x86_64",
-        # q35 is a leaner chipset than the default i440fx (no ISA legacy /
-        # floppy / IDE); fewer devices to probe shaved ~100ms off kernel
-        # init vs pc (bootbench.py). smp scales udev coldplug — the lean
-        # device set lets the workers actually parallelize.
-        "-machine", f"q35,accel={accel}",
+        # Chipset: pc (i440fx), NOT q35. Round-6 re-measurement on the minimal
+        # kernel reversed the earlier q35 call: q35's PCIe/ACPI topology is
+        # *slower* to probe here (kernel-init ~121ms vs ~88ms on pc, consistent
+        # across n=13) — it only hides in total-boot variance. The old comment
+        # ("q35 shaved ~100ms") was measured against the stock kernel + legacy
+        # device model and no longer holds. smp=min(4,cpus): boot is userspace-
+        # parallelism-bound (smp=1 regressed -117ms), so give udev/service start
+        # the cores. (The real PCI/ACPI probe win needs QEMU microvm + a
+        # virtio-mmio kernel rebuild — tracked in DIARY round 6.)
+        "-machine", f"pc,accel={accel}",
         "-cpu", cpu,
         "-smp", str(min(4, (os.cpu_count() or 2))),
         "-m", str(memory_mb),

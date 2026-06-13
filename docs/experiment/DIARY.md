@@ -924,3 +924,78 @@ for a decision about what the image *is*, not bolted on speculatively.
 
 Artifacts: `campaign.py` (noise-floored A/B sweep over a candidate list, reusing
 `bootbench.boot_once`).
+
+## Boot time, round 6 — finding the floor: a deopt fixed, microvm disproven (~0%)
+
+A convergence round, reported honestly: it did **not** lower the median (still
+~240 ms) — it proved *why* it can't be lowered much further by tuning, fixed a
+latent de-optimization, and killed the one big architectural idea with data.
+
+**The cheap-knob ceiling.** Swept QEMU topology/machine knobs (`campaign6.py`,
+n=9) then re-confirmed the apparent winners at n=13. Almost nothing replicated:
+
+| knob | n=9 sweep | n=13 confirm | verdict |
+|---|---|---|---|
+| `-smp 4` (vs 2) | +34 ms | +9 ms | real but small (boot is userspace-parallelism-bound; `smp=1` *regressed* −117 ms) |
+| `-m 512` (vs 2048) | +18 ms | −5 ms | **noise** (didn't replicate) |
+| minimal device set | +12 ms | folded in | sub-floor |
+| `q35` → `pc` | +36 ms | +1 ms total | see below |
+
+The lesson is methodological: at ~240 ms with ±25 ms tmpfs jitter, any knob worth
+<35 ms is at/under the noise, and a single confirm run dissolves most "wins." The
+n=9 sweep over-promised; the n=13 confirm is the honest read.
+
+**A real deopt fixed (q35 → pc).** `image.py` hardcoded `-machine q35` with the
+comment "q35 shaved ~100 ms vs pc." Re-measured on the minimal kernel, the opposite
+holds: q35's PCIe/ACPI topology makes **kernel-init ~33 ms *slower*** (121 vs 88 ms,
+consistent across n=13) — it only hides because total-boot variance swallows it. The
+old number was measured against the *stock* kernel + legacy device model and no
+longer applies. Switched to `pc` and corrected the comment. (Total-boot is ~tied;
+kernel-init is strictly better and the codebase no longer carries a false claim.)
+
+**microvm — built it, disproved it.** The remaining big lever was QEMU `microvm`
+(virtio-mmio, no PCI/ACPI) to kill the kernel's device-probe time. Rebuilt the
+minimal kernel with `CONFIG_VIRTIO_MMIO=y` and booted the rootfs under `-M microvm`
+across machine variants:
+
+| machine | total | kernel |
+|---|---|---|
+| **pc (current best)** | **237 ms** | **88 ms** |
+| microvm acpi=off,pit/pic/rtc=on,smp4 | 421 ms | 304 ms |
+| microvm acpi=on,smp4 | 1262 ms | 1138 ms |
+| microvm acpi=off,smp1 | 1602 ms | 1385 ms |
+
+Every microvm variant **regressed**, the best by +184 ms. Why the premise was wrong:
+pc+KVM kernel-init is *already* only 88 ms because **kvmclock** hands the kernel its
+TSC frequency — PCI/ACPI enumeration on a virtio guest is cheap, not the bottleneck
+I assumed. microvm removes the timer/ACPI infrastructure this kernel relies on, so it
+falls into slow TSC-calibration / AP-bringup paths (acpi=on is pathological at
+~1.1 s). microvm wins for Firecracker because *their* kernel is purpose-built for it;
+ours is tuned for q35/pc-KVM, and retuning it could at best reclaim the ~40 ms of
+probe time microvm's own overhead then exceeds. **Negative result — pc stays.**
+
+**The floor, mapped.** Re-profiled the fully-optimized pc boot (231 ms = 72 kernel +
+158 userspace). The critical chain is now short and structural:
+
+```
+multi-user.target @141ms <- getty.target <- serial-getty@ttyS0 <- dev-ttyS0.device @140ms
+```
+
+i.e. boot is gated on **udev coldplug -> the console device appears -> getty**. The
+longest single unit, `dev-vda.device` (108 ms), is *off* the critical path — it
+settles in parallel and never gates multi-user. So the residual ~140 ms is genuine,
+irreducible-by-tuning work: ~72 ms kernel + udev coldplug + device-settle + getty.
+
+**Where this leaves it.** Cumulative still **1619 → ~240 ms (−85%)**. Going
+materially below ~230 ms is no longer a tuning problem — it needs an *architectural*
+choice the tuning can't make for us:
+  * **snapshot/restore** (QEMU `savevm`/Firecracker-style) — boot once, restore in
+    tens of ms, skipping the whole udev/getty chain;
+  * **drop systemd from the critical path** — a single-purpose init for an appliance
+    that launches one workload, no getty/login plumbing.
+Both are decisions about what the image *is*, deliberately left to a human rather
+than bolted on. Round 6's contribution is the proof that we're at the tuning floor,
+plus the q35→pc fix and the documented microvm dead-end so no one re-treads it.
+
+Artifacts: `campaign6.py` (QEMU-kwargs sweep), `microvm_boot.py` (microvm vs pc
+harness; keep for the record even though microvm lost).
