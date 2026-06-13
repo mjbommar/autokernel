@@ -740,3 +740,43 @@ and `tsc=reliable nowatchdog` (guest-neutral; `world boot-test` still passes).
 The service masks (which change the guest's unit set) ship in the fast
 `launch-vm.sh` profile rather than forced on the boot-test. Two rounds:
 **1619 ms → 1291 ms, −20% total**, every step measured by the harness.
+
+## Boot time, round 3 — a minimal kernel (−21%, autokernel's actual thesis)
+
+Rounds 1–2 (console + device model + masks) got the *userspace* to ~1021 ms on
+the **stock generic kernel**. The remaining floor was the kernel itself — and
+this is the whole point of autokernel: the distro kernel carries thousands of
+drivers the VM never uses. Built a minimal **KVM-guest kernel** (linux 7.0.12 —
+latest stable in the fork's 7.0 series; 7.1 is still RC) and A/B'd it against the
+stock kernel on the *same* rootfs/cmdline/QEMU via `bootbench.py --kernel`.
+
+The instructive part was the *failure* in the middle. A first cut (defconfig +
+kvm_guest, `MODULES=n`) was **slower** — 575 ms kernel-init vs the stock 257 ms —
+because `MODULES=n` makes *every* configured driver run its initcall at boot,
+where the modular distro kernel loads almost none. `initcall_debug` + dmesg
+timestamp-gap analysis found the real cost wasn't initcall *volume* but two
+*stalls*: a **+288 ms** gap that was `ata1–6: SATA link down` (six SATA ports on
+the q35 AHCI controller timing out) and **+113 ms** from `i8042` mouse probe +
+`md` RAID autodetect. None of which a virtio VM needs.
+
+So the fix was targeted driver removal, not blind shrinking: `--disable ATA
+SERIO_I8042 MD BLK_DEV_LOOP SCSI_LOWLEVEL SUNRPC IPV6 DRM FB SOUND USB_SUPPORT
+MEDIA_SUPPORT …` keeping virtio/ext4/8250/cgroups built-in. (A detour: `KERNEL_LZ4`
+silently failed the build — `lz4` tool absent — leaving the *old* image; the
+byte-identical bzImage size was the tell. Reverted to GZIP.)
+
+**Result (n=7, same q35/minimal/-smp 2/optimized cmdline, only the kernel differs):**
+
+| kernel | kernel-init | userspace | total |
+|---|---|---|---|
+| stock generic 7.0.0-22 | 257 ms | 1021 ms | 1291 ms |
+| **minimal 7.0.12 (trimmed)** | **126 ms** | **894 ms** | **1018 ms** |
+
+**−21.1%** — the SATA stall gone (kernel-init halved) *and* a smaller device set
+drained udev coldplug faster (userspace −127 ms). Image: 8.6 MB, no modules, vs
+the generic 16.5 MB + hundreds of MB of `/lib/modules`. Config + reproducible
+recipe in `docs/experiment/kernel/`.
+
+**Three rounds, all harness-measured: 1619 ms → 1018 ms = −37%.** And round 3 is
+the one that's *autokernel's actual product* — a hardware-matched minimal kernel —
+rather than config tuning around the distro kernel.
