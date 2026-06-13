@@ -50,7 +50,7 @@ LOCALVERSION="${AUTOKERNEL_HW_LOCALVERSION:--autokernel-$(date -u +%Y%m%d%H%M)}"
 KERNEL_ENTRY="${AUTOKERNEL_HW_KERNEL_ENTRY:-}"
 DIMENSION="${AUTOKERNEL_HW_DIMENSION:-choices,toggles,tunables}"
 CANDIDATE_SCOPE="${AUTOKERNEL_HW_CANDIDATE_SCOPE:-focused}"
-MAX_CANDIDATES="${AUTOKERNEL_HW_MAX_CANDIDATES:-480}"
+MAX_CANDIDATES="${AUTOKERNEL_HW_MAX_CANDIDATES:-0}"
 LLM_MODE="${AUTOKERNEL_HW_LLM_MODE:-auto}"
 MODEL="${AUTOKERNEL_HW_MODEL:-}"
 SERVICE_TIER="${AUTOKERNEL_HW_SERVICE_TIER:-}"
@@ -60,6 +60,7 @@ THREAT="${AUTOKERNEL_HW_THREAT:-balanced}"
 MODULES_STRATEGY="${AUTOKERNEL_HW_MODULES:-distro}"
 AGGRESSION="${AUTOKERNEL_HW_AGGRESSION:-aggressive}"
 BOOT_TEST_METHOD="${AUTOKERNEL_HW_BOOT_TEST_METHOD:-qemu}"
+NVIDIA_MODE="${AUTOKERNEL_HW_NVIDIA:-auto}"
 
 SKIP_LLM=0
 INSTALL=0
@@ -96,7 +97,7 @@ Options:
   --kernel-entry ENTRY     GRUB entry for one-shot boot; auto-derived when omitted
   --dimension VALUE        modules, choices, toggles, tunables, or all (default: choices,toggles,tunables)
   --candidate-scope SCOPE  focused or all when module LLM is enabled (default: focused)
-  --max-candidates N       Cost guard only when module LLM is enabled; 0 means no cap (default: 480)
+  --max-candidates N       Cost guard only when module LLM is enabled; 0 means no cap (default: 0)
   --llm-mode MODE          auto, cheap, fast, or quality (default: auto)
   --model MODEL            Literal pydantic-ai model id; overrides --llm-mode
   --service-tier TIER      Provider service tier, e.g. OpenAI flex/priority/auto
@@ -106,6 +107,7 @@ Options:
   --modules NAME           distro, monolithic, modular (default: distro)
   --aggression NAME        conservative, balanced, aggressive (default: aggressive)
   --boot-test-method NAME  qemu, virtme, or auto (default: qemu)
+  --nvidia MODE            auto, open, proprietary, or off (default: auto)
   --skip-llm               Debug fallback: deterministic-only proposal
   --no-deps                Skip autokernel install-deps --execute
   --install                Install the package and arm one-shot GRUB
@@ -226,6 +228,10 @@ while [ "$#" -gt 0 ]; do
             ;;
         --boot-test-method)
             BOOT_TEST_METHOD="$2"
+            shift 2
+            ;;
+        --nvidia)
+            NVIDIA_MODE="$2"
             shift 2
             ;;
         --skip-llm)
@@ -622,6 +628,7 @@ if [ "$INSTALL" -eq 0 ]; then
     if [ -n "$INSTALL_KERNEL_ENTRY" ]; then
         INSTALL_CMD+=(--kernel-entry "$INSTALL_KERNEL_ENTRY")
     fi
+    INSTALL_CMD+=(--nvidia "$NVIDIA_MODE")
     INSTALL_CMD+=(--execute)
 
     cat <<EOF
@@ -663,12 +670,12 @@ for pkg in "${PACKAGES[@]}"; do
 done
 
 step "Dry-run install plan"
-run_ak install "$SNAPSHOT_DIR" "${PACKAGE_ARGS[@]}" --kernel-entry "$KERNEL_ENTRY"
+run_ak install "$SNAPSHOT_DIR" "${PACKAGE_ARGS[@]}" --kernel-entry "$KERNEL_ENTRY" --nvidia "$NVIDIA_MODE"
 
 confirm "Install these packages into /boot and arm one-shot GRUB entry '$KERNEL_ENTRY'?"
 
 step "Installing package and arming one-shot GRUB"
-sudo_ak install "$SNAPSHOT_DIR" "${PACKAGE_ARGS[@]}" --kernel-entry "$KERNEL_ENTRY" --execute
+sudo_ak install "$SNAPSHOT_DIR" "${PACKAGE_ARGS[@]}" --kernel-entry "$KERNEL_ENTRY" --nvidia "$NVIDIA_MODE" --execute
 
 cat <<EOF
 

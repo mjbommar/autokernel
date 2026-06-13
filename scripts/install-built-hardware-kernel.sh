@@ -12,6 +12,7 @@ KERNEL_DIR="${AUTOKERNEL_HW_KERNEL_CACHE:-$WORK_DIR/kernels}"
 AUTOKERNEL_BIN="${AUTOKERNEL_BIN:-$REPO_ROOT/.venv/bin/autokernel}"
 KERNEL_RELEASE="${AUTOKERNEL_HW_KERNEL_RELEASE:-}"
 KERNEL_ENTRY="${AUTOKERNEL_HW_KERNEL_ENTRY:-}"
+NVIDIA_MODE="${AUTOKERNEL_HW_NVIDIA:-auto}"
 YES=0
 REBOOT=0
 
@@ -25,6 +26,7 @@ from ~/.local/share/autokernel/hardware-boot/kernels. This does not rebuild.
 Options:
   --kernel-release REL  Install this exact kernel release instead of latest
   --kernel-entry ENTRY  GRUB one-shot entry; defaults to Ubuntu advanced entry
+  --nvidia MODE         auto, open, proprietary, or off (default: auto)
   --snapshot-dir PATH   Snapshot dir with boot-test.json
   --kernel-dir PATH     Directory containing built .deb artifacts
   --reboot              Reboot after successful install
@@ -65,6 +67,10 @@ while [ "$#" -gt 0 ]; do
             ;;
         --kernel-entry)
             KERNEL_ENTRY="$2"
+            shift 2
+            ;;
+        --nvidia)
+            NVIDIA_MODE="$2"
             shift 2
             ;;
         --snapshot-dir)
@@ -146,6 +152,7 @@ printf 'kernel release: %s\n' "$KERNEL_RELEASE"
 printf 'image package:  %s\n' "$IMAGE_DEB"
 printf 'header package: %s\n' "$HEADERS_DEB"
 printf 'GRUB one-shot:  %s\n' "$KERNEL_ENTRY"
+printf 'NVIDIA mode:    %s\n' "$NVIDIA_MODE"
 
 confirm "Install this already-built kernel and arm one-shot GRUB?"
 
@@ -154,6 +161,7 @@ INSTALL_CMD=(
     --package "$IMAGE_DEB"
     --package "$HEADERS_DEB"
     --kernel-entry "$KERNEL_ENTRY"
+    --nvidia "$NVIDIA_MODE"
     --execute
 )
 

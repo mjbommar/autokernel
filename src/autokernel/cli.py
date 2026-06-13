@@ -49,6 +49,7 @@ from autokernel import fetch as fetch_mod
 from autokernel import install as install_mod
 from autokernel import installdeps as installdeps_mod
 from autokernel import llm as llm_mod
+from autokernel import nvidia as nvidia_mod
 from autokernel import preflight as preflight_mod
 from autokernel import rollback as rollback_mod
 from autokernel import snapshot as snap_mod
@@ -95,6 +96,13 @@ config_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(config_app, name="config")
+
+inventory_app = typer.Typer(
+    add_completion=False,
+    help="Build, search, and enrich source-derived Kconfig inventories.",
+    no_args_is_help=True,
+)
+app.add_typer(inventory_app, name="inventory")
 
 console = Console()
 err_console = Console(stderr=True)
@@ -228,7 +236,7 @@ def _run_dimension_passes(
         raise err.fail(
             "no LLM provider configured for v0.13 dimension passes",
             why=str(e),
-            fix="set ANTHROPIC_API_KEY or OPENAI_API_KEY in .env, or omit --dimension",
+            fix="set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY in .env, or omit --dimension",
             exit_code=1,
         )
 
@@ -372,6 +380,8 @@ def scan(
             f"  mounts:  {len(snap.mounts)}\n"
             f"  dkms:    {len(snap.dkms)}\n"
             f"  software signals: {len(snap.software_features)}\n"
+            f"  audio:   {'useful' if snap.audio.useful else 'unused'}"
+            f" ({snap.audio.role}, conf={snap.audio.confidence:.2f})\n"
             f"  initramfs modules: {len(snap.initramfs_modules)}\n"
             f"  firmware loads: {len(snap.firmware)}\n"
             f"  running config: {snap.running_config_path}\n"
@@ -431,7 +441,7 @@ def propose(
         typer.Option(
             help="Cost guard for module-trim LLM candidates; 0 disables the cap"
         ),
-    ] = 600,
+    ] = 0,
     candidate_scope: Annotated[
         str,
         typer.Option(
@@ -576,6 +586,12 @@ def propose(
         f"unresolved modules: {len(resolution.unresolved_modules)}  "
         f"unresolved modaliases: {len(resolution.unresolved_modaliases)}"
     )
+    if snap.audio.useful:
+        console.print(
+            f"  audio keep-set: {snap.audio.role} "
+            f"(conf={snap.audio.confidence:.2f}; "
+            "protecting HDA/SOF/SoundWire/codec/USB audio)"
+        )
 
     requested_dims = _parse_dimensions(dimension)
     broad_candidate_syms = candidate_trims(snap, resolution)
@@ -663,7 +679,7 @@ def propose(
             raise err.fail(
                 "no LLM provider configured",
                 why=str(e),
-                fix="set ANTHROPIC_API_KEY or OPENAI_API_KEY in .env (see .env.example), or pass --skip-llm to use only deterministic rules",
+                fix="set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY in .env (see .env.example), or pass --skip-llm to use only deterministic rules",
                 exit_code=1,
             )
         except llm_mod.ProviderNotAvailable as e:
@@ -817,7 +833,7 @@ def _render_diff(diff) -> None:
         console.print(
             f"\n[yellow]{len(diff.not_considered)} candidate symbol(s) were not considered[/yellow] "
             f"(LLM skipped or pool truncated). Re-run without --skip-llm or with a higher "
-            f"--max-candidates to address them. Sample: "
+            f"--max-candidates, or --max-candidates 0, to address them. Sample: "
             f"{', '.join(diff.not_considered[:5])}…"
         )
 
@@ -1345,11 +1361,18 @@ def preflight(
         Path | None,
         typer.Argument(help="Optional snapshot dir; enables snapshot-aware checks"),
     ] = None,
+    kernel_source: Annotated[
+        Path | None,
+        typer.Option(
+            "--kernel-source",
+            help="Optional kernel source tree for built-kernel boot-test checks",
+        ),
+    ] = None,
     for_: Annotated[
         str,
         typer.Option(
             "--for",
-            help="Which verb's checks to run: all|scan|propose|apply|build|install",
+            help="Which verb's checks to run: all|scan|propose|apply|build|install|boot-test",
         ),
     ] = "all",
     strict: Annotated[
@@ -1386,7 +1409,12 @@ def preflight(
         raise typer.Exit(2)
 
     distro = detect_distro()
-    run = preflight_mod.run_checks(tags=tags, snapshot=snap, distro=distro)
+    run = preflight_mod.run_checks(
+        tags=tags,
+        snapshot=snap,
+        distro=distro,
+        kernel_source=kernel_source,
+    )
 
     _render_preflight(run, distro=distro, for_=for_)
 
@@ -1607,6 +1635,17 @@ def install(
             help="Don't require a recent successful `boot-test` for this snapshot. Override only when you know what you're doing."
         ),
     ] = False,
+    nvidia: Annotated[
+        nvidia_mod.NvidiaMode,
+        typer.Option(
+            "--nvidia",
+            help=(
+                "NVIDIA handling for custom-kernel installs: auto preserves the "
+                "detected driver flavor, open/proprietary force a DKMS flavor, "
+                "off disables NVIDIA handling."
+            ),
+        ),
+    ] = nvidia_mod.NvidiaMode.AUTO,
 ) -> None:
     """Install a built kernel package with one-shot probation, or commit a successful boot."""
     import os
@@ -1615,6 +1654,7 @@ def install(
     distro = detect_distro()
     spec = spec_for(distro)
     bootloader = bootloader_mod.detect()
+    snap = snap_mod.load(snapshot_dir)
 
     # ── commit path ─────────────────────────────────────────────────────
     if commit:
@@ -1644,6 +1684,22 @@ def install(
             raise typer.Exit(result.step_runs[-1].exit_code)
         return
 
+    # ── pre-flight (optional skip) ──────────────────────────────────────
+    if not skip_preflight:
+        run = preflight_mod.run_checks(
+            tags={"always", "install"},
+            snapshot=snap,
+            distro=distro,
+            package_paths=tuple(package or ()),
+        )
+        _render_preflight(run, distro=distro, for_="install")
+        if run.has_failures:
+            raise err.fail(
+                "preflight check failures — refusing to proceed",
+                fix="address the FAILed items above, or rerun with --skip-preflight",
+                exit_code=1,
+            )
+
     # ── install path: locate package(s) ─────────────────────────────────
     if not package:
         package = _find_latest_built_packages(snapshot_dir)
@@ -1656,22 +1712,6 @@ def install(
                     f"first, or pass --package PATH explicitly"
                 ),
                 exit_code=2,
-            )
-
-    # ── pre-flight (optional skip) ──────────────────────────────────────
-    if not skip_preflight:
-        snap = snap_mod.load(snapshot_dir)
-        run = preflight_mod.run_checks(
-            tags={"always", "install"},
-            snapshot=snap,
-            distro=distro,
-        )
-        _render_preflight(run, distro=distro, for_="install")
-        if run.has_failures:
-            raise err.fail(
-                "preflight check failures — refusing to proceed",
-                fix="address the FAILed items above, or rerun with --skip-preflight",
-                exit_code=1,
             )
 
     # ── boot-test gate ──────────────────────────────────────────────────
@@ -1722,6 +1762,15 @@ def install(
             f"method={bt_record.get('method', '?')})[/dim]"
         )
 
+    nvidia_plan = nvidia_mod.plan_nvidia_support(
+        snapshot=snap,
+        distro=distro,
+        package_paths=package,
+        mode=nvidia,
+    )
+    if nvidia_plan is not None:
+        _render_nvidia_install_plan(nvidia_plan)
+
     # ── plan + render + (maybe) execute ─────────────────────────────────
     plan = install_mod.build_plan(
         distro=distro,
@@ -1730,6 +1779,7 @@ def install(
         package_paths=package,
         kernel_entry=kernel_entry,
         enable_probation=not no_probation,
+        nvidia_plan=nvidia_plan,
     )
     _render_install_plan(plan, distro=distro, bootloader=bootloader, mode="install")
 
@@ -1837,6 +1887,26 @@ def _find_latest_built_packages(snapshot_dir: Path) -> list[Path]:
     return sorted(candidates)
 
 
+def _render_nvidia_install_plan(plan: nvidia_mod.NvidiaDriverPlan) -> None:
+    evidence = ", ".join(plan.evidence[:5])
+    if len(plan.evidence) > 5:
+        evidence += ", …"
+    console.print(
+        Panel.fit(
+            "\n".join(
+                [
+                    "[cyan]NVIDIA custom-kernel support enabled[/cyan]",
+                    f"  target kernel: {plan.kernel_release}",
+                    f"  driver:        {plan.package_name} ({plan.flavor})",
+                    f"  reason:        {plan.reason}",
+                    f"  evidence:      {evidence or 'n/a'}",
+                ]
+            ),
+            title="nvidia",
+        )
+    )
+
+
 def _render_install_plan(plan, *, distro, bootloader, mode: str) -> None:
     console.rule(f"install: {mode}")
     console.print(
@@ -1887,6 +1957,243 @@ def _render_install_result(result) -> None:
             f"{run.duration_s:.1f}",
         )
     console.print(t)
+
+
+# ── inventory sub-app ─────────────────────────────────────────────────────
+
+
+@inventory_app.command("scan")
+def inventory_scan(
+    kernel_source: Annotated[
+        Path,
+        typer.Argument(help="Kernel source tree containing Kconfig and Makefile"),
+    ],
+    out: Annotated[
+        Path,
+        typer.Option("--out", help="Directory to write manifest.json + symbols.jsonl"),
+    ],
+    arch: Annotated[str, typer.Option("--arch", help="Kernel ARCH")] = "x86_64",
+    config: Annotated[
+        Path | None,
+        typer.Option("--config", help="Optional .config to load for current values"),
+    ] = None,
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", help="Only scan the first N symbols for smoke tests"),
+    ] = None,
+) -> None:
+    """Build a deterministic Kconfig/source inventory."""
+    from autokernel.inventory import build_inventory, write_inventory
+
+    console.print(f"[dim]scanning Kconfig inventory under {kernel_source}…[/dim]")
+    dataset = build_inventory(
+        kernel_source,
+        arch=arch,
+        config_path=config,
+        limit=limit,
+    )
+    write_inventory(dataset, out)
+    console.print(
+        f"[green]✓ inventory[/green] symbols={len(dataset.symbols)} out={out}"
+    )
+
+
+@inventory_app.command("search")
+def inventory_search(
+    inventory_dir: Annotated[Path, typer.Argument(help="Inventory directory")],
+    query: Annotated[str, typer.Argument(help="Symbol name or text query")],
+    text: Annotated[
+        bool,
+        typer.Option("--text", help="Search Kconfig prompt/help text instead of names"),
+    ] = False,
+    limit: Annotated[int, typer.Option("--limit")] = 50,
+) -> None:
+    """Search inventory symbols by name or Kconfig text."""
+    from autokernel.inventory import InventoryTools
+
+    tools = InventoryTools.from_dir(inventory_dir)
+    hits = (
+        tools.search_kconfig_text(query, limit=limit)
+        if text
+        else tools.search_symbols(query, limit=limit)
+    )
+    for symbol in hits:
+        rec = tools.get_symbol(symbol)
+        console.print(f"{rec.symbol}\t{rec.type.value}\t{rec.prompt or ''}")
+
+
+@inventory_app.command("show")
+def inventory_show(
+    inventory_dir: Annotated[Path, typer.Argument(help="Inventory directory")],
+    symbol: Annotated[str, typer.Argument(help="CONFIG_ symbol")],
+) -> None:
+    """Print one inventory record as JSON."""
+    from autokernel.inventory import InventoryTools
+
+    rec = InventoryTools.from_dir(inventory_dir).get_symbol(symbol)
+    console.print_json(rec.model_dump_json(exclude_none=True))
+
+
+@inventory_app.command("read-file")
+def inventory_read_file(
+    inventory_dir: Annotated[Path, typer.Argument(help="Inventory directory")],
+    path: Annotated[str, typer.Argument(help="Path inside kernel source tree")],
+    source_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--source-dir",
+            help="Override manifest source_dir for vendored inventories",
+        ),
+    ] = None,
+    head: Annotated[int | None, typer.Option("--head")] = None,
+    start: Annotated[int | None, typer.Option("--start")] = None,
+    end: Annotated[int | None, typer.Option("--end")] = None,
+) -> None:
+    """Read a bounded source file excerpt through inventory path sandboxing."""
+    from autokernel.inventory import InventoryTools
+
+    tools = InventoryTools.from_dir(inventory_dir, source_dir=source_dir)
+    if head is not None:
+        excerpt = tools.read_file_head(path, max_lines=head)
+    elif start is not None and end is not None:
+        excerpt = tools.read_file_excerpt(path, start_line=start, end_line=end)
+    else:
+        excerpt = tools.read_file_head(path)
+    console.print(excerpt.text)
+
+
+@inventory_app.command("enrich")
+def inventory_enrich(
+    inventory_dir: Annotated[Path, typer.Argument(help="Inventory directory")],
+    symbols: Annotated[
+        list[str] | None,
+        typer.Option("--symbol", help="CONFIG_ symbol to enrich; repeatable"),
+    ] = None,
+    limit: Annotated[int | None, typer.Option("--limit")] = None,
+    batch_size: Annotated[int, typer.Option("--batch-size")] = 20,
+    jobs: Annotated[
+        int,
+        typer.Option("--jobs", help="Concurrent enrichment batches"),
+    ] = 1,
+    source_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--source-dir",
+            help="Override manifest source_dir for vendored inventories",
+        ),
+    ] = None,
+    model: Annotated[
+        str,
+        typer.Option("--model", help="pydantic-ai model id for enrichment"),
+    ] = "openai:gpt-5.4-mini",
+    service_tier: Annotated[
+        str | None,
+        typer.Option("--service-tier", help="OpenAI service tier"),
+    ] = "flex",
+    offline: Annotated[
+        bool,
+        typer.Option("--offline", help="Write deterministic baseline enrichment"),
+    ] = False,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="Re-enrich rows even when the same symbol/fact hash already exists",
+        ),
+    ] = False,
+) -> None:
+    """Enrich inventory records into enrichments.jsonl."""
+    from autokernel.inventory import InventoryTools
+    from autokernel.inventory_agent import (
+        enrich_records,
+        offline_enrichment,
+        write_enrichments,
+    )
+
+    tools = InventoryTools.from_dir(inventory_dir, source_dir=source_dir)
+    if batch_size < 1:
+        raise typer.BadParameter("--batch-size must be at least 1")
+    if jobs < 1:
+        raise typer.BadParameter("--jobs must be at least 1")
+    if symbols:
+        records = [tools.get_symbol(s) for s in symbols]
+    else:
+        records = tools.dataset.symbols
+    if limit is not None:
+        records = records[:limit]
+
+    out_path = inventory_dir / "enrichments.jsonl"
+    if not force and out_path.exists():
+        existing: set[tuple[str, str]] = set()
+        with out_path.open(encoding="utf-8") as f:
+            for line_no, line in enumerate(f, start=1):
+                if not line.strip():
+                    continue
+                try:
+                    item = json.loads(line)
+                except json.JSONDecodeError as e:
+                    raise err.fail(
+                        "invalid existing enrichment JSONL",
+                        why=f"{out_path}:{line_no}: {e}",
+                        fix="delete the invalid enrichments.jsonl or pass a clean inventory directory",
+                        exit_code=2,
+                    ) from e
+                symbol = item.get("symbol")
+                fact_hash = item.get("fact_hash")
+                if isinstance(symbol, str) and isinstance(fact_hash, str):
+                    existing.add((symbol, fact_hash))
+        before = len(records)
+        records = [r for r in records if (r.symbol, r.fact_hash) not in existing]
+        skipped = before - len(records)
+        if skipped:
+            console.print(f"[dim]skipping {skipped} existing enrichment(s)[/dim]")
+
+    chunks = [records[i : i + batch_size] for i in range(0, len(records), batch_size)]
+
+    def enrich_chunk(chunk):
+        if offline:
+            return [offline_enrichment(r) for r in chunk]
+        return enrich_records(
+            chunk,
+            tools,
+            model=model,
+            service_tier=service_tier,
+        )
+
+    total = 0
+    if jobs == 1 or len(chunks) <= 1:
+        for chunk in chunks:
+            enrichments = enrich_chunk(chunk)
+            write_enrichments(enrichments, out_path)
+            total += len(enrichments)
+            console.print(f"[dim]enriched {total}/{len(records)}[/dim]")
+    else:
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        next_chunk = 0
+        futures = {}
+        with ThreadPoolExecutor(max_workers=jobs) as executor:
+
+            def submit_next() -> None:
+                nonlocal next_chunk
+                if next_chunk < len(chunks):
+                    future = executor.submit(enrich_chunk, chunks[next_chunk])
+                    futures[future] = next_chunk
+                    next_chunk += 1
+
+            for _ in range(min(jobs, len(chunks))):
+                submit_next()
+
+            while futures:
+                for future in as_completed(list(futures)):
+                    futures.pop(future)
+                    enrichments = future.result()
+                    write_enrichments(enrichments, out_path)
+                    total += len(enrichments)
+                    console.print(f"[dim]enriched {total}/{len(records)}[/dim]")
+                    submit_next()
+                    break
+    console.print(f"[green]✓ enrichments[/green] wrote {out_path}")
 
 
 # ── config sub-app: show / test ────────────────────────────────────────────
@@ -1988,7 +2295,7 @@ def config_test(
         raise err.fail(
             "no LLM provider configured",
             why=str(e),
-            fix="copy .env.example to .env and set ANTHROPIC_API_KEY or OPENAI_API_KEY (or run `autokernel config show` to see all options)",
+            fix="copy .env.example to .env and set ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY (or run `autokernel config show` to see all options)",
             exit_code=1,
         )
     except llm_mod.ProviderNotAvailable as e:
@@ -2293,11 +2600,42 @@ def boot_test(
         )
 
     snap = snap_mod.load(snapshot_dir)
+    kernel_release = boottest_mod.detect_kernel_release(
+        kernel_source,
+        bzimage,
+        fallback=snap.kernel.release,
+    )
+    plan_method = method
+    if method == boottest_mod.Method.AUTO:
+        detected = boottest_mod.detect_method()
+        if (
+            detected == boottest_mod.Method.VIRTME
+            and not boottest_mod.virtme_root_transport_available(kernel_source)
+            and boottest_mod.shutil.which("qemu-system-x86_64")
+        ):
+            plan_method = boottest_mod.Method.QEMU
+        else:
+            plan_method = method
+    elif (
+        method == boottest_mod.Method.VIRTME
+        and not boottest_mod.virtme_root_transport_available(kernel_source)
+    ):
+        raise err.fail(
+            "virtme root transport unavailable in built kernel config",
+            why=(
+                "virtme needs CONFIG_VIRTIO_FS or the 9P stack "
+                "(CONFIG_NET_9P, CONFIG_NET_9P_VIRTIO, CONFIG_9P_FS) to mount "
+                "the host-backed root filesystem. This localmodconfig build has "
+                "those disabled."
+            ),
+            fix="rerun boot-test with --method qemu, or rebuild with virtiofs/9p enabled",
+            exit_code=2,
+        )
     try:
         plan_obj = boottest_mod.plan(
-            method=method,
+            method=plan_method,
             bzimage_path=bzimage,
-            kernel_release=snap.kernel.release,
+            kernel_release=kernel_release,
             timeout=timeout,
         )
     except RuntimeError as e:

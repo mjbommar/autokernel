@@ -86,6 +86,7 @@ have lspci  && run lspci_vmmnk lspci -vmmnk
 have lspci  && run lspci_tree  lspci -tv
 have lsusb  && run lsusb       lsusb
 have lsusb  && run lsusb_t     lsusb -t
+run dmi_id bash -c 'for key in sys_vendor product_name product_family product_version board_name chassis_vendor chassis_type; do f="/sys/class/dmi/id/$key"; [ -r "$f" ] && printf "%s\t%s\n" "$key" "$(cat "$f" 2>/dev/null)"; done'
 have dmidecode && run dmidecode priv dmidecode
 have lscpu  && run lscpu_j     lscpu -J
 have lsblk  && run lsblk_j     lsblk -J -O
@@ -135,13 +136,17 @@ have dkms && run dkms_status dkms status
 {
     for bin in docker dockerd containerd podman nerdctl kubelet kubeadm kubectl crictl \
         virsh libvirtd virtqemud qemu-system-x86_64 qemu-img iptables ip6tables nft \
-        firewalld ufw; do
+        firewalld ufw nvidia-smi nvidia-settings prime-select pipewire wireplumber \
+        pulseaudio pactl wpctl pw-cli jackd bluetoothctl; do
         if have "$bin"; then
             case "$bin" in
                 docker|dockerd|containerd|podman|nerdctl) feature="containers" ;;
                 kubelet|kubeadm|kubectl|crictl) feature="kubernetes" ;;
                 virsh|libvirtd|virtqemud|qemu-system-x86_64|qemu-img) feature="virtualization" ;;
                 iptables|ip6tables|nft|firewalld|ufw) feature="firewall" ;;
+                nvidia-smi|nvidia-settings|prime-select) feature="nvidia" ;;
+                pipewire|wireplumber|pulseaudio|pactl|wpctl|pw-cli|jackd) feature="audio" ;;
+                bluetoothctl) feature="bluetooth" ;;
                 *) feature="software" ;;
             esac
             software_feature "$feature" binary "$bin" "$(command -v "$bin" 2>/dev/null || true)"
@@ -151,23 +156,33 @@ have dkms && run dkms_status dkms status
     if have systemctl; then
         systemctl list-unit-files --no-legend --no-pager 2>/dev/null \
             | awk '{print $1 "\t" $2}' \
-            | grep -E '^(docker|containerd|podman|libvirtd|virtqemud|virtlogd|virtstoraged|kubelet|microk8s|firewalld|ufw)\.' \
+            | grep -E '^(docker|containerd|podman|libvirtd|virtqemud|virtlogd|virtstoraged|kubelet|microk8s|firewalld|ufw|pipewire|wireplumber|pulseaudio|bluetooth)\.' \
             | while read -r unit state; do
                 case "$unit" in
                     docker.*|containerd.*|podman.*) feature="containers" ;;
                     kubelet.*|microk8s.*) feature="kubernetes" ;;
                     libvirtd.*|virtqemud.*|virtlogd.*|virtstoraged.*) feature="virtualization" ;;
                     firewalld.*|ufw.*) feature="firewall" ;;
+                    pipewire.*|wireplumber.*|pulseaudio.*) feature="audio" ;;
+                    bluetooth.*) feature="bluetooth" ;;
                     *) feature="software" ;;
                 esac
                 software_feature "$feature" systemd "$unit" "$state"
+            done
+        systemctl --user list-unit-files --no-legend --no-pager 2>/dev/null \
+            | awk '{print $1 "\t" $2}' \
+            | grep -E '^(pipewire|wireplumber|pulseaudio)\.' \
+            | while read -r unit state; do
+                software_feature audio systemd-user "$unit" "$state"
             done
     fi
 
     if have dpkg-query; then
         for pkg in docker.io docker-ce docker-ce-cli containerd containerd.io podman \
             libvirt-daemon libvirt-daemon-system libvirt-clients qemu-system-x86 \
-            kubelet kubeadm kubectl microk8s nftables iptables firewalld ufw; do
+            kubelet kubeadm kubectl microk8s nftables iptables firewalld ufw \
+            pipewire wireplumber pulseaudio pipewire-pulse pipewire-alsa \
+            pipewire-jack alsa-utils alsa-ucm-conf bluez libspa-0.2-bluetooth; do
             dpkg-query -W -f='${db:Status-Abbrev}\t${binary:Package}\t${Version}\n' "$pkg" 2>/dev/null \
                 | awk '$1 ~ /^ii/ { print $2 "\t" $3 }' \
                 | while read -r found version; do
@@ -176,18 +191,40 @@ have dkms && run dkms_status dkms status
                         kubelet|kubeadm|kubectl|microk8s) feature="kubernetes" ;;
                         libvirt*|qemu-system-x86) feature="virtualization" ;;
                         nftables|iptables|firewalld|ufw) feature="firewall" ;;
+                        pipewire*|wireplumber|pulseaudio|alsa-*|libspa-0.2-bluetooth) feature="audio" ;;
+                        bluez) feature="bluetooth" ;;
                         *) feature="software" ;;
                     esac
                     software_feature "$feature" dpkg "$found" "$version"
                 done
         done
+        for pattern in 'nvidia-driver-*' 'nvidia-dkms-*' 'nvidia-kernel-source-*' \
+            'nvidia-utils-*' 'libnvidia-compute-*' 'linux-modules-nvidia-*' \
+            'linux-objects-nvidia-*'; do
+            dpkg-query -W -f='${db:Status-Abbrev}\t${binary:Package}\t${Version}\n' "$pattern" 2>/dev/null \
+                | awk '$1 ~ /^ii/ { print $2 "\t" $3 }' \
+                | while read -r found version; do
+                    software_feature nvidia dpkg "$found" "$version"
+                done
+        done
     elif have rpm; then
         for pkg in docker docker-ce docker-ce-cli containerd podman libvirt qemu-system-x86 \
-            kubelet kubeadm kubectl nftables iptables firewalld ufw; do
+            kubelet kubeadm kubectl nftables iptables firewalld ufw pipewire wireplumber \
+            pulseaudio pipewire-pulseaudio pipewire-alsa alsa-utils alsa-ucm-conf bluez; do
             if rpm -q "$pkg" >/dev/null 2>&1; then
-                software_feature software rpm "$pkg" "$(rpm -q "$pkg" 2>/dev/null)"
+                case "$pkg" in
+                    pipewire*|wireplumber|pulseaudio|alsa-*) feature="audio" ;;
+                    bluez) feature="bluetooth" ;;
+                    *) feature="software" ;;
+                esac
+                software_feature "$feature" rpm "$pkg" "$(rpm -q "$pkg" 2>/dev/null)"
             fi
         done
+        rpm -qa 2>/dev/null \
+            | grep -E '^(nvidia|xorg-x11-drv-nvidia|akmod-nvidia|kmod-nvidia)' \
+            | while read -r found; do
+                software_feature nvidia rpm "$found" "$found"
+            done
     fi
 } >"$OUT/software_features" 2>/dev/null
 echo 0 >"$OUT/software_features.rc"
@@ -245,6 +282,15 @@ have ls && run dev_inputs ls -la /dev/input/
 have ls && run dev_dri    ls -la /dev/dri/
 have ls && run dev_snd    ls -la /dev/snd/
 [ -r /proc/asound/cards ] && run asound_cards cat /proc/asound/cards
+[ -r /proc/asound/pcm ] && run asound_pcm cat /proc/asound/pcm
+if [ -d /sys/class/sound ]; then
+    run sys_class_sound bash -c 'find /sys/class/sound -maxdepth 2 -mindepth 1 -printf "%p\t%l\n" 2>/dev/null | sort'
+fi
+if have timeout && have wpctl; then
+    run wpctl_status timeout 2 wpctl status
+elif have wpctl; then
+    run wpctl_status wpctl status
+fi
 
 # ── manifest ────────────────────────────────────────────────────────────────
 {

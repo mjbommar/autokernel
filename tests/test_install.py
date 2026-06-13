@@ -12,6 +12,7 @@ from autokernel import install as install_mod
 from autokernel.bootloader import Bootloader, BootloaderKind
 from autokernel.distro import Family, parse_os_release, spec_for
 from autokernel.install import build_commit_plan, build_plan, execute
+from autokernel.nvidia import NvidiaDriverPlan
 
 
 # ── helpers ─────────────────────────────────────────────────────────────────
@@ -155,6 +156,39 @@ def test_disabling_probation_omits_arm_step(tmp_path: Path):
     )
     assert plan.is_valid
     assert "arm_one_shot_boot" not in [s.name for s in plan.steps]
+
+
+def test_nvidia_plan_adds_dkms_steps_before_grub(tmp_path: Path):
+    deb = tmp_path / "linux-image-7.0.0-autokernel_7.0.0-1_amd64.deb"
+    deb.write_text("")
+    info = _info(Family.DEBIAN)
+    nvidia_plan = NvidiaDriverPlan(
+        kernel_release="7.0.0-autokernel",
+        branch="580",
+        flavor="open",
+        package_name="nvidia-driver-580-open",
+        reason="test",
+    )
+    plan = build_plan(
+        distro=info,
+        spec=spec_for(info),
+        bootloader=_DEB_GRUB,
+        package_paths=[deb],
+        kernel_entry="Linux 7.0.0-autokernel",
+        nvidia_plan=nvidia_plan,
+    )
+    assert [s.name for s in plan.steps] == [
+        "capture_grub_state",
+        "install_package",
+        "install_nvidia_driver",
+        "build_nvidia_dkms",
+        "verify_nvidia_modules",
+        "refresh_initramfs",
+        "regenerate_bootloader",
+        "arm_one_shot_boot",
+    ]
+    assert plan.steps[2].argv == ["apt", "install", "-y", "nvidia-driver-580-open"]
+    assert plan.steps[3].argv == ["dkms", "autoinstall", "-k", "7.0.0-autokernel"]
 
 
 def test_no_kernel_entry_omits_arm_step(tmp_path: Path):

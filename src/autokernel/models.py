@@ -113,6 +113,43 @@ class SoftwareFeature(_Frozen):
     detail: str | None = None
 
 
+class SystemIdentity(_Frozen):
+    """Host identity facts from DMI/sysfs.
+
+    These are weak signals by themselves, but useful when combined with
+    hardware and software evidence. For example, a laptop chassis plus a
+    present PCI audio controller means audio hotplug/codecs are user-facing,
+    while a rackmount chassis with no sound devices can safely trim audio.
+    """
+
+    sys_vendor: str | None = None
+    product_name: str | None = None
+    product_family: str | None = None
+    product_version: str | None = None
+    board_name: str | None = None
+    chassis_vendor: str | None = None
+    chassis_type: int | None = None
+
+
+class AudioContext(_Frozen):
+    """Structured audio evidence and usefulness classification.
+
+    ``useful`` means autokernel should treat the audio stack as user-facing
+    and protect likely late-bound codec/hotplug modules. It is intentionally
+    not equivalent to "audio is currently playing"; a laptop with PipeWire,
+    a PCI HD-audio controller, and no plugged-in USB headset still needs audio.
+    """
+
+    useful: bool = False
+    confidence: float = 0.0
+    role: str = "unused"  # internal, internal-sof, usb-hotplug, userspace, unused
+    evidence: list[str] = Field(default_factory=list)
+    cards: list[str] = Field(default_factory=list)
+    pcms: list[str] = Field(default_factory=list)
+    modules: list[str] = Field(default_factory=list)
+    userspace: list[str] = Field(default_factory=list)
+
+
 class BootContext(_Frozen):
     cmdline: str
     cmdline_params: dict[str, str] = Field(default_factory=dict)
@@ -151,6 +188,7 @@ class Snapshot(_Frozen):
 
     kernel: KernelInfo
     cpu: CpuInfo
+    system: SystemIdentity = Field(default_factory=SystemIdentity)
     boot: BootContext
 
     pci: list[PciDevice] = Field(default_factory=list)
@@ -168,6 +206,7 @@ class Snapshot(_Frozen):
     firmware: list[FirmwareLoad] = Field(default_factory=list)
     dkms: list[DkmsModule] = Field(default_factory=list)
     software_features: list[SoftwareFeature] = Field(default_factory=list)
+    audio: AudioContext = Field(default_factory=AudioContext)
 
     # Modules and firmware files known to be in the initramfs — these are
     # load-bearing for early boot regardless of what's loaded at runtime.

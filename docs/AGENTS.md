@@ -1,6 +1,6 @@
 # LLM agents reference
 
-autokernel uses **five** pydantic-ai agents, each with a narrow job.
+autokernel uses several pydantic-ai agents, each with a narrow job.
 
 | Agent | Module | Per-call inputs | Output | Per-batch cache |
 |---|---|---|---|---|
@@ -8,6 +8,7 @@ autokernel uses **five** pydantic-ai agents, each with a narrow job.
 | `propose_choices` | `autokernel.agent_dims` | Snapshot, KconfigSurface, OptimizationContext, batch of ChoiceGroups | `[RemovalProposal]` with selected option name | `<snap>/batches/dim-choices/choice-<key>.json` |
 | `propose_toggles` | `autokernel.agent_dims` | Snapshot, KconfigSurface, OptimizationContext, batch of BoolToggles (allowlist+recipe-filtered) | `[RemovalProposal]` with y/n | `<snap>/batches/dim-toggles/toggle-<key>.json` |
 | `propose_tunables` | `autokernel.agent_dims` | Snapshot, KconfigSurface, OptimizationContext, batch of NumericTunables (allowlist) | `[RemovalProposal]` with literal value | `<snap>/batches/dim-tunables/tunable-<key>.json` |
+| `inventory enrich` | `autokernel.inventory_agent` | KconfigSymbolRecord batch + read-only inventory/source tools | `[InventoryEnrichment]` with evidence refs | `<inventory>/enrichments.jsonl` |
 | **(planned v0.15+) diagnostic** | TBD | Failed iteration's record + serial log + oops | structured do-not-repeat rule | per-failure |
 
 ## What each agent sees
@@ -93,6 +94,13 @@ The container types (`_ChoiceBatch`, `_ToggleBatch`, `_TunableBatch`)
 default `decisions: list[X] = Field(default_factory=list)` because
 pydantic-ai sometimes returns `{}` for "nothing to change" and we
 don't want that to exhaust the retry budget.
+
+`inventory enrich` has a similar guardrail at the orchestrator layer. Each
+batch must produce exactly the requested symbols; rows outside the batch are
+ignored, missing symbols are retried, `fact_hash` must match the deterministic
+inventory, and cited evidence paths must exist under the kernel source tree.
+The CLI skips existing `(symbol, fact_hash)` rows by default, so long enrichment
+runs are restartable.
 
 ## Cache key shape
 

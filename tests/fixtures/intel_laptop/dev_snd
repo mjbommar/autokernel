@@ -1,0 +1,9 @@
+total 0
+drwxr-xr-x  3 root root      240 May 13 08:00 .
+drwxr-xr-x 22 root root     4740 May 13 08:00 ..
+drwxr-xr-x  2 root root       80 May 13 08:00 by-path
+crw-rw----+ 1 root audio 116,  5 May 13 08:00 controlC0
+crw-rw----+ 1 root audio 116,  2 May 13 08:00 pcmC0D0p
+crw-rw----+ 1 root audio 116,  3 May 13 08:00 pcmC0D1c
+crw-rw----+ 1 root audio 116,  1 May 13 08:00 seq
+crw-rw----+ 1 root audio 116, 33 May 13 08:00 timer

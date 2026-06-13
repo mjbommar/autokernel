@@ -1,0 +1,14 @@
+{
+  "schema_version": "1",
+  "generator_version": "1",
+  "kernel_version": null,
+  "source_dir": "~/.cache/autokernel/kernels/linux-torvalds-v7.0",
+  "source_git_commit": "028ef9c96e96197026887c0f092424679298aae8",
+  "source_git_describe": "v7.0",
+  "arch": "x86_64",
+  "srcarch": "x86",
+  "config_path": null,
+  "generated_at": "2026-05-14T14:21:50.406235+00:00",
+  "symbol_count": 18701,
+  "kconfiglib_version": null
+}

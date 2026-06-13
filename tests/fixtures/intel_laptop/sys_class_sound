@@ -1,0 +1,4 @@
+/sys/class/sound/card0	../../devices/pci0000:00/0000:00:1f.3/sound/card0
+/sys/class/sound/controlC0	../../devices/pci0000:00/0000:00:1f.3/sound/card0/controlC0
+/sys/class/sound/pcmC0D0p	../../devices/pci0000:00/0000:00:1f.3/sound/card0/pcmC0D0p
+/sys/class/sound/pcmC0D1c	../../devices/pci0000:00/0000:00:1f.3/sound/card0/pcmC0D1c

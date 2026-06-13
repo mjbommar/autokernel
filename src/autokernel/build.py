@@ -35,6 +35,8 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+from autokernel.audio import AUDIO_KEEP_MODULES
+
 
 REPRO_TIMESTAMP_DEFAULT = "1970-01-01T00:00:00Z"
 REPRO_USER_DEFAULT = "autokernel"
@@ -310,6 +312,12 @@ def prepare(
     # will fail with `No rule to make target 'debian/canonical-certs.pem'`.
     # Auto-clear them in-place when the referenced files are absent.
     _strip_missing_distro_cert_paths(target, source_dir)
+    # The kernel has two separate module-compression switches:
+    # CONFIG_MODULE_COMPRESS selects support/type, while
+    # CONFIG_MODULE_COMPRESS_ALL controls whether modules_install actually
+    # writes .ko.gz/.ko.xz/.ko.zst files. Ubuntu configs can carry the former
+    # without the latter, producing unexpectedly large custom packages.
+    _enable_module_compress_all(target)
 
     env = _build_env(
         use_ccache=False,
@@ -338,7 +346,7 @@ def prepare(
             _write_localmodconfig_lsmod(
                 snapshot_dir=snapshot_dir,
                 lsmod_path=lsmod_path,
-            )
+            ).resolve()
         )
         lmc_env = dict(env)
         lmc_env["LSMOD"] = lsmod
@@ -360,6 +368,7 @@ def prepare(
                 * 4,  # localmodconfig is heavier than olddefconfig
             )
         )
+        _enable_module_compress_all(target)
         # Re-canonicalize after the trim — localmodconfig doesn't run
         # olddefconfig itself.
         steps.append(
@@ -385,6 +394,49 @@ _DISTRO_CERT_KEYS: tuple[str, ...] = (
     "CONFIG_SYSTEM_TRUSTED_KEYS",
     "CONFIG_SYSTEM_REVOCATION_KEYS",
 )
+
+
+def _enable_module_compress_all(config_path: Path) -> None:
+    """Make module compression affect installed module files.
+
+    ``CONFIG_MODULE_COMPRESS=y`` only enables compressed-module support and
+    selects an algorithm. Upstream ``modules_install`` emits compressed files
+    only when ``CONFIG_MODULE_COMPRESS_ALL=y`` is present. Preserve configs
+    that disable module compression entirely.
+    """
+    text = config_path.read_text()
+    lines = text.splitlines(keepends=True)
+    if not any(line.strip() == "CONFIG_MODULE_COMPRESS=y" for line in lines):
+        return
+
+    changed = False
+    found = False
+    out_lines: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped == "CONFIG_MODULE_COMPRESS_ALL=y":
+            found = True
+            out_lines.append(line)
+            continue
+        if stripped == "# CONFIG_MODULE_COMPRESS_ALL is not set" or stripped.startswith(
+            "CONFIG_MODULE_COMPRESS_ALL="
+        ):
+            found = True
+            indent = line[: len(line) - len(line.lstrip())]
+            nl = "\n" if line.endswith("\n") else ""
+            out_lines.append(f"{indent}CONFIG_MODULE_COMPRESS_ALL=y{nl}")
+            changed = True
+            continue
+        out_lines.append(line)
+
+    if not found:
+        if out_lines and not out_lines[-1].endswith("\n"):
+            out_lines[-1] += "\n"
+        out_lines.append("CONFIG_MODULE_COMPRESS_ALL=y\n")
+        changed = True
+
+    if changed:
+        config_path.write_text("".join(out_lines))
 
 
 _LOCALMODCONFIG_LATE_LOAD_MODULES: tuple[str, ...] = (
@@ -447,6 +499,8 @@ def _write_localmodconfig_lsmod(
     extra_modules = set(_snapshot_hardware_modules(snapshot_dir))
     if _needs_late_firewall_modules(snapshot_dir=snapshot_dir, loaded_modules=seen):
         extra_modules.update(_LOCALMODCONFIG_LATE_LOAD_MODULES)
+    if _needs_late_audio_modules(snapshot_dir=snapshot_dir, loaded_modules=seen):
+        extra_modules.update(AUDIO_KEEP_MODULES)
     with out.open("w") as fh:
         if lines:
             fh.write("\n".join(lines) + "\n")
@@ -511,6 +565,52 @@ def _needs_late_firewall_modules(
         if feature in _LOCALMODCONFIG_FIREWALL_SOFTWARE_FEATURES:
             return True
     return False
+
+
+def _needs_late_audio_modules(
+    *,
+    snapshot_dir: Path,
+    loaded_modules: set[str],
+) -> bool:
+    if any(_looks_like_audio_module(module) for module in loaded_modules):
+        return True
+
+    for line in _read_snapshot_lines(snapshot_dir / "lspci_vmmnk"):
+        if line.startswith("Class:") and line.split(":", 1)[1].strip().startswith(
+            ("0401", "0403")
+        ):
+            return True
+        if line.startswith("Device:") and "audio" in line.lower():
+            return True
+        if line.startswith("Driver:") and _looks_like_audio_module(
+            line.split(":", 1)[1].strip()
+        ):
+            return True
+
+    asound_cards = "\n".join(_read_snapshot_lines(snapshot_dir / "asound_cards"))
+    if asound_cards and "no soundcards" not in asound_cards.lower():
+        return True
+
+    if _read_snapshot_lines(snapshot_dir / "asound_pcm"):
+        return True
+
+    for line in _read_snapshot_lines(snapshot_dir / "dev_snd"):
+        if any(token in line for token in ("controlC", "pcmC", "seq", "timer")):
+            return True
+
+    for line in _read_snapshot_lines(snapshot_dir / "software_features"):
+        feature = line.split("\t", 1)[0].strip()
+        if feature in {"audio", "desktop", "bluetooth"}:
+            return True
+
+    return False
+
+
+def _looks_like_audio_module(module: str) -> bool:
+    lower = module.lower().replace("-", "_")
+    return lower.startswith(("snd", "soundwire")) or any(
+        frag in lower for frag in ("_sof", "sof_", "hda", "sdw", "sdca")
+    )
 
 
 def _strip_missing_distro_cert_paths(config_path: Path, source_dir: Path) -> None:

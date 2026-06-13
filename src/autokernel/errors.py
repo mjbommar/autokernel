@@ -127,7 +127,8 @@ def hint_missing_api_key() -> "typer.Exit":
     return fail(
         "no LLM API key configured",
         fix=(
-            "copy .env.example to .env and fill in ANTHROPIC_API_KEY or OPENAI_API_KEY, "
+            "copy .env.example to .env and fill in ANTHROPIC_API_KEY, OPENAI_API_KEY, "
+            "or GOOGLE_API_KEY, "
             "or export one in your shell. Use `--skip-llm` to run without an LLM."
         ),
         exit_code=1,

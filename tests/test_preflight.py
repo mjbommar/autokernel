@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
+from types import SimpleNamespace
 
 
 from autokernel import preflight as pf
@@ -205,6 +207,7 @@ def test_kernel_dev_libs_pass_when_query_finds_them(monkeypatch):
             stdout = (
                 "libssl-dev install ok installed\n"
                 "libelf-dev install ok installed\n"
+                "libdw-dev install ok installed\n"
                 "libncurses-dev install ok installed\n"
             )
 
@@ -228,6 +231,60 @@ def test_kernel_dev_libs_query_unavailable_skips(monkeypatch):
     r = pf.check_kernel_dev_libs(ctx)
     # Conservative: pass rather than spurious fail when we can't tell.
     assert r.severity == pf.Severity.PASS
+
+
+def test_kernel_dev_libs_fails_when_libdw_missing(monkeypatch):
+    """Modern GENDWARFKSYMS builds need libdw-dev for <dwarf.h>."""
+
+    def _fake_run(*args, **kwargs):
+        class R:
+            returncode = 0
+            stdout = (
+                "libssl-dev install ok installed\n"
+                "libelf-dev install ok installed\n"
+                "libncurses-dev install ok installed\n"
+            )
+
+        return R()
+
+    monkeypatch.setattr(pf.subprocess, "run", _fake_run)
+    ctx = _ctx_for_family(Family.DEBIAN)
+    r = pf.check_kernel_dev_libs(ctx)
+    assert r.severity == pf.Severity.FAIL
+    assert "libdw-dev" in r.message
+    assert "libdw-dev" in (r.fix_hint or "")
+
+
+def test_distro_build_packages_warns_for_missing_package_deps(monkeypatch):
+    def _fake_run(*args, **kwargs):
+        class R:
+            returncode = 0
+            stdout = (
+                "build-essential install ok installed\n"
+                "flex install ok installed\n"
+                "bison install ok installed\n"
+                "bc install ok installed\n"
+                "libssl-dev install ok installed\n"
+                "libelf-dev install ok installed\n"
+                "libncurses-dev install ok installed\n"
+                "dwarves install ok installed\n"
+                "zstd install ok installed\n"
+                "kmod install ok installed\n"
+                "cpio install ok installed\n"
+                "rsync install ok installed\n"
+                "clang install ok installed\n"
+                "lld install ok installed\n"
+            )
+
+        return R()
+
+    monkeypatch.setattr(pf.subprocess, "run", _fake_run)
+    ctx = _ctx_for_family(Family.DEBIAN)
+    r = pf.check_distro_build_packages(ctx)
+    assert r.severity == pf.Severity.WARN
+    assert "libdw-dev" in r.message
+    assert "debhelper" in r.message
+    assert "llvm" in r.message
 
 
 # ── snapshot-aware checks ──────────────────────────────────────────────────
@@ -256,6 +313,136 @@ def test_snapshot_dkms_pass_when_absent(intel_laptop):
     ctx = _ctx_for_family(Family.DEBIAN, snapshot=intel_laptop)
     r = pf.check_snapshot_dkms_clean(ctx)
     assert r.severity == pf.Severity.PASS
+
+
+# ── install readiness checks ────────────────────────────────────────────────
+
+
+def test_install_packages_warn_when_missing(tmp_path):
+    ctx = _ctx_for_family(
+        Family.DEBIAN, snapshot=SimpleNamespace(snapshot_dir=tmp_path)
+    )
+    r = pf.check_install_packages_present(ctx)
+    assert r.severity == pf.Severity.WARN
+    assert "no installable" in r.message
+
+
+def test_install_packages_pass_when_package_exists(tmp_path):
+    pkg = tmp_path / "linux-image-6.13.5_amd64.deb"
+    pkg.write_text("")
+    ctx = _ctx_for_family(
+        Family.DEBIAN, snapshot=SimpleNamespace(snapshot_dir=tmp_path)
+    )
+    r = pf.check_install_packages_present(ctx)
+    assert r.severity == pf.Severity.PASS
+
+
+def test_install_packages_pass_when_explicit_packages_provided(tmp_path):
+    pkg = tmp_path / "linux-image-6.13.5_amd64.deb"
+    ctx = _ctx_for_family(
+        Family.DEBIAN, snapshot=SimpleNamespace(snapshot_dir=tmp_path)
+    )
+    ctx.package_paths = (pkg,)
+    r = pf.check_install_packages_present(ctx)
+    assert r.severity == pf.Severity.PASS
+    assert "explicit" in r.message
+
+
+def test_boot_test_record_warns_when_missing(tmp_path):
+    ctx = _ctx_for_family(
+        Family.DEBIAN, snapshot=SimpleNamespace(snapshot_dir=tmp_path)
+    )
+    r = pf.check_boot_test_record(ctx)
+    assert r.severity == pf.Severity.WARN
+    assert "no boot-test" in r.message
+
+
+def test_boot_test_record_warns_for_qemu_kernel_only(tmp_path):
+    (tmp_path / "boot-test.json").write_text(
+        json.dumps(
+            {
+                "schema": 1,
+                "verdict_ok": True,
+                "kernel_release": "7.1.0-rc3",
+                "method": "qemu",
+            }
+        )
+    )
+    ctx = _ctx_for_family(
+        Family.DEBIAN, snapshot=SimpleNamespace(snapshot_dir=tmp_path)
+    )
+    r = pf.check_boot_test_record(ctx)
+    assert r.severity == pf.Severity.WARN
+    assert "kernel-only" in r.message
+
+
+def test_boot_test_record_fails_for_failed_record(tmp_path):
+    (tmp_path / "boot-test.json").write_text(
+        json.dumps({"schema": 1, "verdict_ok": False, "verdict_reason": "panic"})
+    )
+    ctx = _ctx_for_family(
+        Family.DEBIAN, snapshot=SimpleNamespace(snapshot_dir=tmp_path)
+    )
+    r = pf.check_boot_test_record(ctx)
+    assert r.severity == pf.Severity.FAIL
+    assert "panic" in r.message
+
+
+# ── boot-test runtime checks ────────────────────────────────────────────────
+
+
+def test_boot_test_runtime_passes_with_qemu(monkeypatch):
+    def _which(c):
+        return "/usr/bin/qemu-system-x86_64" if c == "qemu-system-x86_64" else None
+
+    monkeypatch.setattr(pf.shutil, "which", _which)
+    ctx = _ctx_for_family(Family.DEBIAN)
+    r = pf.check_boot_test_runtime_available(ctx)
+    assert r.severity == pf.Severity.PASS
+    assert "qemu-system-x86_64" in r.message
+
+
+def test_boot_test_runtime_passes_with_virtme(monkeypatch):
+    def _which(c):
+        return "/usr/bin/virtme-ng" if c == "virtme-ng" else None
+
+    monkeypatch.setattr(pf.shutil, "which", _which)
+    ctx = _ctx_for_family(Family.DEBIAN)
+    r = pf.check_boot_test_runtime_available(ctx)
+    assert r.severity == pf.Severity.PASS
+    assert "virtme" in r.message
+
+
+def test_boot_test_runtime_fails_with_neither_runtime(monkeypatch):
+    monkeypatch.setattr(pf.shutil, "which", lambda c: None)
+    ctx = _ctx_for_family(Family.DEBIAN)
+    r = pf.check_boot_test_runtime_available(ctx)
+    assert r.severity == pf.Severity.FAIL
+    assert "qemu-system-x86_64" in r.message
+    assert "qemu-system-x86" in (r.fix_hint or "")
+    assert "virtme-ng" in (r.fix_hint or "")
+
+
+def test_virtme_config_support_skips_without_kernel_source():
+    ctx = _ctx_for_family(Family.DEBIAN)
+    r = pf.check_virtme_config_support(ctx)
+    assert r.severity == pf.Severity.SKIP
+
+
+def test_virtme_config_support_warns_when_transport_missing(tmp_path, monkeypatch):
+    (tmp_path / ".config").write_text(
+        "# CONFIG_NET_9P is not set\n# CONFIG_VIRTIO_FS is not set\n"
+    )
+    monkeypatch.setattr(
+        pf.shutil,
+        "which",
+        lambda c: "/usr/bin/qemu-system-x86_64" if c == "qemu-system-x86_64" else None,
+    )
+    ctx = _ctx_for_family(Family.DEBIAN)
+    ctx.kernel_source = tmp_path
+    r = pf.check_virtme_config_support(ctx)
+    assert r.severity == pf.Severity.WARN
+    assert "virtme" in r.message
 
 
 # ── tag dispatch ────────────────────────────────────────────────────────────

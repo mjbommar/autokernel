@@ -1,33 +1,54 @@
 # autokernel
 
-LLM-assisted minimal Linux kernel builder. Probe a host, propose a trim,
-review with bulk rules, merge into a final `.config`, and build a
-distro-native kernel package — all from one CLI. Multi-distro:
-Debian/Ubuntu, Fedora/RHEL, Arch, openSUSE, Gentoo, Alpine.
+LLM-assisted minimal Linux kernel builder.
 
-Inspired by Gentoo's `localmodconfig`, FreeBSD's `include GENERIC` + diff
-style, and Debian's `make bindeb-pkg`.
+`autokernel` probes a real host, combines deterministic system evidence
+with bounded LLM judgment, writes a reviewed Kconfig fragment, builds a
+distro-native kernel package, boot-tests it in a VM, and can install it
+for a one-shot GRUB probation boot.
 
-> **Status: 0.16.3.** Closed-loop optimizer with **clang as the default
-> compiler** (live-validated end-to-end: 15.44 MB bzImage on Meteor Lake
-> vs 17.43 MB Ubuntu stock, **−11.4%**). LTO opt-in via
-> `--lto={thin,full}`. The closed loop now actually closes —
-> `--base-config` chains from the post-build `.config`, `config_check`
-> blocks LLM hallucinations before the slow build, and the prompt's
-> history block carries a fitness trend so the LLM can see whether
-> the kernel is shrinking. New `autokernel minitram` builds a per-host
-> minimal initramfs (3-5 MB vs Ubuntu's 41.5 MB). Four-axis intent
-> (workload × threat × modules × aggression) composed via
-> `--preset=NAME` or per-axis flags. See [docs/ROADMAP.md](docs/ROADMAP.md)
-> for the layer-by-layer arc, [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
-> for how the pieces fit together, [docs/AGENTS.md](docs/AGENTS.md)
-> for the LLM agent reference, [docs/LLM_EFFICIENCY_PLAN.md](docs/LLM_EFFICIENCY_PLAN.md)
-> for the evidence-first LLM plan, and [docs/PGO.md](docs/PGO.md) for the
-> v0.17 profile-guided optimization design.
+It is inspired by Gentoo's `localmodconfig`, FreeBSD's `include GENERIC`
++ diff style, and Debian's `make bindeb-pkg`, but the goal is broader:
+make a per-machine kernel that is smaller, still bootable, and explainable.
 
 [![tests](https://github.com/mjbommar/autokernel/actions/workflows/test.yml/badge.svg)](https://github.com/mjbommar/autokernel/actions/workflows/test.yml)
 [![validation](https://github.com/mjbommar/autokernel/actions/workflows/validation.yml/badge.svg)](https://github.com/mjbommar/autokernel/actions/workflows/validation.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+## What it optimizes
+
+- **Hardware fit:** keep the drivers, firmware paths, filesystems, and boot
+  features this host actually needs.
+- **LLM-bounded choices:** ask the LLM about small, typed Kconfig decision
+  sets such as preemption, timer frequency, CPU tuning, hardening toggles,
+  and sizing tunables.
+- **Module surface:** use live system evidence and `localmodconfig` to avoid
+  building thousands of unused loadable modules.
+- **Safe install path:** build distro packages, boot-test the kernel, install
+  with sudo only when needed, and arm GRUB for a one-shot probation boot.
+
+Measured on a Meteor Lake Ubuntu laptop, the current 7.1-rc3 autokernel
+reboot candidate shipped **737 compressed module files instead of 6,906** and
+enabled **3,298 Kconfig symbols instead of 10,056** versus Ubuntu's stock
+7.0.0-15-generic kernel. Its staged `/lib/modules` tree was **25.00 MiB
+instead of 153.69 MiB**. A recent high-impact Linux CVE review showed **4
+strong exposure reductions, 2 partial reductions, and 4 unchanged core-kernel
+exposures** for this host-minimal profile. Details and caveats are in
+[Measured example](#measured-example).
+
+## Status
+
+Current focus: closed-loop optimization with `clang` as the default compiler,
+per-batch LLM caching, VM boot-test gating, NVIDIA DKMS handling during
+install, and per-host minimal initramfs generation via `autokernel minitram`.
+LTO is opt-in with `--lto={thin,full}`.
+
+Project references:
+[roadmap](docs/ROADMAP.md),
+[architecture](docs/ARCHITECTURE.md),
+[agent design](docs/AGENTS.md),
+[LLM efficiency plan](docs/LLM_EFFICIENCY_PLAN.md), and
+[PGO design](docs/PGO.md).
 
 ## Install
 
@@ -62,9 +83,75 @@ For development, clone and `uv sync`:
 git clone https://github.com/mjbommar/autokernel
 cd autokernel
 uv sync
-cp .env.example .env  # add ANTHROPIC_API_KEY or OPENAI_API_KEY
+cp .env.example .env  # add ANTHROPIC_API_KEY, OPENAI_API_KEY, or GOOGLE_API_KEY
 uv run autokernel preflight
 ```
+
+## Easy quickstart: hardware-minimal kernel
+
+From a clone, this is the easiest path to reproduce the kind of
+LLM-optimized, host-minimal kernel described above:
+
+```bash
+uv sync --frozen
+uv run python scripts/hardware-reboot-smoke.py
+```
+
+The script uses a work directory under
+`~/.local/share/autokernel/hardware-boot/`, not `/tmp`, then runs the full
+safe pipeline:
+
+1. preflight the host and install missing build/test dependencies
+2. scan hardware, software, firmware, DKMS, boot, and audio evidence
+3. fetch matching kernel source
+4. ask the LLM only about bounded Kconfig dimensions:
+   `choices,toggles,tunables`
+5. apply deterministic keep rules and reviewed proposals
+6. build with `clang` and `--localmodconfig`
+7. boot-test the freshly built kernel in a VM
+
+By default it **does not install anything into `/boot`**. After the VM
+boot-test passes, install and arm a one-shot GRUB boot:
+
+```bash
+uv run python scripts/hardware-reboot-smoke.py --install --no-deps
+```
+
+To install and immediately reboot into the new kernel once:
+
+```bash
+uv run python scripts/hardware-reboot-smoke.py --install --reboot --yes --no-deps
+```
+
+If the new kernel boots, make it permanent:
+
+```bash
+autokernel install ~/.local/share/autokernel/hardware-boot/snapshot --commit --execute
+```
+
+If it fails, GRUB should fall back to the previous default. Then run:
+
+```bash
+autokernel rollback ~/.local/share/autokernel/hardware-boot/snapshot --execute
+```
+
+The bash wrapper runs the same flow if you prefer shell:
+
+```bash
+bash scripts/hardware-reboot-smoke.sh
+```
+
+For NVIDIA systems, install defaults to `--nvidia=auto`: autokernel detects
+NVIDIA hardware/driver packages, installs the matching DKMS package, builds
+the driver for the custom kernel release, verifies `nvidia.ko`, and refreshes
+the initramfs before arming GRUB. Use `--nvidia=open` or
+`--nvidia=proprietary` to force a flavor, or `--nvidia=off` to disable this
+handling.
+
+For laptops/desktops, the scan now classifies audio usefulness from DMI,
+PCI audio, ALSA devices, SOF/HDA/SoundWire modules, PipeWire/WirePlumber,
+and Bluetooth/USB hotplug signals. Useful audio is treated as load-bearing
+so `localmodconfig` does not silently remove codec or headset support.
 
 ## Development validation
 
@@ -75,15 +162,54 @@ scripts/validate-qemu.sh /path/to/linux-source  # uses arch/x86/boot/bzImage
 scripts/qemu-busybox-shell.sh /path/to/linux-source  # interactive BusyBox shell
 ```
 
-For a real host build and optional one-shot reboot into the LLM-optimized
-kernel, see [docs/HARDWARE_BOOT.md](docs/HARDWARE_BOOT.md):
+For more detail on the hardware flow, see
+[docs/HARDWARE_BOOT.md](docs/HARDWARE_BOOT.md).
 
-```bash
-scripts/hardware-reboot-smoke.sh                 # build + VM boot-test only
-uv run python scripts/hardware-reboot-smoke.py   # same flow with Rich build monitor
-scripts/hardware-reboot-smoke.sh --install       # install + arm one-shot GRUB
-scripts/hardware-reboot-smoke.sh --install --reboot --yes
-```
+## Measured example
+
+This is a real hardware smoke-test result, not a universal promise. The
+point of the comparison is to make the tradeoff visible: autokernel removes
+large amounts of unused module surface, but core kernel bugs and user-facing
+hardware still need patching and policy.
+
+This table compares Ubuntu `7.0.0-15-generic` with the QEMU-boot-tested
+autokernel `7.1.0-rc3` zstd-module reboot candidate. Module and boot-artifact
+sizes for the candidate come from the staged Debian image package before
+install.
+
+| Metric | Ubuntu `7.0.0-15-generic` | autokernel `7.1.0-rc3` zstd candidate | Reduction |
+|---|---:|---:|---:|
+| Module files shipped | 6,906 | 737 `.ko.zst` | 89.3% fewer |
+| Module tree size | 153.69 MiB | 25.00 MiB | 83.7% smaller |
+| Enabled Kconfig symbols (`y+m`) | 10,056 | 3,298 | 67.2% fewer |
+| Module Kconfig symbols (`m`) | 6,712 | 737 | 89.0% fewer |
+| Built-in Kconfig symbols (`y`) | 3,344 | 2,561 | 23.4% fewer |
+| `vmlinuz` size | 16.47 MiB | 14.67 MiB | 11.0% smaller |
+| `/boot` artifacts + `/lib/modules`, excluding initrd | 180.95 MiB | 49.56 MiB | 72.6% smaller |
+
+The initrd is generated during package install, so the zstd candidate's final
+initrd size should be remeasured after install. The previous installed
+autokernel initrd was 32.03 MiB versus 39.44 MiB for Ubuntu stock.
+
+CVE exposure is evaluated by subsystem presence, not by counting symbols. In
+one recent high-impact Linux CVE sample:
+
+| CVE / class | Affected area | Exposure change in the measured build |
+|---|---|---|
+| CVE-2026-31431 | AF_ALG / AEAD crypto userspace API | Strong reduction: AEAD userspace API removed |
+| Dirty Frag-style ESP/RXRPC bugs | `esp4`, `esp6`, `rxrpc` | Strong reduction: modules/configs removed |
+| KSMBD bugs | in-kernel SMB server | Strong reduction: `ksmbd` removed |
+| EROFS bugs | EROFS filesystem | Strong reduction: EROFS removed |
+| CVE-2024-1086, CVE-2023-32233 | `nf_tables` | No meaningful reduction: nftables still needed |
+| CVE-2023-0386 | OverlayFS | No meaningful reduction when containers are in use |
+| Dirty Pipe / ELF / timers | core kernel paths | No meaningful config reduction |
+| USB audio / UVC bugs | hotplug media devices | Workload-dependent: removable on headless hosts, kept on laptops/desktops when useful |
+
+That last row is important. Autokernel now treats laptop/desktop audio as
+load-bearing when the snapshot shows PCI audio, ALSA devices, SOF/HDA/
+SoundWire modules, PipeWire/WirePlumber, or similar evidence. A smaller
+kernel that boots without speakers, microphones, or headsets is not a useful
+kernel for most users.
 
 The Docker validation image runs the same static checks and pytest suite
 inside Ubuntu 24.04 with QEMU installed:
@@ -93,17 +219,18 @@ docker build -f Dockerfile.validation -t autokernel-validation .
 docker run --rm autokernel-validation
 ```
 
-## Easiest path: `quickstart`
+## Guided CLI quickstart
 
 ```bash
 autokernel quickstart                # walks you through the whole pipeline
 autokernel quickstart -y --skip-llm  # non-interactive, no LLM cost
 ```
 
-Prompts before each step (preflight → scan → propose → review → apply).
-Hit Enter to accept defaults; Ctrl-C to bail; the failure of any step
-prints exactly what to do next. Output lives under
-`~/.local/share/autokernel/quickstart/` by default.
+This guided CLI path prompts before each config step
+(preflight -> scan -> propose -> review -> apply). It is useful for learning
+the verbs or producing `final.config`; use the hardware-minimal quickstart
+above when you want a full build, VM boot-test, and one-shot reboot path.
+Output lives under `~/.local/share/autokernel/quickstart/` by default.
 
 ## LLM configuration
 
@@ -117,11 +244,6 @@ ids.
 export ANTHROPIC_API_KEY=sk-ant-...
 export OPENAI_API_KEY=sk-...
 export GOOGLE_API_KEY=...        # or GEMINI_API_KEY
-export MISTRAL_API_KEY=...
-export GROQ_API_KEY=...
-export XAI_API_KEY=...
-export DEEPSEEK_API_KEY=...
-export OPENROUTER_API_KEY=...
 
 # See what would run, without spending money:
 autokernel config show
@@ -130,7 +252,7 @@ autokernel config show
 autokernel config test
 
 # Run propose with a mode preset instead of a literal model id:
-autokernel propose /tmp/snap --llm-mode=cheap     # haiku / gpt-mini / gemini-flash
+autokernel propose /tmp/snap --llm-mode=cheap     # haiku / gpt-5-mini / gemini-flash
 autokernel propose /tmp/snap --llm-mode=quality   # opus / gpt-5 / gemini-2.5-pro
 
 # Or pin a specific model:
@@ -138,8 +260,8 @@ autokernel propose /tmp/snap --model=anthropic:claude-opus-4-7
 ```
 
 When multiple providers are available, autokernel prefers them in this
-order: `anthropic`, `openai`, `google-gla`, `mistral`, `groq`, `xai`,
-`deepseek`, `openrouter`. Override with `--model <provider>:<id>`.
+order: `anthropic`, `openai`, `google-gla`. Override with
+`--model <provider>:<id>`.
 
 ## Quick start (manual verbs)
 
@@ -206,7 +328,8 @@ $ autokernel build /tmp/myhost --kernel-source … --execute
 For a real hardware smoke build, prefer `--dimension=choices,toggles,tunables`
 plus `build --localmodconfig`: the LLM tunes bounded policy/sizing decisions,
 while `localmodconfig` trims modules from live system use. The module-trim LLM
-path is still available, but `--max-candidates` is only a cost guard.
+path is still available. By default it is uncapped; set `--max-candidates N`
+only as an explicit cost guard.
 
 Cost-sensitive runs: `autokernel propose --skip-llm` produces a deterministic-only
 proposal. LLM batches are content-addressed and cached at `<snapshot>/batches/`,
@@ -216,9 +339,11 @@ so reruns are free.
 
 | Verb | What it does | Output |
 |---|---|---|
-| `preflight [DIR] --for=...` | Distro detection + system checks (tools, libs, disk, RAM, snapshot health) | exit code; rendered table |
+| `preflight [DIR] --for=... [--kernel-source PATH]` | Distro detection + system checks (tools, libs, disk, RAM, snapshot/package/boot-test health) | exit code; rendered table |
 | `scan [DIR]` | Run bash collectors → typed Snapshot | `DIR/snapshot.json` |
 | `propose DIR [--dimension=all] [--workload=…]` | Resolver + deterministic trim + LLM (4 dimensions: modules, choices, toggles, tunables) | `DIR/proposal.json` |
+| `inventory scan SOURCE --out DIR` | Build a source-derived Kconfig inventory for LLM tools | `DIR/manifest.json`, `DIR/symbols.jsonl` |
+| `inventory enrich DIR [--jobs N]` | Enrich inventory records with evidence-cited summaries (`openai:gpt-5.4-mini`, flex by default; resumable by `symbol + fact_hash`) | `DIR/enrichments.jsonl` |
 | `review DIR --rules…` | Bulk-decision rules over `needs_review` | `DIR/review.json` + `DIR/auto.kfrag` |
 | `apply DIR` | Merge kfrag into running `.config`, validate load-bearing | `DIR/final.config` |
 | `fetch-source [--method=…]` | Distro-aware kernel source acquisition | a kernel source tree |
@@ -427,8 +552,9 @@ add families.
 - **Always** — distro recognized, Python ≥ 3.12.
 - **`scan`** — `dmesg` readability (degrades to `journalctl -k`).
 - **`propose`** — running `.config` and `modules.builtin.modinfo` reachable.
-- **`build`** — disk, RAM, build tools (`gcc make flex bison bc ld perl awk tar`), recommended (`ccache pahole`), dev libs (`libssl-dev libelf-dev libncurses-dev` or distro equivalents), Secure Boot.
-- **`install`** *(future)* — GRUB tools, root/sudo, `/boot` writable.
+- **`build`** — disk, RAM, build tools (`gcc make flex bison bc ld perl awk tar`), recommended (`ccache pahole`), dev libs (`libssl-dev libelf-dev libdw-dev libncurses-dev` or distro equivalents), distro package deps (`debhelper`, `llvm`, etc.), Secure Boot.
+- **`boot-test`** — QEMU/virtme availability. With `--kernel-source PATH`, also warns when the built `.config` cannot support virtme's host-backed rootfs.
+- **`install`** — GRUB tools, root/sudo, `/boot` writable, fallback kernel presence, installable package discovery, and boot-test record state.
 
 Each check returns PASS/WARN/FAIL/SKIP. The CLI exits non-zero on any
 FAIL; `--strict` also fails on WARN. Every FAIL/WARN includes a
@@ -498,6 +624,12 @@ touches your live `/boot`. Two methods, picked automatically:
 |---|---|---|
 | **virtme-ng** (preferred) | `uv tool install virtme-ng` | Boots the kernel against the host's read-only `/` over virtio-fs. Reaches userspace. |
 | **QEMU kernel-only** (fallback) | `autokernel install-deps --for boot-test --execute` (or `apt install qemu-system-x86` directly) | Boots the kernel with no rootfs. Success = kernel reaches the VFS-mount stage without an earlier panic. |
+
+`virtme-ng` requires the built kernel to include either `CONFIG_VIRTIO_FS`
+or the 9P stack (`CONFIG_NET_9P`, `CONFIG_NET_9P_VIRTIO`, `CONFIG_9P_FS`).
+`--localmodconfig` can trim those out if they are not loaded on the host.
+Run `autokernel preflight SNAPSHOT --for boot-test --kernel-source PATH`
+to surface that before a boot-test.
 
 A passing test writes `<snapshot>/boot-test.json` with the bzImage's
 SHA-256. `autokernel install --execute` then refuses to proceed unless:

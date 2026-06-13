@@ -14,11 +14,13 @@ from autokernel.boottest import (
     BootTestPlan,
     Method,
     analyze_serial,
+    detect_kernel_release,
     detect_method,
     execute,
     find_bzimage,
     plan,
     read_latest_record,
+    virtme_root_transport_available,
 )
 
 
@@ -395,3 +397,69 @@ def test_find_bzimage_falls_back_to_vmlinux(tmp_path: Path):
 
 def test_find_bzimage_returns_none_when_nothing(tmp_path: Path):
     assert find_bzimage(tmp_path) is None
+
+
+# ── virtme config support ──────────────────────────────────────────────────
+
+
+def test_virtme_root_transport_available_when_config_missing(tmp_path: Path):
+    assert virtme_root_transport_available(tmp_path) is True
+
+
+def test_virtme_root_transport_available_with_virtiofs(tmp_path: Path):
+    (tmp_path / ".config").write_text("CONFIG_VIRTIO_FS=m\n")
+    assert virtme_root_transport_available(tmp_path) is True
+
+
+def test_virtme_root_transport_available_with_9p_stack(tmp_path: Path):
+    (tmp_path / ".config").write_text(
+        "CONFIG_NET_9P=m\nCONFIG_NET_9P_VIRTIO=m\nCONFIG_9P_FS=m\n"
+    )
+    assert virtme_root_transport_available(tmp_path) is True
+
+
+def test_virtme_root_transport_unavailable_when_disabled(tmp_path: Path):
+    (tmp_path / ".config").write_text(
+        "# CONFIG_NET_9P is not set\n# CONFIG_VIRTIO_FS is not set\n"
+    )
+    assert virtme_root_transport_available(tmp_path) is False
+
+
+# ── release detection ──────────────────────────────────────────────────────
+
+
+def test_detect_kernel_release_prefers_make_kernelrelease(tmp_path: Path, monkeypatch):
+    bz = tmp_path / "arch" / "x86" / "boot" / "bzImage"
+    bz.parent.mkdir(parents=True)
+    bz.write_bytes(b"x")
+
+    def _fake_run(argv, **kwargs):
+        class R:
+            returncode = 0
+            stdout = "7.1.0-rc3\n"
+
+        assert argv == ["make", "-s", "kernelrelease"]
+        return R()
+
+    monkeypatch.setattr(boottest_mod.subprocess, "run", _fake_run)
+
+    assert detect_kernel_release(tmp_path, bz, fallback="7.0.0-generic") == "7.1.0-rc3"
+
+
+def test_detect_kernel_release_falls_back_to_file_output(tmp_path: Path, monkeypatch):
+    bz = tmp_path / "bzImage"
+    bz.write_bytes(b"x")
+
+    def _fake_run(argv, **kwargs):
+        class R:
+            returncode = 1
+            stdout = ""
+
+        if argv[0] == "file":
+            R.returncode = 0
+            R.stdout = f"{bz}: Linux kernel x86 boot executable, version 7.1.0-rc3, x"
+        return R()
+
+    monkeypatch.setattr(boottest_mod.subprocess, "run", _fake_run)
+
+    assert detect_kernel_release(tmp_path, bz, fallback="7.0.0-generic") == "7.1.0-rc3"

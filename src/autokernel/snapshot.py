@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from autokernel.models import (
+    AudioContext,
     BlockDevice,
     BootContext,
     CpuInfo,
@@ -27,8 +28,10 @@ from autokernel.models import (
     PciDevice,
     SoftwareFeature,
     Snapshot,
+    SystemIdentity,
     UsbDevice,
 )
+from autokernel.audio import build_audio_context
 
 
 def _read(path: Path) -> str:
@@ -291,6 +294,53 @@ def _parse_software_features(path: Path) -> list[SoftwareFeature]:
     return out
 
 
+def _parse_system_identity(path: Path) -> SystemIdentity:
+    fields: dict[str, str] = {}
+    for line in _read_lines(path):
+        if "\t" not in line:
+            continue
+        key, value = line.split("\t", 1)
+        fields[key.strip()] = value.strip()
+
+    chassis_raw = fields.get("chassis_type")
+    try:
+        chassis_type = int(chassis_raw) if chassis_raw else None
+    except ValueError:
+        chassis_type = None
+
+    return SystemIdentity(
+        sys_vendor=fields.get("sys_vendor"),
+        product_name=fields.get("product_name"),
+        product_family=fields.get("product_family"),
+        product_version=fields.get("product_version"),
+        board_name=fields.get("board_name"),
+        chassis_vendor=fields.get("chassis_vendor"),
+        chassis_type=chassis_type,
+    )
+
+
+def _parse_audio_context(
+    snapdir: Path,
+    *,
+    system: SystemIdentity,
+    pci: list[PciDevice],
+    usb: list[UsbDevice],
+    loaded_modules: list[LoadedModule],
+    software_features: list[SoftwareFeature],
+) -> AudioContext:
+    return build_audio_context(
+        system=system,
+        pci=pci,
+        usb=usb,
+        loaded_modules=loaded_modules,
+        software_features=software_features,
+        asound_cards=_read_lines(snapdir / "asound_cards"),
+        asound_pcm=_read_lines(snapdir / "asound_pcm"),
+        dev_snd=_read_lines(snapdir / "dev_snd"),
+        sys_class_sound=_read_lines(snapdir / "sys_class_sound"),
+    )
+
+
 def _parse_firmware(snapdir: Path) -> list[FirmwareLoad]:
     out: list[FirmwareLoad] = []
     seen: set[str] = set()
@@ -434,24 +484,40 @@ def load(snapshot_dir: Path | str) -> Snapshot:
         p = _read(snapdir / key).strip()
         return Path(p) if p and Path(p).exists() else None
 
+    system = _parse_system_identity(snapdir / "dmi_id")
+    pci = _parse_lspci_vmmnk(snapdir / "lspci_vmmnk")
+    usb = _parse_lsusb(snapdir / "lsusb")
+    loaded_modules = _parse_lsmod(snapdir / "lsmod")
+    software_features = _parse_software_features(snapdir / "software_features")
+    audio = _parse_audio_context(
+        snapdir,
+        system=system,
+        pci=pci,
+        usb=usb,
+        loaded_modules=loaded_modules,
+        software_features=software_features,
+    )
+
     return Snapshot(
         collected_at=ts,
         host=manifest.get("host", "unknown"),
         snapshot_dir=snapdir,
         kernel=kernel,
         cpu=_parse_cpuinfo(snapdir / "cpuinfo"),
+        system=system,
         boot=_detect_boot_context(snapdir, mounts),
-        pci=_parse_lspci_vmmnk(snapdir / "lspci_vmmnk"),
-        usb=_parse_lsusb(snapdir / "lsusb"),
+        pci=pci,
+        usb=usb,
         modaliases=_parse_sys_modaliases(snapdir / "sys_modaliases"),
         bound_drivers=_parse_bound_drivers(snapdir / "sys_bound_drivers"),
-        loaded_modules=_parse_lsmod(snapdir / "lsmod"),
+        loaded_modules=loaded_modules,
         mounts=mounts,
         block_devices=_parse_lsblk(snapdir / "lsblk_j"),
         network=_parse_ip_link(snapdir / "ip_link_j"),
         firmware=_parse_firmware(snapdir),
         dkms=_parse_dkms(snapdir / "dkms_status"),
-        software_features=_parse_software_features(snapdir / "software_features"),
+        software_features=software_features,
+        audio=audio,
         initramfs_modules=_parse_initramfs_modules(snapdir),
         initramfs_firmware=_parse_initramfs_firmware(snapdir),
         running_config_path=running_cfg_path,

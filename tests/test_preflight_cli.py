@@ -44,7 +44,7 @@ def test_preflight_exits_1_on_failure(monkeypatch):
             (),
             {
                 "returncode": 0,
-                "stdout": "libssl-dev install ok installed\nlibelf-dev install ok installed\nlibncurses-dev install ok installed",
+                "stdout": "libssl-dev install ok installed\nlibelf-dev install ok installed\nlibdw-dev install ok installed\nlibncurses-dev install ok installed",
             },
         )(),
     )
@@ -74,7 +74,7 @@ def test_preflight_strict_treats_warn_as_fail(monkeypatch):
             (),
             {
                 "returncode": 0,
-                "stdout": "libssl-dev install ok installed\nlibelf-dev install ok installed\nlibncurses-dev install ok installed",
+                "stdout": "libssl-dev install ok installed\nlibelf-dev install ok installed\nlibdw-dev install ok installed\nlibncurses-dev install ok installed",
             },
         )(),
     )
@@ -84,6 +84,17 @@ def test_preflight_strict_treats_warn_as_fail(monkeypatch):
 
     result_strict = runner.invoke(app, ["preflight", "--for", "build", "--strict"])
     assert result_strict.exit_code == 1
+
+
+def test_preflight_boot_test_fails_without_runtime(monkeypatch):
+    monkeypatch.setattr(pf.shutil, "which", lambda c: None)
+
+    result = runner.invoke(app, ["preflight", "--for", "boot-test"])
+
+    assert result.exit_code == 1
+    assert "boot_test_runtime" in result.output
+    assert "qemu-system-x86" in result.output
+    assert "virtme-ng" in result.output
 
 
 def test_preflight_with_snapshot_runs_snapshot_checks(monkeypatch, tmp_path: Path):

@@ -20,6 +20,19 @@ runner = CliRunner()
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
+@pytest.fixture(autouse=True)
+def compiler_on_path(monkeypatch):
+    """CLI build tests mock make, so they should not depend on host clang."""
+    real_which = shutil.which
+
+    def _which(cmd: str):
+        if cmd in {"clang", "gcc"}:
+            return f"/usr/bin/{cmd}"
+        return real_which(cmd)
+
+    monkeypatch.setattr(shutil, "which", _which)
+
+
 def _seed_apply_done(tmp_path: Path, *, with_dkms: bool = False) -> tuple[Path, Path]:
     """Create a snapshot with final.config and a fake kernel source dir."""
     snap_src = "amd_desktop" if with_dkms else "intel_laptop"

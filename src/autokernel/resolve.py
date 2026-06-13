@@ -37,6 +37,8 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from autokernel.audio import audio_keep_configs
+from autokernel.audio import audio_keep_modules
 from autokernel.kconfig_map import candidate_configs
 from autokernel.kconfig_map import resolve_module_to_config
 from autokernel.modinfo import collect_module_info
@@ -253,7 +255,23 @@ def resolve(snap: Snapshot) -> ResolutionResult:
         result.required_configs.add("CONFIG_X86_AMD_PSTATE")
         result.required_configs.add("CONFIG_MICROCODE_AMD")
 
-    # 9b. Cmdline-named filesystems / drivers
+    # 9b. User-facing audio. A laptop/desktop audio stack is not just the
+    # module loaded at scan time; codecs, amplifiers, SoundWire endpoints,
+    # and USB headset support can bind later. Keep the likely stack before
+    # candidate generation and before localmodconfig gets a chance to trim it.
+    if snap.audio.useful:
+        for cfg in audio_keep_configs(snap.audio):
+            result.required_configs.add(cfg)
+            result.evidence.setdefault(f"<config>{cfg}", []).append(
+                f"audio useful ({snap.audio.role}, conf={snap.audio.confidence:.2f})"
+            )
+        for mod in audio_keep_modules(snap.audio):
+            result.required_modules.add(mod)
+            result.evidence.setdefault(mod, []).append(
+                f"audio useful ({snap.audio.role}, conf={snap.audio.confidence:.2f})"
+            )
+
+    # 9c. Cmdline-named filesystems / drivers
     rootfs = snap.boot.cmdline_params.get("rootfstype")
     if rootfs:
         for cfg in _FS_TO_CONFIG.get(rootfs, []):
@@ -262,7 +280,7 @@ def resolve(snap: Snapshot) -> ResolutionResult:
                 f"cmdline rootfstype={rootfs}"
             )
 
-    # 9c. Cmdline-blacklisted modules are explicitly NOT load-bearing — drop
+    # 9d. Cmdline-blacklisted modules are explicitly NOT load-bearing — drop
     # them from required_modules so the LLM/policy can propose removing them.
     for mod in snap.boot.blacklisted_modules:
         canonical = mod.replace("-", "_")
