@@ -33,14 +33,21 @@ def _sec(num: str, unit: str) -> float:
     return float(num) / 1000.0 if unit == "ms" else float(num)
 
 
-def boot_once(img, kernel, append, timeout=45, chain=False, mem=2048, smp=2):
+def boot_once(img, kernel, append, timeout=45, chain=False, mem=2048, smp=2,
+              machine=None, qemu_extra=None, minimal=False):
+    import shlex as _shlex
     cmdline = f"root=/dev/vda rw console=ttyS0 systemd.unit=multi-user.target {append}".strip()
-    args = [
-        "qemu-system-x86_64", "-enable-kvm", "-cpu", "host",
-        "-m", str(mem), "-smp", str(smp), "-nographic", "-no-reboot",
-        "-kernel", kernel, "-append", cmdline,
-        "-drive", f"file={img},if=virtio,format=raw,cache=unsafe",
-    ]
+    args = ["qemu-system-x86_64"]
+    args += ["-machine", f"{machine},accel=kvm"] if machine else ["-enable-kvm"]
+    args += ["-cpu", "host", "-m", str(mem), "-smp", str(smp)]
+    # minimal: drop QEMU's legacy default devices (VGA/floppy/parallel/NIC…) so
+    # the kernel probes fewer devices and udev coldplugs faster; re-add serial.
+    args += (["-nodefaults", "-display", "none", "-serial", "mon:stdio"]
+             if minimal else ["-nographic"])
+    args += ["-no-reboot", "-kernel", kernel, "-append", cmdline]
+    if qemu_extra:
+        args += _shlex.split(qemu_extra)
+    args += ["-drive", f"file={img},if=virtio,format=raw,cache=unsafe"]
     p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                          stderr=subprocess.STDOUT, bufsize=0)
     buf = b""
@@ -153,10 +160,20 @@ def main():
     ap.add_argument("--label", default="run")
     ap.add_argument("--chain", action="store_true")
     ap.add_argument("--ab", help="second append string to A/B against --append")
+    ap.add_argument("--machine", default=None, help="QEMU -machine type (e.g. q35)")
+    ap.add_argument("--qemu-extra", default=None, dest="qemu_extra")
+    ap.add_argument("--minimal", action="store_true",
+                    help="-nodefaults: drop legacy emulated devices")
+    ap.add_argument("--smp", type=int, default=2)
+    ap.add_argument("--mem", type=int, default=2048)
     args = ap.parse_args()
+    kw = dict(machine=args.machine, qemu_extra=args.qemu_extra,
+              minimal=args.minimal, smp=args.smp, mem=args.mem)
 
-    print(f"== {args.label}: append='{args.append}' ==")
-    runs, chain = series(args.img, args.kernel, args.append, args.n, chain_first=args.chain)
+    print(f"== {args.label}: append='{args.append}'  machine={args.machine} "
+          f"minimal={args.minimal} extra={args.qemu_extra} ==")
+    runs, chain = series(args.img, args.kernel, args.append, args.n,
+                         chain_first=args.chain, **kw)
     s = stats(runs)
     print(f"  TOTAL     {fmt(s)}")
     print(f"  kernel    {fmt(stats(runs,'kernel'))}")
@@ -168,7 +185,7 @@ def main():
 
     if args.ab is not None:
         print(f"\n== A/B opt: append='{args.ab}' ==")
-        runs2, _ = series(args.img, args.kernel, args.ab, args.n)
+        runs2, _ = series(args.img, args.kernel, args.ab, args.n, **kw)
         s2 = stats(runs2)
         print(f"  TOTAL     {fmt(s2)}")
         base, opt = s["median"], s2["median"]

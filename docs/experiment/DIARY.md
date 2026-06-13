@@ -702,3 +702,41 @@ systemd.show_status=0` (loglevel=3 keeps KERN_ERR+/panics so the sentinel parser
 still detects init death — verified `world boot-test` still passes). The
 interactive `launch-vm.sh` carries the same. Net: **−11% boot, pure win**, and a
 reusable harness to keep us honest on the next regression.
+
+## Boot time, round 2 — another −10% (config + device model)
+
+After the console-quiet win (~1444 ms), the next 10% had to come from the
+*work* the boot does, not its output. Extended `scripts/bootbench.py` with
+`--machine`, `--minimal` (-nodefaults), `--smp`, `--qemu-extra` so it can A/B
+QEMU configs, then used it to find the floor.
+
+The critical-chain pointed the way: `multi-user.target` was gated on
+`serial-getty@ttyS0 → dev-ttyS0.device`, which only activated at the very end of
+userspace — i.e. the autologin getty waits on **udev coldplug**, and `dev-vda`
+(blkid probe) was ~286–388 ms of it. So the levers are: fewer devices to probe,
+and let the coldplug queue drain.
+
+**Decomposed, at fixed -smp 2 (n=7 each, baseline 1439 ms):**
+
+| lever | median | Δ |
+|---|---|---|
+| baseline (quiet) | 1439 ms | — |
+| `mitigations=off` | 1618 ms | 0% (already known) |
+| service masks (API vfs mounts) | 1414 ms | 1.7% (parallel, off-path) |
+| `-nodefaults` minimal devices | 1411 ms | 2% (kernel 362→327) |
+| + `-machine q35` | — | the missing piece: kernel 362→257 ms |
+| **q35 + minimal + masks + tsc/nowatchdog + nokaslr** | **1286 ms** | **10.6%** |
+| same, **dropping nokaslr** (security) | 1324 ms | 8.0% — short |
+| **+ safe masks (modules-load, tmp, creds, utmp)** | **1291 ms** | **10.3%** ✓ |
+
+A useful negative result: more vCPUs is *not* a free win — `-smp 4` on the
+*default* machine bought only 2.3% (1439→1406). It's the **lean device model**
+that lets cores parallelize the coldplug: q35+minimal+masks at -smp 4 hit
+1237 ms (14%). The final pick holds resources at -smp 2 and gets **10.3% from
+software/config alone, no KASLR/entropy tradeoff**.
+
+**Made durable:** `boot_image()` now uses `-machine q35`, `-smp min(4,ncpu)`,
+and `tsc=reliable nowatchdog` (guest-neutral; `world boot-test` still passes).
+The service masks (which change the guest's unit set) ship in the fast
+`launch-vm.sh` profile rather than forced on the boot-test. Two rounds:
+**1619 ms → 1291 ms, −20% total**, every step measured by the harness.

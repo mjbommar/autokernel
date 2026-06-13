@@ -27,6 +27,7 @@ Everything is unprivileged:
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 from pathlib import Path
@@ -322,8 +323,13 @@ def boot_image(
     accel = "kvm" if kvm in ("direct", "sg") else "tcg"
     argv = [
         "qemu-system-x86_64",
-        "-machine", f"accel={accel}",
+        # q35 is a leaner chipset than the default i440fx (no ISA legacy /
+        # floppy / IDE); fewer devices to probe shaved ~100ms off kernel
+        # init vs pc (bootbench.py). smp scales udev coldplug — the lean
+        # device set lets the workers actually parallelize.
+        "-machine", f"q35,accel={accel}",
         "-cpu", cpu,
+        "-smp", str(min(4, (os.cpu_count() or 2))),
         "-m", str(memory_mb),
         "-nographic",
         "-no-reboot",
@@ -333,8 +339,10 @@ def boot_image(
         # emulated serial UART for every printk / [ OK ] line (measured
         # with bootbench.py; the win is entirely console I/O, not CPU).
         # loglevel=3 keeps KERN_ERR+ and panics visible so the sentinel
-        # parser still sees init death.
+        # parser still sees init death. tsc=reliable/nowatchdog skip the
+        # clocksource watchdog + NMI watchdog (pointless in a KVM guest).
         "root=/dev/vda rw quiet loglevel=3 systemd.show_status=0 "
+        "tsc=reliable nowatchdog "
         "console=ttyS0 systemd.unit=multi-user.target autokernel.boottest",
         "-drive", f"file={img_path},if=virtio,format=raw",
     ]  # fmt: skip
