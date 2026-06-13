@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """gapprobe.py — boot once, capture systemd's own phase timestamps to attribute
 the SECURITY_FINISH -> GENERATORS_START window precisely. A/B two cmdlines."""
-import os, re, select, subprocess, sys, time
+import os, re, select, subprocess, time
 
-KERNEL = "/data1/kbuild/linux-7.0.12/arch/x86/boot/bzImage"
-IMG = "/dev/shm/akvm/fork.img"
+KERNEL = os.environ.get("AK_KERNEL", "/data1/kbuild/linux-7.0.12/arch/x86/boot/bzImage")
+IMG = os.environ.get("AK_IMG", "/dev/shm/akvm/fork.img")
 CSI = re.compile(rb"\x1b\[[0-9;?]*[A-Za-z]")
 OSC = re.compile(rb"\x1b\][0-9].*?(?:\x07|\x1b\\)")
 def strip(b): return CSI.sub(b"", OSC.sub(b"", b))

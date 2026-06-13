@@ -4,13 +4,13 @@
 Boots BASE n times (reference), then each candidate n times, comparing medians.
 Flags a candidate as a likely-real win only if its median improvement exceeds a
 noise floor derived from the baseline spread (robust to the ~15-30ms jitter)."""
-import statistics as st
+import os, statistics as st
 import sys
-sys.path.insert(0, "/data1")
-from bootbench import boot_once, stats  # reuse the proven boot path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from bootbench import boot_once  # reuse the proven boot path
 
-IMG = "/dev/shm/akvm/fork.img"
-KERNEL = "/data1/kbuild/linux-7.0.12/arch/x86/boot/bzImage"
+IMG = os.environ.get("AK_IMG", "/dev/shm/akvm/fork.img")
+KERNEL = os.environ.get("AK_KERNEL", "/data1/kbuild/linux-7.0.12/arch/x86/boot/bzImage")
 N = 9
 
 BASE = ("quiet loglevel=3 systemd.show_status=0 tsc=reliable nowatchdog "
@@ -71,7 +71,7 @@ def main():
         runs = series(BASE + " " + extra, N)
         if not runs:
             rows.append((name, None, None, "BOOT-FAIL")); continue
-        m = med(runs); km = med(runs,"kernel")
+        m = med(runs)
         d = bmed - m
         flag = "WIN" if d >= floor else ("regress" if d <= -floor else "~noise")
         rows.append((name, m, d, flag))

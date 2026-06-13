@@ -12,6 +12,12 @@ Debian's packaging and security infrastructure, and an LLM in place of
 the ebuild-maintainer crowd — with every LLM judgment validated by a
 real build and persisted as a rule.**
 
+> **Experiment logs:** results from building and tuning the world image
+> live in [experiment/](experiment/README.md) — notably
+> [experiment/BOOT_TIME.md](experiment/BOOT_TIME.md), which takes the image
+> from a 1.6 s boot to ~240 ms (−85%) and documents the measurement
+> harnesses in [scripts/boottime/](../scripts/boottime/README.md).
+
 ## Goals
 
 1. Every binary package in the world set is rebuilt from `deb-src`

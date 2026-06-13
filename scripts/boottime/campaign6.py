@@ -3,12 +3,12 @@
 Same noise-floored A/B method as campaign.py, but each candidate varies the
 boot_once() kwargs (minimal device set, smp, mem, machine, qemu_extra) rather
 than the kernel append. Append is fixed at the round-5 optimized cmdline."""
-import statistics as st, sys
-sys.path.insert(0, "/data1")
+import os, statistics as st, sys
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bootbench import boot_once
 
-IMG = "/dev/shm/akvm/fork.img"
-KERNEL = "/data1/kbuild/linux-7.0.12/arch/x86/boot/bzImage"
+IMG = os.environ.get("AK_IMG", "/dev/shm/akvm/fork.img")
+KERNEL = os.environ.get("AK_KERNEL", "/data1/kbuild/linux-7.0.12/arch/x86/boot/bzImage")
 N = 9
 
 KB = "rcupdate.rcu_expedited=1 audit=0 no_timer_check random.trust_cpu=on random.trust_bootloader=on"

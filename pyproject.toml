@@ -86,6 +86,13 @@ target-version = "py312"
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F"]
 
+[tool.ruff.lint.per-file-ignores]
+# Boot-time research harnesses are deliberately terse (semicolons, compact
+# one-liners, single-line imports) so the measurement logic reads as a dense
+# script, not production code. Keep real checks (F-class, E9) enforced; allow
+# the intentional style. See scripts/boottime/README.md.
+"scripts/boottime/*.py" = ["E401", "E701", "E702", "E731"]
+
 [tool.bandit]
 exclude_dirs = ["tests", ".venv"]
 skips = [
