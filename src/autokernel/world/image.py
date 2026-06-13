@@ -341,8 +341,21 @@ def boot_image(
         # loglevel=3 keeps KERN_ERR+ and panics visible so the sentinel
         # parser still sees init death. tsc=reliable/nowatchdog skip the
         # clocksource watchdog + NMI watchdog (pointless in a KVM guest).
+        #
+        # TERM=linux + systemd.tty.{rows,columns}.console: the single biggest
+        # win (-67% total boot, 988->323ms). On a headless serial console PID1
+        # issues two terminal escape-sequence probes during early startup that
+        # QEMU's serial never answers, so each blocks the full 333ms ANSI
+        # timeout: (1) fixup_environment() -> query_term_for_tty() -> DCS
+        # terminfo query, short-circuited by a cmdline TERM=; (2) console_setup()
+        # -> terminal_fix_size() -> CSI-18t/DSR size query, short-circuited by a
+        # cmdline console size. Together they were ~685ms of dead wait between
+        # SECURITY_FINISH and GENERATORS_START (measured via systemd's own phase
+        # timestamps); the two knobs collapse that to ~6ms. Both are documented
+        # systemd knobs -- no patch, just declare what the serial can't report.
         "root=/dev/vda rw quiet loglevel=3 systemd.show_status=0 "
         "tsc=reliable nowatchdog "
+        "TERM=linux systemd.tty.rows.console=24 systemd.tty.columns.console=80 "
         "console=ttyS0 systemd.unit=multi-user.target autokernel.boottest",
         "-drive", f"file={img_path},if=virtio,format=raw",
     ]  # fmt: skip

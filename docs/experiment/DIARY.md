@@ -780,3 +780,93 @@ recipe in `docs/experiment/kernel/`.
 **Three rounds, all harness-measured: 1619 ms → 1018 ms = −37%.** And round 3 is
 the one that's *autokernel's actual product* — a hardware-matched minimal kernel —
 rather than config tuning around the distro kernel.
+
+## Boot time, round 4 — the 685 ms "userspace" was PID1 waiting on a dead terminal (−67%)
+
+The standing mystery after round 3: total 1018 ms, kernel only 126 ms, so
+**~890 ms was "userspace" — but doing what?** "You can round-trip a packet across
+the world faster than Ubuntu reaches a shell." Rounds 1–3 trimmed console I/O,
+the device model, and the kernel; none of them touched this floor. Time to
+actually account for it instead of trimming around it.
+
+**Localizing with systemd's own clock, not ours.** Earlier debug-logging attempts
+perturbed the timeline (serial/kmsg logging is itself I/O). The non-invasive
+instrument is systemd's recorded phase timestamps — it stamps `Userspace`,
+`SecurityStart/Finish`, `GeneratorsStart/Finish`, `UnitsLoadStart/Finish`,
+`Finish` into PID1 and exposes them over D-Bus. `gapprobe.py` boots once, drives
+the autologin shell, and reads them back with `systemctl show -p …TimestampMonotonic`.
+The result was unambiguous and *flat*:
+
+```
+Userspace            =  91.0 ms
+SecurityFinish       =  87.7 ms   (security subsystems: 1.5 ms — nothing)
+GeneratorsStart      = 782.5 ms   (+689.2 ms)  <-- the entire cost is HERE
+GeneratorsFinish     = 792.6 ms   (generators themselves: 10 ms)
+UnitsLoadFinish      = 810.2 ms   (parse+graph: 27 ms)
+Finish               = 978.2 ms
+```
+
+**A 689 ms gap between SECURITY_FINISH and GENERATORS_START** — before a single
+generator or unit runs. Not parsing, not the graph build, not unit enumeration
+(round-3 hypotheses, all wrong). It was *kernel-independent* (685 ms on the stock
+7.0.0-22 kernel too) and *security-independent* (`selinux=0 apparmor=0 audit=0
+ima_appraise=off lsm=` changed nothing). A flat, fixed ~685 ms smelled like a
+timeout — specifically **2 × 333 ms**, and systemd's `CONSOLE_ANSI_SEQUENCE_TIMEOUT_USEC`
+is exactly `333 ms`.
+
+**Reading the PID1 startup window (src/core/main.c, between the SECURITY_FINISH
+stamp at :3114 and `manager_startup`/GENERATORS_START at :3767) found two terminal
+probes, each blocking the full 333 ms on QEMU's serial because nothing answers:**
+
+1. `fixup_environment()` (:3570) → `query_term_for_tty("/dev/console")` →
+   `terminal_get_terminfo_by_dcs()`: writes a **DCS `+q` terminfo query** and waits
+   up to 333 ms for a reply. systemd does this to upgrade `TERM=linux` to something
+   color-capable. A serial console never replies → timeout.
+2. `console_setup()` (:3697 → `reset_dev_console_fd` → `terminal_fix_size`) →
+   `terminal_get_size(try_csi18=true, try_dsr=true)`: writes **CSI `18t`** then
+   **DSR `\e[6n`** to learn the window size the `TIOCGWINSZ` ioctl can't give for
+   RS-232. Each waits 333 ms; the first to time out here costs the second 333 ms.
+
+Both already have **documented cmdline escape hatches** that systemd checks *first*:
+`fixup_environment` honors a cmdline `TERM=` (main.c:1704); `reset_dev_console_fd`
+honors `systemd.tty.rows.console=` / `systemd.tty.columns.console=`
+(`proc_cmdline_tty_size`, terminal-util.c:1381) and skips the size probe entirely.
+So this is **not a patch** — it's declaring, on the kernel cmdline, the two facts a
+serial console physically cannot report.
+
+**Isolated A/B on the gap (gapprobe.py, systemd's own timestamps):**
+
+| cmdline | SECURITY_FINISH → GENERATORS_START |
+|---|---|
+| baseline | 689 ms |
+| `+ TERM=linux` | 350 ms (−339) |
+| `+ systemd.tty.{rows,columns}.console` | 350 ms (−339) |
+| **+ both** | **6 ms (−683)** |
+
+Each knob kills exactly one query; together the gap collapses to ~6 ms.
+
+**End-to-end (bootbench.py, n=7, minimal kernel, same rootfs/QEMU):**
+
+| cmdline | kernel | userspace | total |
+|---|---|---|---|
+| round-3 baseline | 94 ms | 894 ms | **988 ms** |
+| **+ TERM=linux + console size** | 94 ms | ~225 ms | **323 ms** |
+
+**−67.3% (988 → 323 ms).** The "mysterious" 890 ms userspace was ~685 ms of PID1
+blocked on a terminal that doesn't exist plus ~200 ms of real unit activation. The
+fix is two kernel-cmdline words, now baked into `world/image.py`'s boot cmdline.
+
+**Honest scope.** This is specific to a *headless serial console* (our appliance /
+VM target, and #16736-class embedded serial consoles). On real hardware with a
+terminal that answers DSR/DCS, both probes return in microseconds and the cost
+never exists — that's *why* systemd does them. So the knobs are a pure win exactly
+where we deploy (serial-only, no responder) and a no-op everywhere else. Nothing
+upstream to fix: systemd already ships the exact opt-outs; we just have to use them
+because we know something the serial line can't tell PID1.
+
+**Cumulative, all harness-measured: 1619 ms → 323 ms = −80%.** Rounds 1–3 were
+console/device/kernel trimming; round 4 is the one that finally *explains* where
+userspace time went — and it was never CPU, it was a 685 ms `poll()` on silence.
+
+Artifacts: `gapprobe.py` (phase-timestamp attribution harness), the round-4 A/B
+above reproducible via `bootbench.py --ab`.
