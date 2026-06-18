@@ -552,7 +552,7 @@ add families.
 - **Always** — distro recognized, Python ≥ 3.12.
 - **`scan`** — `dmesg` readability (degrades to `journalctl -k`).
 - **`propose`** — running `.config` and `modules.builtin.modinfo` reachable.
-- **`build`** — disk, RAM, build tools (`gcc make flex bison bc ld perl awk tar`), recommended (`ccache pahole`), dev libs (`libssl-dev libelf-dev libdw-dev libncurses-dev` or distro equivalents), distro package deps (`debhelper`, `llvm`, etc.), Secure Boot.
+- **`build`** — disk, RAM, build tools (`gcc make flex bison bc ld perl awk tar`), recommended (`ccache pahole`), dev libs (`libssl-dev libelf-dev libdw-dev libncurses-dev` or distro equivalents), distro package deps (`debhelper`, `gawk`, `llvm`, etc.), Secure Boot.
 - **`boot-test`** — QEMU/virtme availability. With `--kernel-source PATH`, also warns when the built `.config` cannot support virtme's host-backed rootfs.
 - **`install`** — GRUB tools, root/sudo, `/boot` writable, fallback kernel presence, installable package discovery, and boot-test record state.
 

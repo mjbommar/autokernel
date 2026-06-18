@@ -221,6 +221,10 @@ _SPECS: dict[Family, DistroSpec] = {
             "flex",
             "bison",
             "bc",
+            # gawk (not Debian's default mawk) is required by
+            # scripts/generate_builtin_ranges.awk for modules.builtin.ranges;
+            # without it the build fails late with "gawk: not found" (Error 127).
+            "gawk",
             "libssl-dev",
             # libdw-dev provides <dwarf.h> for kernel >= 6.19's gendwarfksyms;
             # libelf-dev is the long-standing requirement for the rest of the build.
@@ -375,6 +379,8 @@ _SPECS: dict[Family, DistroSpec] = {
             "flex",
             "bison",
             "bc",
+            # Alpine's default awk is busybox; modules.builtin.ranges needs gawk.
+            "gawk",
             "openssl-dev",
             # elfutils-dev on Alpine bundles libdw + libelf headers — covers
             # <dwarf.h> for gendwarfksyms (6.19+) without a separate package.

@@ -112,6 +112,9 @@ def test_debian_spec_uses_apt():
     # debhelper is required by `make bindeb-pkg` (dpkg-checkbuilddeps).
     assert "libdw-dev" in spec.build_deps
     assert "debhelper" in spec.build_deps
+    # gawk (not Debian's default mawk) is required by
+    # scripts/generate_builtin_ranges.awk for modules.builtin.ranges.
+    assert "gawk" in spec.build_deps
     assert spec.build_target_default == "bindeb-pkg"
     assert spec.kernel_source_package_pattern == "linux-source-{version}"
 
