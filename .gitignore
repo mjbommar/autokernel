@@ -43,3 +43,5 @@ kernel-patches-workspace/
 /ec-crash-diag.sh
 /install-rc7-candidate.sh
 /install-7.3-rc5-candidate.sh
+/setup-scx-lavd.sh
+/tune-runtime.sh
