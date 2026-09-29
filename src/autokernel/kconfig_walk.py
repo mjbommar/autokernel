@@ -211,6 +211,95 @@ def _patch_unsupported_kconfig_syntax(source_dir: Path) -> Iterator[None]:
                 pass
 
 
+# ── conditional-dependency parser patch (Linux v7.0+) ──────────────────────
+#
+# The pip ``kconfiglib`` (ulfalizer, 14.1.0 — the latest release, effectively
+# unmaintained) predates the *conditional dependency* syntax the kernel added
+# in v7.0 (commit 76df6815dab7)::
+#
+#     config USB_CDNS_SUPPORT
+#         depends on USB if !USB_GADGET
+#
+# Its ``_parse_props`` accepts only a bare expression after ``depends on`` and
+# raises ``KconfigError: … extra tokens at end of line`` the moment it meets
+# one — which aborts the whole-tree parse. The kernel's own C parser handles
+# it, so ``make olddefconfig`` (and thus the build) is unaffected; only this
+# metadata walk trips. Rather than rewrite Kconfig source (fragile around
+# comments/parens, and lossy if stripped), we patch the parser the way the
+# kernel encodes it (and the Yocto kern-tools patch does): ``depends on X if Y``
+# ≡ ``X || (Y == n)`` (for a compound ``Y``: ``X || !Y``).
+
+_COND_DEP_PATCH_FLAG = "_autokernel_conditional_depends"
+_cond_dep_patch_state: bool | None = None
+
+
+def _patched_expect_expr_and_eol(self):  # type: ignore[no-untyped-def]
+    # Drop-in for ``Kconfig._expect_expr_and_eol``. ``_parse_cond`` consumes an
+    # optional trailing ``if <cond>`` (returning ``self.y`` when absent) and
+    # performs the end-of-line check — the same contract the original helper
+    # had. The helper's three other callers (an ``if`` block opener,
+    # ``visible if``, and ``eval_string``) never carry a trailing ``if``, so
+    # their behavior is identical.
+    expr = self._parse_expr(True)
+    cond = self._parse_cond()
+    if cond is not self.y:
+        expr = self._make_or(
+            expr,
+            (kconfiglib.EQUAL, cond, self.n)
+            if cond.__class__ is not tuple
+            else (kconfiglib.NOT, cond),
+        )
+    return expr
+
+
+def _installed_kconfiglib_handles_conditional_deps() -> bool:
+    """True if the installed kconfiglib already parses ``depends on X if Y``.
+
+    Probes a minimal in-memory tree so the patch self-disables against a fixed
+    kconfiglib release or a maintained fork.
+    """
+    import tempfile
+
+    saved_cwd = Path.cwd()
+    with tempfile.TemporaryDirectory() as d:
+        (Path(d) / "Kconfig").write_text(
+            "config A\n\tbool\nconfig B\n\tbool\n"
+            "config C\n\tbool\n\tdepends on A if B\n"
+        )
+        try:
+            os.chdir(d)
+            kconfiglib.Kconfig("Kconfig", warn=False, warn_to_stderr=False)
+        except kconfiglib.KconfigError:
+            return False
+        except Exception:
+            # Any other trouble constructing the probe: let the patch try.
+            return False
+        finally:
+            os.chdir(saved_cwd)
+    return True
+
+
+def _ensure_conditional_depends_support() -> bool:
+    """Idempotently teach kconfiglib the v7.0 conditional-dependency syntax.
+
+    Returns True once conditional deps are parseable (patched here or supported
+    natively). Cheap after the first call — the outcome is cached.
+    """
+    global _cond_dep_patch_state
+    if _cond_dep_patch_state is not None:
+        return _cond_dep_patch_state
+    if getattr(kconfiglib.Kconfig, _COND_DEP_PATCH_FLAG, False):
+        _cond_dep_patch_state = True
+        return True
+    if _installed_kconfiglib_handles_conditional_deps():
+        _cond_dep_patch_state = True
+        return True
+    kconfiglib.Kconfig._expect_expr_and_eol = _patched_expect_expr_and_eol
+    setattr(kconfiglib.Kconfig, _COND_DEP_PATCH_FLAG, True)
+    _cond_dep_patch_state = True
+    return True
+
+
 # ── helpers ───────────────────────────────────────────────────────────────
 
 
@@ -313,6 +402,8 @@ def walk(
     source_dir = Path(source_dir).resolve()
     if not (source_dir / "Kconfig").exists():
         raise FileNotFoundError(f"{source_dir}/Kconfig not found")
+    # Teach kconfiglib the v7.0+ conditional-dependency syntax before parsing.
+    _ensure_conditional_depends_support()
     if srcarch is None:
         # x86_64 → x86 (the kernel's arch dir is arch/x86, ARCH=x86_64
         # but SRCARCH=x86). Same dance for arm64, riscv, etc.

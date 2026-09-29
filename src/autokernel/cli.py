@@ -733,22 +733,38 @@ def propose(
         console.print(f"[dim]closed-loop: base-config={base_config}[/dim]")
 
     if extra_dims:
-        extra_proposals = _run_dimension_passes(
-            snap=snap,
-            snapshot_dir=snapshot_dir,
-            requested=extra_dims,
-            workload_override=workload,
-            threat=threat,
-            modules_strategy=modules_strategy,
-            aggression=aggression,
-            preset=preset,
-            kernel_source=kernel_source,
-            llm_spec=model if model else llm_mode,
-            service_tier=service_tier,
-            skip_llm=skip_llm,
-            history_text=history_text,
-            base_config_path=base_config,
-        )
+        # A Kconfig the bundled parser can't read must not sink the whole run:
+        # the (already-completed, already-paid-for) module-trim proposals above
+        # are worth keeping. Degrade to "enrichment unavailable" and carry on.
+        from kconfiglib import KconfigError
+
+        try:
+            extra_proposals = _run_dimension_passes(
+                snap=snap,
+                snapshot_dir=snapshot_dir,
+                requested=extra_dims,
+                workload_override=workload,
+                threat=threat,
+                modules_strategy=modules_strategy,
+                aggression=aggression,
+                preset=preset,
+                kernel_source=kernel_source,
+                llm_spec=model if model else llm_mode,
+                service_tier=service_tier,
+                skip_llm=skip_llm,
+                history_text=history_text,
+                base_config_path=base_config,
+            )
+        except KconfigError as e:
+            first_line = str(e).strip().splitlines()[0] if str(e).strip() else e
+            err_console.print(
+                f"[yellow]⚠ enrichment dimensions "
+                f"({', '.join(sorted(extra_dims))}) skipped[/yellow] — the "
+                f"bundled Kconfig parser could not read this tree:\n"
+                f"  [dim]{first_line}[/dim]\n"
+                f"  [dim]module-trim proposals are unaffected and were kept.[/dim]"
+            )
+            extra_proposals = []
 
     # ── policy filter ───────────────────────────────────────────────────
     all_proposals = det + llm + extra_proposals
@@ -2205,7 +2221,7 @@ def config_show(
         str,
         typer.Option(
             "--mode",
-            help="Pretend the user passed this --llm-mode / --model and show what it'd resolve to. Default: 'auto'.",
+            help="Pretend the user passed this --llm-mode / --model and show what it'd resolve to. Default: 'auto' (honors AUTOKERNEL_MODEL).",
         ),
     ] = "auto",
 ) -> None:
@@ -2277,7 +2293,8 @@ def config_test(
     spec: Annotated[
         str,
         typer.Option(
-            "--mode", help="Mode preset or literal model id to test (default: 'auto')."
+            "--mode",
+            help="Mode preset or literal model id to test (default: 'auto', honors AUTOKERNEL_MODEL).",
         ),
     ] = "auto",
     service_tier: Annotated[
