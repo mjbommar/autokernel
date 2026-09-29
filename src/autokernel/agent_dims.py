@@ -48,7 +48,7 @@ from autokernel.knowledge import (
     threat_recipes,
     workload_recipes,
 )
-from autokernel.llm import ServiceTier, normalize_service_tier
+from autokernel.llm import ServiceTier, build_model_settings, normalize_service_tier
 from autokernel.models import (
     ProposalSource,
     RemovalProposal,
@@ -993,11 +993,7 @@ def _build_choice_agent(
     sig = (model, service_tier)
     if _choice_agent is not None and _choice_agent_sig == sig:
         return _choice_agent
-    from pydantic_ai.settings import ModelSettings
-
-    settings = (
-        ModelSettings(service_tier=service_tier) if service_tier else ModelSettings()
-    )
+    settings = build_model_settings(model, service_tier=service_tier)
     _choice_agent = cast(
         Agent[None, _ChoiceBatch],
         Agent(
@@ -1024,11 +1020,7 @@ def _build_toggle_agent(
     sig = (model, service_tier)
     if _toggle_agent is not None and _toggle_agent_sig == sig:
         return _toggle_agent
-    from pydantic_ai.settings import ModelSettings
-
-    settings = (
-        ModelSettings(service_tier=service_tier) if service_tier else ModelSettings()
-    )
+    settings = build_model_settings(model, service_tier=service_tier)
     _toggle_agent = cast(
         Agent[None, _ToggleBatch],
         Agent(
@@ -1055,11 +1047,7 @@ def _build_tunable_agent(
     sig = (model, service_tier)
     if _tunable_agent is not None and _tunable_agent_sig == sig:
         return _tunable_agent
-    from pydantic_ai.settings import ModelSettings
-
-    settings = (
-        ModelSettings(service_tier=service_tier) if service_tier else ModelSettings()
-    )
+    settings = build_model_settings(model, service_tier=service_tier)
     _tunable_agent = cast(
         Agent[None, _TunableBatch],
         Agent(

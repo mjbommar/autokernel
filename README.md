@@ -263,6 +263,29 @@ When multiple providers are available, autokernel prefers them in this
 order: `anthropic`, `openai`, `google-gla`. Override with
 `--model <provider>:<id>`.
 
+### Persistent defaults via environment
+
+Rather than pass flags every run, set these in your shell or `.env` and
+every entry point (`propose`, the dimension passes, `config show/test`)
+honors them:
+
+```bash
+# Pin the model used everywhere (a literal pydantic-ai id).
+export AUTOKERNEL_MODEL=openai:gpt-6-luna
+
+# OpenAI service tier: auto | default | flex | priority.
+export AUTOKERNEL_SERVICE_TIER=flex
+
+# OpenAI reasoning effort: minimal | low | medium | high.
+# Applied only to openai:* models; ignored for other providers.
+export AUTOKERNEL_REASONING_EFFORT=low
+```
+
+`AUTOKERNEL_MODEL` overrides the auto-detected default; an explicit
+`--model` / `--llm-mode` still wins for a single run. `config show`
+reflects whatever these resolve to, so you can confirm the active model
+before spending.
+
 ## Quick start (manual verbs)
 
 ```bash

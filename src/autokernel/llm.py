@@ -43,6 +43,28 @@ def normalize_service_tier(value: str | None) -> ServiceTier | None:
     return cast(ServiceTier, value)
 
 
+ReasoningEffort = Literal["minimal", "low", "medium", "high"]
+_REASONING_EFFORTS = set(get_args(ReasoningEffort))
+
+
+def normalize_reasoning_effort(value: str | None) -> ReasoningEffort | None:
+    """Validate/cast an optional OpenAI reasoning-effort string.
+
+    OpenAI reasoning models (o-series, gpt-5+, gpt-6) accept
+    ``minimal|low|medium|high``. Applied via pydantic-ai's
+    ``openai_reasoning_effort`` model setting; ignored for non-OpenAI
+    providers (they don't expose the knob).
+    """
+    if not value:
+        return None
+    v = value.strip().lower()
+    if v not in _REASONING_EFFORTS:
+        raise ValueError(
+            f"unknown reasoning effort {value!r}; valid: {sorted(_REASONING_EFFORTS)}"
+        )
+    return cast(ReasoningEffort, v)
+
+
 # ── providers + models ─────────────────────────────────────────────────────
 
 
@@ -219,6 +241,20 @@ def resolve(
     and the spec was a preset (rather than a literal).
     """
     e = dict(env if env is not None else os.environ)
+    # AUTOKERNEL_MODEL / AUTOKERNEL_SERVICE_TIER are the user's configured
+    # defaults: apply them when the caller passes the bare 'auto' spec / no
+    # explicit tier, so every entry point (propose, dimension passes, config
+    # show/test) resolves to the same model instead of falling back to the
+    # first-preferred provider. Explicit presets ('cheap'/'fast'/'quality'),
+    # literal model ids, and an explicit --service-tier still win.
+    if spec == "auto":
+        env_model = e.get("AUTOKERNEL_MODEL", "").strip()
+        if env_model:
+            spec = env_model
+    if service_tier is None:
+        env_tier = e.get("AUTOKERNEL_SERVICE_TIER", "").strip()
+        if env_tier:
+            service_tier = env_tier
     normalized_service_tier = normalize_service_tier(service_tier)
     avail = available if available is not None else detect_available_providers(env=e)
 
@@ -313,6 +349,43 @@ def model_options_for(provider: Provider) -> dict[LLMMode, str]:
     return dict(_DEFAULTS[provider])
 
 
+# ── model settings (service tier + reasoning effort) ───────────────────────
+
+
+def build_model_settings(
+    model: str,
+    *,
+    service_tier: str | None = None,
+    reasoning_effort: str | None = None,
+):
+    """Build pydantic-ai ``ModelSettings`` for ``model``.
+
+    Applies ``service_tier`` (a generic passthrough — OpenAI honours it via
+    the Responses/Chat APIs) and, **for OpenAI models only**,
+    ``openai_reasoning_effort``. ``reasoning_effort`` falls back to the
+    ``AUTOKERNEL_REASONING_EFFORT`` env var when not passed explicitly, so a
+    global default can be set once in ``.env``.
+
+    pydantic-ai is imported lazily so this module stays import-pure. Returns
+    a plain settings mapping (a ``ModelSettings`` TypedDict at runtime).
+    """
+    from pydantic_ai.settings import ModelSettings
+
+    tier = normalize_service_tier(service_tier)
+    effort = normalize_reasoning_effort(
+        reasoning_effort
+        if reasoning_effort is not None
+        else os.environ.get("AUTOKERNEL_REASONING_EFFORT")
+    )
+    kwargs: dict[str, object] = {}
+    if tier:
+        kwargs["service_tier"] = tier
+    if effort and model.split(":", 1)[0] == Provider.OPENAI.value:
+        # OpenAI-only setting; don't leak it to anthropic/google models.
+        kwargs["openai_reasoning_effort"] = effort
+    return cast(ModelSettings, kwargs)
+
+
 # ── connection test (opt-in; the only function that calls pydantic-ai) ────
 
 
@@ -338,11 +411,10 @@ def test_connection(config: LLMConfig, *, prompt: str = "ok") -> ConnectionResul
     """
     try:
         from pydantic_ai import Agent
-        from pydantic_ai.settings import ModelSettings
 
-        settings = ModelSettings()
-        if config.service_tier:
-            settings = ModelSettings(service_tier=config.service_tier)
+        settings = build_model_settings(
+            config.model, service_tier=config.service_tier
+        )
 
         agent = Agent(
             config.model,

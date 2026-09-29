@@ -30,7 +30,7 @@ from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 
 from autokernel.audio import render_audio_summary
-from autokernel.llm import ServiceTier, normalize_service_tier
+from autokernel.llm import ServiceTier, build_model_settings, normalize_service_tier
 from autokernel.models import (
     ProposalSource,
     RemovalProposal,
@@ -128,11 +128,7 @@ def _get_agent(
     if _agent is not None and _agent_signature == sig:
         return _agent
 
-    from pydantic_ai.settings import ModelSettings
-
-    settings = ModelSettings()
-    if service_tier:
-        settings = ModelSettings(service_tier=service_tier)
+    settings = build_model_settings(model, service_tier=service_tier)
 
     _agent = cast(
         Agent[None, _ProposalBatch],
