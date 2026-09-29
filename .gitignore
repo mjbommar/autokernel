@@ -31,3 +31,15 @@ loadable_modinfo_cache
 .idea/
 .DS_Store
 get-docker.sh
+
+# kernel-patch outbound staging — local-only; .patch files,
+# checklists, and send commands for in-flight upstream contributions.
+kernel-patches-workspace/
+
+# local provisioning / diagnostic scripts — archived on server0
+# (~/laptop-provisioning), never commit (contain internal host/IP details).
+# Root-anchored so the project's own install.sh / scripts/*.sh are unaffected.
+/setup-nopasswd-sudo.sh
+/ec-crash-diag.sh
+/install-rc7-candidate.sh
+/install-7.3-rc5-candidate.sh
