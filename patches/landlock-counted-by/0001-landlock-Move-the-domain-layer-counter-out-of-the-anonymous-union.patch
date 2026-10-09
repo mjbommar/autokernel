@@ -1,0 +1,100 @@
+From 161f9c8a4c988c47a78f96a8fae766dae77bc59f Mon Sep 17 00:00:00 2001
+From: Abel Vesa <abel.vesa@oss.qualcomm.com>
+Date: Wed, 7 Oct 2026 19:28:30 +0300
+Subject: [PATCH] landlock: Move the domain layer counter out of the anonymous
+ union
+
+With Clang 20 and CONFIG_FORTIFY_SOURCE, stacking Landlock domains can
+trigger a fortify panic in the handled_masks copy in inherit_ruleset():
+
+  __fortify_panic
+  landlock_merge_ruleset
+  __arm64_sys_landlock_restrict_self
+
+Clang miscalculates the location of the __counted_by counter in the
+anonymous structure nested inside the domain's union.  In an arm64 build,
+__builtin_dynamic_object_size(domain->handled_masks, 1) reads offset 40
+(the first handled_masks entry) instead of offset 36 (num_layers).
+Because the destination domain is zero-initialized and its masks have not
+yet been populated, FORTIFY sees a zero-sized destination and rejects the
+copy of the parent's layers.
+
+Move num_layers and handled_masks to the top level of landlock_domain so
+that Clang uses the correct counter.
+
+Assisted-by: LLM
+Fixes: bd3a19800dd1 ("landlock: Add counted_by in landlock_domain")
+Reported-by: Konrad Dybcio <konrad.dybcio@oss.qualcomm.com>
+Co-developed-by: Konrad Dybcio <konrad.dybcio@oss.qualcomm.com>
+Signed-off-by: Konrad Dybcio <konrad.dybcio@oss.qualcomm.com>
+Signed-off-by: Abel Vesa <abel.vesa@oss.qualcomm.com>
+(cherry picked from commit f4d00e34268eef40ac44eba614b08a285c03f17a)
+---
+ security/landlock/domain.h | 48 ++++++++++++++++----------------------
+ 1 file changed, 20 insertions(+), 28 deletions(-)
+
+diff --git a/security/landlock/domain.h b/security/landlock/domain.h
+index caa3d19d2..5e65ab004 100644
+--- a/security/landlock/domain.h
++++ b/security/landlock/domain.h
+@@ -216,37 +216,29 @@ struct landlock_domain {
+ 		/**
+ 		 * @work_free: Enables to free a domain within a lockless
+ 		 * section.  This is only used by landlock_put_domain_deferred()
+-		 * when @usage reaches zero.  The fields @usage, @num_layers and
+-		 * @handled_masks are then unused.
++		 * when @usage reaches zero.  The field @usage is then unused.
+ 		 */
+ 		struct work_struct work_free;
+-		struct {
+-			/**
+-			 * @usage: Number of credentials referencing this
+-			 * domain.
+-			 */
+-			refcount_t usage;
+-			/**
+-			 * @num_layers: Number of layers that are used in this
+-			 * domain.  This enables to check that all the layers
+-			 * allow an access request.
+-			 */
+-			u32 num_layers;
+-			/**
+-			 * @handled_masks: Contains the subset of filesystem and
+-			 * network actions that are restricted by a domain.  A
+-			 * domain saves all layers of merged rulesets in a stack
+-			 * (FAM), starting from the first layer to the last one.
+-			 * These layers are used when merging rulesets, for user
+-			 * space backward compatibility (i.e. future-proof), and
+-			 * to properly handle merged rulesets without
+-			 * overlapping access rights.  These layers are set once
+-			 * and never changed for the lifetime of the domain.
+-			 */
+-			struct access_masks
+-				handled_masks[] __counted_by(num_layers);
+-		};
++		/**
++		 * @usage: Number of credentials referencing this domain.
++		 */
++		refcount_t usage;
+ 	};
++	/**
++	 * @num_layers: Number of layers that are used in this domain.  This
++	 * enables to check that all the layers allow an access request.
++	 */
++	u32 num_layers;
++	/**
++	 * @handled_masks: Contains the subset of filesystem and network actions
++	 * that are restricted by a domain.  A domain saves all layers of merged
++	 * rulesets in a stack (FAM), starting from the first layer to the last
++	 * one.  These layers are used when merging rulesets, for user space
++	 * backward compatibility (i.e. future-proof), and to properly handle
++	 * merged rulesets without overlapping access rights.  These layers are
++	 * set once and never changed for the lifetime of the domain.
++	 */
++	struct access_masks handled_masks[] __counted_by(num_layers);
+ };
+ 
+ static inline access_mask_t
+-- 
+2.53.0
+

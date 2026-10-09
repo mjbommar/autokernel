@@ -35,6 +35,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+from autokernel import patches as patches_mod
 from autokernel.audio import AUDIO_KEEP_MODULES
 
 
@@ -103,6 +104,36 @@ def _new_log_dir(snapshot_dir: Path) -> Path:
 
 
 _VALID_COMPILERS = ("clang", "gcc", "llvm")
+_VALID_LTO = ("none", "thin", "full")
+_LTO_SYMBOLS = {
+    "none": "CONFIG_LTO_NONE",
+    "thin": "CONFIG_LTO_CLANG_THIN",
+    "full": "CONFIG_LTO_CLANG_FULL",
+}
+
+
+def _set_lto_choice(config_path: Path, lto: str) -> None:
+    """Select the LTO Kconfig choice in-place (before olddefconfig).
+
+    Only touches the LTO choice symbols; everything else in the config is
+    left as-is. ``lto="none"`` leaves the config alone so an LTO choice
+    already present in final.config is respected.
+    """
+    if lto == "none":
+        return
+    want = _LTO_SYMBOLS[lto]
+    drop = set(_LTO_SYMBOLS.values()) | {"CONFIG_LTO_CLANG", "CONFIG_LTO"}
+    kept = [
+        ln
+        for ln in config_path.read_text().splitlines()
+        if not any(ln.startswith(f"{s}=") or ln == f"# {s} is not set" for s in drop)
+    ]
+    kept += [f"{want}=y", "# CONFIG_LTO_NONE is not set"]
+    config_path.write_text("\n".join(kept) + "\n")
+
+
+def _config_has(config_path: Path, symbol: str) -> bool:
+    return f"{symbol}=y" in config_path.read_text().splitlines()
 
 
 def _compiler_make_vars(compiler: str) -> list[str]:
@@ -150,14 +181,12 @@ def _build_env(
     ``lto``:
 
     * ``"none"`` — no LTO (default; fastest builds).
-    * ``"thin"`` — adds ``CONFIG_LTO_CLANG_THIN=y`` semantics by
-      injecting ``KCFLAGS=-flto=thin`` (caller is also expected to
-      enable the matching CONFIG via the propose path or directly).
-    * ``"full"`` — same with ``-flto``.
-
-    Note: this function only sets compiler/LTO env. The matching
-    ``CONFIG_*`` knobs (CFI_CLANG, LTO_CLANG_*) flow through propose
-    or are set directly in final.config.
+    * ``"thin"`` / ``"full"`` — no env change. Kernel LTO is a Kconfig
+      choice (``CONFIG_LTO_CLANG_THIN`` / ``CONFIG_LTO_CLANG_FULL``) that
+      :func:`prepare` sets in ``.config``; Kbuild then adds the right
+      ``-flto`` flags and LTO-aware link steps itself. Injecting
+      ``-flto`` via KCFLAGS without the Kconfig produces bitcode objects
+      the non-LTO link pipeline does not handle.
     """
     if compiler not in _VALID_COMPILERS:
         raise ValueError(f"unknown compiler {compiler!r}; valid: {_VALID_COMPILERS}")
@@ -177,12 +206,8 @@ def _build_env(
         env["CC"] = "gcc"
         env["HOSTCC"] = "gcc"
 
-    # LTO opt-in. Both flags are additive — the kernel's Kbuild
-    # respects KCFLAGS/HOSTCFLAGS for in-tree builds.
-    if lto in {"thin", "full"}:
-        flag = "-flto=thin" if lto == "thin" else "-flto"
-        existing = env.get("KCFLAGS", "")
-        env["KCFLAGS"] = (existing + " " + flag).strip()
+    if lto not in _VALID_LTO:
+        raise ValueError(f"unknown lto {lto!r}; valid: {_VALID_LTO}")
 
     if use_ccache and shutil.which("ccache"):
         # Wrap CC; let the kernel's Kbuild detect HOSTCC similarly.
@@ -275,6 +300,7 @@ def prepare(
     lsmod_path: Path | None = None,
     compiler: str = "clang",
     lto: str = "none",
+    config_overrides: dict[str, str] | None = None,
 ) -> PrepareResult:
     """Drop ``config_path`` into ``<source_dir>/.config`` and run
     ``make olddefconfig`` to canonicalize.
@@ -312,6 +338,14 @@ def prepare(
     # will fail with `No rule to make target 'debian/canonical-certs.pem'`.
     # Auto-clear them in-place when the referenced files are absent.
     _strip_missing_distro_cert_paths(target, source_dir)
+    if lto != "none" and compiler != "llvm":
+        raise ValueError(
+            f"--lto={lto} needs --compiler=llvm (LLVM=1): kernel LTO requires "
+            "ld.lld and llvm-ar/llvm-nm, which only LLVM=1 selects"
+        )
+    _set_lto_choice(target, lto)
+    # Kconfig required by carried patch sets (``[config]`` in meta.toml).
+    patches_mod.apply_config(target, config_overrides or {})
     # The kernel has two separate module-compression switches:
     # CONFIG_MODULE_COMPRESS selects support/type, while
     # CONFIG_MODULE_COMPRESS_ALL controls whether modules_install actually
@@ -381,6 +415,25 @@ def prepare(
                 timeout=olddefconfig_timeout,
             )
         )
+
+    if (
+        lto != "none"
+        and all(st.ok for st in steps)
+        and not _config_has(target, _LTO_SYMBOLS[lto])
+    ):
+        raise ValueError(
+            f"{_LTO_SYMBOLS[lto]} did not survive olddefconfig; the toolchain or "
+            "config does not satisfy its dependencies (HAS_LTO_CLANG needs "
+            "LLVM=1 with ld.lld, llvm-ar, llvm-nm). See olddefconfig logs in "
+            f"{log_dir}"
+        )
+
+    if config_overrides and all(st.ok for st in steps):
+        bad = patches_mod.config_mismatches(target, config_overrides)
+        if bad:
+            raise ValueError(
+                "patch-set Kconfig did not survive olddefconfig: " + "; ".join(bad)
+            )
 
     return PrepareResult(
         source_dir=source_dir,
@@ -739,6 +792,14 @@ def build(
     rpm_root = Path.home() / "rpmbuild" / "RPMS"
     if rpm_root.is_dir():
         deb_paths.extend(sorted(rpm_root.glob("*/kernel-*.rpm")))
+
+    # The output dir is shared by every build from the same cache, so keep
+    # only this build's packages (their names embed the kernel release).
+    release_file = source_dir / "include" / "config" / "kernel.release"
+    if release_file.exists():
+        release = release_file.read_text().strip()
+        if release:
+            deb_paths = [p for p in deb_paths if release in p.name]
 
     # bzImage location for kernel-only success check.
     bzimage_path: Path | None = None

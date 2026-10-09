@@ -240,3 +240,107 @@ def test_build_target_override(tmp_path: Path, captured_runs):
         "HOSTCC=clang",
         "deb-pkg",
     ]
+
+
+# ── --lto / --patches ──────────────────────────────────────────────────────
+
+
+def test_build_lto_without_llvm_fails_fast(tmp_path: Path, captured_runs):
+    snap, src = _seed_apply_done(tmp_path)
+    result = runner.invoke(
+        app, ["build", str(snap), "--kernel-source", str(src), "--lto", "thin"]
+    )
+    assert result.exit_code == 2
+    assert "--compiler=llvm" in result.output
+    assert captured_runs == []
+
+
+def _git_kernel_tree(tmp_path: Path) -> Path:
+    import subprocess
+
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@t"]
+    src = tmp_path / "linux-git"
+    src.mkdir()
+    (src / "Makefile").write_text(
+        "VERSION = 7\nPATCHLEVEL = 3\nSUBLEVEL = 0\nEXTRAVERSION = -rc6\n"
+    )
+    (src / "a.c").write_text("int x = 1;\n")
+    subprocess.run([*git, "init", "-q", str(src)], check=True)
+    subprocess.run([*git, "-C", str(src), "add", "."], check=True)
+    subprocess.run([*git, "-C", str(src), "commit", "-qm", "base"], check=True)
+    (src / "a.c").write_text("int x = 2;\n")
+    subprocess.run([*git, "-C", str(src), "commit", "-qam", "fix x"], check=True)
+    pdir = tmp_path / "patches" / "fix-x"
+    pdir.mkdir(parents=True)
+    subprocess.run(
+        [*git, "-C", str(src), "format-patch", "-q", "-1", "-o", str(pdir)], check=True
+    )
+    subprocess.run(
+        [*git, "-C", str(src), "reset", "-q", "--hard", "HEAD~1"], check=True
+    )
+    (pdir / "series").write_text(
+        "".join(p.name + "\n" for p in sorted(pdir.glob("*.patch")))
+    )
+    (pdir / "meta.toml").write_text(
+        'kind = "upstream-pending"\nmin_version = "7.3-rc1"\n'
+    )
+    return src
+
+
+def test_build_patches_applied_and_recorded(tmp_path: Path, monkeypatch):
+    import json
+
+    snap, _ = _seed_apply_done(tmp_path)
+    src = _git_kernel_tree(tmp_path)
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+
+    def _fake_prepare(**kw):
+        return build_mod.PrepareResult(
+            source_dir=kw["source_dir"],
+            config_path=kw["source_dir"] / ".config",
+            log_dir=log_dir,
+            steps=[],
+        )
+
+    monkeypatch.setattr(build_mod, "prepare", _fake_prepare)
+    result = runner.invoke(
+        app,
+        [
+            "build",
+            str(snap),
+            "--kernel-source",
+            str(src),
+            "--patches",
+            "fix-x",
+            "--patches-dir",
+            str(tmp_path / "patches"),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert (src / "a.c").read_text() == "int x = 2;\n"
+    record = json.loads((log_dir / "build.json").read_text())
+    assert record["kernel_version"] == "7.3-rc6"
+    assert record["patches"]["patches"][0]["result"] == "applied"
+    assert record["patches"]["base_commit"] != record["source_commit"]
+
+
+def test_build_unknown_patch_set(tmp_path: Path, captured_runs):
+    snap, src = _seed_apply_done(tmp_path)
+    (tmp_path / "patches").mkdir()
+    result = runner.invoke(
+        app,
+        [
+            "build",
+            str(snap),
+            "--kernel-source",
+            str(src),
+            "--patches",
+            "nope",
+            "--patches-dir",
+            str(tmp_path / "patches"),
+        ],
+    )
+    assert result.exit_code == 2
+    assert "unknown patch set" in result.output
+    assert captured_runs == []

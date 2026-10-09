@@ -1,0 +1,40 @@
+description = "Ubuntu SAUCE: AppArmor restriction of unprivileged user namespaces (kernel.apparmor_restrict_unprivileged_userns). Unconfined tasks creating a userns are moved to the unprivileged_userns profile (no capabilities); profiles with `userns,` (chrome, code, slack, ...) keep working. Pairs with Ubuntu's /usr/lib/sysctl.d/10-apparmor.conf. Ported from Ubuntu-7.0.0-38.38 (resolute) apparmor5.0.0 [9-13,17,18,49/57]."
+kind = "out-of-tree"
+min_version = "7.3-rc6"
+
+# Match Ubuntu: default-on restriction denies userns before apparmor.service
+# loads the unprivileged_userns profile (LP#1990064). The sysctl turns it on.
+[config]
+SECURITY_APPARMOR_RESTRICT_USERNS = "n"
+
+[patches."0001-UBUNTU-SAUCE-apparmor5.0.0-9-57-apparmor-userns-add-.patch"]
+status = "out-of-tree"
+link = "https://git.launchpad.net/~ubuntu-kernel/ubuntu/+source/linux/+git/resolute/tag/?h=Ubuntu-7.0.0-38.38"
+
+[patches."0002-UBUNTU-SAUCE-apparmor5.0.0-10-57-apparmor-userns-Add.patch"]
+status = "out-of-tree"
+link = "https://git.launchpad.net/~ubuntu-kernel/ubuntu/+source/linux/+git/resolute/tag/?h=Ubuntu-7.0.0-38.38"
+
+[patches."0003-UBUNTU-SAUCE-apparmor5.0.0-11-57-apparmor-userns-mak.patch"]
+status = "out-of-tree"
+link = "https://git.launchpad.net/~ubuntu-kernel/ubuntu/+source/linux/+git/resolute/tag/?h=Ubuntu-7.0.0-38.38"
+
+[patches."0004-UBUNTU-SAUCE-apparmor5.0.0-12-57-apparmor-userns-ope.patch"]
+status = "out-of-tree"
+link = "https://git.launchpad.net/~ubuntu-kernel/ubuntu/+source/linux/+git/resolute/tag/?h=Ubuntu-7.0.0-38.38"
+
+[patches."0005-UBUNTU-SAUCE-apparmor5.0.0-13-57-apparmor-userns-all.patch"]
+status = "out-of-tree"
+link = "https://git.launchpad.net/~ubuntu-kernel/ubuntu/+source/linux/+git/resolute/tag/?h=Ubuntu-7.0.0-38.38"
+
+[patches."0006-UBUNTU-SAUCE-apparmor5.0.0-17-57-apparmor-create-an-.patch"]
+status = "out-of-tree"
+link = "https://git.launchpad.net/~ubuntu-kernel/ubuntu/+source/linux/+git/resolute/tag/?h=Ubuntu-7.0.0-38.38"
+
+[patches."0007-UBUNTU-SAUCE-apparmor5.0.0-18-57-apparmor-Use-AA_SFS.patch"]
+status = "out-of-tree"
+link = "https://git.launchpad.net/~ubuntu-kernel/ubuntu/+source/linux/+git/resolute/tag/?h=Ubuntu-7.0.0-38.38"
+
+[patches."0008-UBUNTU-SAUCE-apparmor5.0.0-49-57-apparmor-change-fn_.patch"]
+status = "out-of-tree"
+link = "https://git.launchpad.net/~ubuntu-kernel/ubuntu/+source/linux/+git/resolute/tag/?h=Ubuntu-7.0.0-38.38"

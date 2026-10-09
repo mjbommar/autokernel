@@ -250,6 +250,24 @@ def test_build_picks_up_deb_artifacts(tmp_path: Path, captured_runs):
     assert result.ok
 
 
+def test_build_only_reports_this_releases_packages(tmp_path: Path, captured_runs):
+    """The shared output dir holds every earlier build's .debs too."""
+    src = _make_fake_kernel_source(tmp_path)
+    (src / ".config").write_text("CONFIG_X=y\n")
+    rel = src / "include" / "config" / "kernel.release"
+    rel.parent.mkdir(parents=True)
+    rel.write_text("7.3.0-rc6-autokernel-2-userns+\n")
+    mine = tmp_path / "linux-image-7.3.0-rc6-autokernel-2-userns+_7.3.0-1_amd64.deb"
+    old = tmp_path / "linux-image-7.3.0-rc6-autokernel-1-cfi+_7.3.0-1_amd64.deb"
+    mine.write_text("")
+    old.write_text("")
+    snap = tmp_path / "snap"
+    snap.mkdir()
+
+    result = build(source_dir=src, snapshot_dir=snap, jobs=1)
+    assert result.deb_paths == [mine]
+
+
 def test_build_rejects_unprepared_source(tmp_path: Path):
     src = _make_fake_kernel_source(tmp_path)
     snap = tmp_path / "snap"
@@ -582,19 +600,45 @@ def test_build_env_unknown_compiler_raises():
         _build_env(use_ccache=False, env_overrides=None, compiler="msvc")
 
 
-def test_build_env_lto_thin_adds_kcflags():
+def test_build_env_lto_does_not_inject_kcflags():
+    """Kernel LTO is a Kconfig choice; KCFLAGS=-flto without it is broken."""
     from autokernel.build import _build_env
 
-    env = _build_env(use_ccache=False, env_overrides=None, lto="thin")
-    assert "-flto=thin" in env.get("KCFLAGS", "")
+    for lto in ("thin", "full"):
+        env = _build_env(use_ccache=False, env_overrides=None, compiler="llvm", lto=lto)
+        assert "-flto" not in env.get("KCFLAGS", "")
 
 
-def test_build_env_lto_full():
+def test_build_env_rejects_unknown_lto():
     from autokernel.build import _build_env
 
-    env = _build_env(use_ccache=False, env_overrides=None, lto="full")
-    kcflags = env.get("KCFLAGS", "")
-    assert "-flto" in kcflags and "-flto=thin" not in kcflags
+    with pytest.raises(ValueError, match="unknown lto"):
+        _build_env(use_ccache=False, env_overrides=None, lto="extreme")
+
+
+def test_set_lto_choice_selects_thin(tmp_path):
+    from autokernel.build import _set_lto_choice
+
+    cfg = tmp_path / ".config"
+    cfg.write_text(
+        "CONFIG_FOO=y\nCONFIG_LTO_NONE=y\n# CONFIG_LTO_CLANG_THIN is not set\n"
+    )
+    _set_lto_choice(cfg, "thin")
+    lines = cfg.read_text().splitlines()
+    assert "CONFIG_FOO=y" in lines
+    assert "CONFIG_LTO_CLANG_THIN=y" in lines
+    assert "CONFIG_LTO_NONE=y" not in lines
+    assert lines.count("CONFIG_LTO_CLANG_THIN=y") == 1
+
+
+def test_set_lto_choice_none_leaves_config_alone(tmp_path):
+    from autokernel.build import _set_lto_choice
+
+    cfg = tmp_path / ".config"
+    original = "CONFIG_LTO_CLANG_THIN=y\n"
+    cfg.write_text(original)
+    _set_lto_choice(cfg, "none")
+    assert cfg.read_text() == original
 
 
 def test_build_env_lto_none_no_kcflags_change():
@@ -841,3 +885,63 @@ def test_build_result_ok_traditional_target_requires_deb(tmp_path, captured_runs
 
     result = build(source_dir=src, snapshot_dir=snap, jobs=2, target="bindeb-pkg")
     assert not result.ok  # deb_paths empty AND target != kernel-only
+
+
+# ── LTO is a Kconfig choice ────────────────────────────────────────────────
+
+
+def test_prepare_lto_requires_llvm_toolchain(tmp_path, captured_runs):
+    src = _make_fake_kernel_source(tmp_path)
+    cfg = _make_final_config(tmp_path)
+    snap = tmp_path / "snap"
+    snap.mkdir()
+    with pytest.raises(ValueError, match="needs --compiler=llvm"):
+        prepare(
+            source_dir=src,
+            config_path=cfg,
+            snapshot_dir=snap,
+            compiler="clang",
+            lto="thin",
+        )
+    assert captured_runs == []  # failed before running make
+
+
+def test_prepare_lto_thin_sets_kconfig_and_verifies(tmp_path, captured_runs):
+    src = _make_fake_kernel_source(tmp_path)
+    cfg = _make_final_config(tmp_path)
+    snap = tmp_path / "snap"
+    snap.mkdir()
+    # Fake olddefconfig leaves .config untouched, so the choice survives.
+    result = prepare(
+        source_dir=src, config_path=cfg, snapshot_dir=snap, compiler="llvm", lto="thin"
+    )
+    assert result.ok
+    assert "CONFIG_LTO_CLANG_THIN=y" in (src / ".config").read_text().splitlines()
+    assert "LLVM=1" in captured_runs[0]["argv"]
+
+
+def test_prepare_lto_dropped_by_olddefconfig_fails_loudly(tmp_path, monkeypatch):
+    src = _make_fake_kernel_source(tmp_path)
+    cfg = _make_final_config(tmp_path)
+    snap = tmp_path / "snap"
+    snap.mkdir()
+
+    def _olddefconfig_drops_lto(argv, **kwargs):
+        for f in (kwargs.get("stdout"), kwargs.get("stderr")):
+            if hasattr(f, "write"):
+                f.write(b"")
+        conf = src / ".config"
+        conf.write_text(
+            conf.read_text().replace("CONFIG_LTO_CLANG_THIN=y", "CONFIG_LTO_NONE=y")
+        )
+        return _FakeProcess(returncode=0)
+
+    monkeypatch.setattr(build_mod.subprocess, "run", _olddefconfig_drops_lto)
+    with pytest.raises(ValueError, match="did not survive olddefconfig"):
+        prepare(
+            source_dir=src,
+            config_path=cfg,
+            snapshot_dir=snap,
+            compiler="llvm",
+            lto="thin",
+        )

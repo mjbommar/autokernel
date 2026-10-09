@@ -32,6 +32,7 @@ import json
 import os
 import shutil
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -50,6 +51,7 @@ from autokernel import install as install_mod
 from autokernel import installdeps as installdeps_mod
 from autokernel import llm as llm_mod
 from autokernel import nvidia as nvidia_mod
+from autokernel import patches as patches_mod
 from autokernel import preflight as preflight_mod
 from autokernel import rollback as rollback_mod
 from autokernel import snapshot as snap_mod
@@ -103,6 +105,13 @@ inventory_app = typer.Typer(
     no_args_is_help=True,
 )
 app.add_typer(inventory_app, name="inventory")
+
+patches_app = typer.Typer(
+    add_completion=False,
+    help="Carried kernel patch sets (see `build --patches`).",
+    no_args_is_help=True,
+)
+app.add_typer(patches_app, name="patches")
 
 console = Console()
 err_console = Console(stderr=True)
@@ -1207,9 +1216,23 @@ def build(
         str,
         typer.Option(
             "--lto",
-            help="Link-time optimization. 'none' (default, fastest builds), 'thin' (clang thin-LTO; +5-10% throughput, +30% build), 'full' (clang full-LTO; +5-12%, +200% build).",
+            help="Link-time optimization, set as the Kconfig choice (CONFIG_LTO_CLANG_THIN/FULL); requires --compiler llvm. 'none' (default) keeps whatever final.config selects; 'thin' builds ~20-30% slower; 'full' much slower. Measure gains per host.",
         ),
     ] = "none",
+    patch_sets: Annotated[
+        str | None,
+        typer.Option(
+            "--patches",
+            help="Comma-separated patch sets to apply (see `autokernel patches list`). Applied with `git am` onto a new autokernel/<ts> branch at the source tree's HEAD; recorded in <logdir>/build.json.",
+        ),
+    ] = None,
+    patches_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--patches-dir",
+            help="Patch set root (default: $AUTOKERNEL_PATCHES_DIR or <repo>/patches).",
+        ),
+    ] = None,
 ) -> None:
     """Drop final.config into a kernel source tree, run olddefconfig, optionally build."""
     _validate_snapshot_dir(snapshot_dir)
@@ -1249,6 +1272,41 @@ def build(
             exit_code=2,
         )
 
+    if lto != "none" and compiler != "llvm":
+        raise err.fail(
+            f"--lto={lto} needs --compiler=llvm",
+            why="kernel LTO is only selectable with the full LLVM toolchain (ld.lld, llvm-ar, llvm-nm)",
+            fix=f"add --compiler llvm (e.g. `autokernel build {snapshot_dir} --compiler llvm --lto {lto} ...`)",
+            exit_code=2,
+        )
+
+    # ── patch sets ───────────────────────────────────────────────────────
+    applied: patches_mod.ApplyResult | None = None
+    patch_config: dict[str, str] = {}
+    if patch_sets:
+        names = [n.strip() for n in patch_sets.split(",") if n.strip()]
+        try:
+            sets = patches_mod.resolve(names, patches_dir)
+            patch_config = patches_mod.merged_config(sets)
+            console.print(
+                f"[dim]applying patch sets {', '.join(names)} to {kernel_source}…[/dim]"
+            )
+            applied = patches_mod.apply(sets, kernel_source)
+        except patches_mod.PatchError as e:
+            outcomes = getattr(e, "outcomes", None)
+            if outcomes:
+                _render_patch_outcomes(outcomes)
+            raise err.fail(
+                str(e),
+                why="the source tree must be a clean git work tree and every patch must apply (or already be present)",
+                fix=f"`autokernel patches check --kernel-source {kernel_source} {' '.join(names)}` to dry-run; refresh the patch for this kernel version",
+                exit_code=2,
+            ) from None
+        _render_patch_outcomes(applied.outcomes)
+        console.print(
+            f"[dim]patched tree is on branch {applied.branch} ({applied.head_commit[:12]})[/dim]"
+        )
+
     # ── prepare ──────────────────────────────────────────────────────────
     if localmodconfig:
         lsmod_path = snapshot_dir / "lsmod"
@@ -1274,12 +1332,24 @@ def build(
             lsmod_path=lsmod_path,
             compiler=compiler,
             lto=lto,
+            config_overrides=patch_config,
         )
     except FileNotFoundError as e:
         err_console.print(f"[red]{e}[/red]")
         raise typer.Exit(1) from None
+    except ValueError as e:
+        raise err.fail(str(e), exit_code=2) from None
 
     _render_step_results("prepare", prep.steps, prep.log_dir)
+    _write_build_record(
+        prep.log_dir,
+        kernel_source=prep.source_dir,
+        snapshot_dir=snapshot_dir,
+        compiler=compiler,
+        lto=lto,
+        applied=applied,
+        patch_config=patch_config,
+    )
 
     if not prep.ok:
         err_console.print("[red]olddefconfig failed — see log dir.[/red]")
@@ -1325,6 +1395,12 @@ def build(
         err_console.print("[red]build failed — see log dir.[/red]")
         raise typer.Exit(bres.steps[-1].exit_code)
 
+    _update_build_record(
+        bres.log_dir,
+        kernel_release=_read_kernel_release(bres.source_dir),
+        artifacts=[str(p) for p in bres.deb_paths],
+    )
+
     if bres.deb_paths:
         body = "\n".join(f"  {p}" for p in bres.deb_paths)
         console.print(
@@ -1351,6 +1427,89 @@ def build(
         err_console.print(
             "[yellow]build returned 0 but no linux-*.deb found in source parent[/yellow]"
         )
+
+
+_PATCH_RESULT_STYLE = {
+    "applied": "green",
+    "would-apply": "green",
+    "present": "cyan",
+    "conflict": "red",
+}
+
+
+def _render_patch_outcomes(outcomes: list[patches_mod.PatchOutcome]) -> None:
+    t = Table(title="patch sets", header_style="bold")
+    t.add_column("set")
+    t.add_column("patch")
+    t.add_column("result", justify="center")
+    t.add_column("upstream")
+    for o in outcomes:
+        style = _PATCH_RESULT_STYLE.get(o.result, "white")
+        t.add_row(
+            o.set_name,
+            o.subject or o.file,
+            f"[{style}]{o.result}[/{style}]",
+            o.status + (f" {o.link}" if o.link else ""),
+        )
+    console.print(t)
+
+
+def _git_head(source_dir: Path) -> str | None:
+    if not (Path(source_dir) / ".git").exists():  # tarball / apt-get source trees
+        return None
+    proc = subprocess.run(
+        ["git", "-C", str(source_dir), "rev-parse", "HEAD"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return proc.stdout.strip() if proc.returncode == 0 else None
+
+
+def _read_kernel_release(source_dir: Path) -> str | None:
+    p = Path(source_dir) / "include" / "config" / "kernel.release"
+    return p.read_text().strip() if p.exists() else None
+
+
+def _write_build_record(
+    log_dir: Path,
+    *,
+    kernel_source: Path,
+    snapshot_dir: Path,
+    compiler: str,
+    lto: str,
+    applied: patches_mod.ApplyResult | None,
+    patch_config: dict[str, str] | None = None,
+) -> Path:
+    """Provenance for this build: source commit, carried patches, toolchain."""
+    try:
+        version = str(patches_mod.source_version(kernel_source))
+    except (patches_mod.PatchError, OSError):
+        version = None
+    record: dict[str, object] = {
+        "schema": 1,
+        "created_at": datetime.now(UTC).isoformat(),
+        "snapshot": str(Path(snapshot_dir).resolve()),
+        "kernel_source": str(kernel_source),
+        "kernel_version": version,
+        "source_commit": _git_head(kernel_source),
+        "compiler": compiler,
+        "lto": lto,
+        "patches": applied.provenance() if applied else None,
+        "patch_config": patch_config or None,
+    }
+    path = Path(log_dir) / "build.json"
+    path.write_text(json.dumps(record, indent=2) + "\n")
+    return path
+
+
+def _update_build_record(log_dir: Path, **fields: object) -> None:
+    path = Path(log_dir) / "build.json"
+    if not path.exists():
+        return
+    record = json.loads(path.read_text())
+    record.update(fields)
+    path.write_text(json.dumps(record, indent=2) + "\n")
 
 
 def _render_step_results(label: str, steps: list, log_dir: Path) -> None:
@@ -3948,3 +4107,83 @@ def _main() -> None:
 
 if __name__ == "__main__":
     _main()
+
+
+# ── patches ──────────────────────────────────────────────────────────────────
+
+
+@patches_app.command("list")
+def patches_list_cmd(
+    patches_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--patches-dir",
+            help="Patch set root (default: $AUTOKERNEL_PATCHES_DIR or <repo>/patches).",
+        ),
+    ] = None,
+) -> None:
+    """List available patch sets, their kind, version range, and per-patch upstream status."""
+    root = patches_dir or patches_mod.default_root()
+    try:
+        sets = patches_mod.discover(root)
+    except patches_mod.PatchError as e:
+        raise err.fail(str(e), exit_code=2) from None
+    if not sets:
+        console.print(f"[yellow]no patch sets under {root}[/yellow]")
+        return
+    t = Table(title=f"patch sets in {root}", header_style="bold")
+    t.add_column("set")
+    t.add_column("kind")
+    t.add_column("kernels")
+    t.add_column("patch")
+    t.add_column("upstream")
+    for ps in sets:
+        for i, p in enumerate(ps.patches):
+            m = ps.meta.get(p.name, patches_mod.PatchMeta())
+            t.add_row(
+                ps.name if i == 0 else "",
+                ps.kind if i == 0 else "",
+                ps.version_range if i == 0 else "",
+                p.name,
+                m.status + (f" {m.link}" if m.link else ""),
+            )
+    console.print(t)
+
+
+@patches_app.command("check")
+def patches_check_cmd(
+    names: Annotated[
+        list[str], typer.Argument(help="Patch set names, in application order.")
+    ],
+    kernel_source: Annotated[
+        Path,
+        typer.Option(
+            "--kernel-source",
+            help="Kernel source git work tree to test against (HEAD).",
+        ),
+    ],
+    patches_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--patches-dir",
+            help="Patch set root (default: $AUTOKERNEL_PATCHES_DIR or <repo>/patches).",
+        ),
+    ] = None,
+) -> None:
+    """Dry-run patch sets against a source tree's HEAD in a throwaway worktree."""
+    try:
+        sets = patches_mod.resolve(names, patches_dir)
+        version = patches_mod.source_version(kernel_source)
+        outcomes = patches_mod.check(sets, kernel_source)
+    except patches_mod.PatchError as e:
+        raise err.fail(str(e), exit_code=2) from None
+    for ps in sets:
+        if not ps.applies_to(version):
+            err_console.print(
+                f"[yellow]note:[/yellow] {ps.name} declares kernels "
+                f"{ps.version_range}; tree is {version}"
+            )
+    _render_patch_outcomes(outcomes)
+    if any(o.result == "conflict" for o in outcomes):
+        raise typer.Exit(1)
+    console.print(f"[green]✓ applies to {version}[/green]")

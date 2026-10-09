@@ -370,7 +370,8 @@ so reruns are free.
 | `review DIR --rules…` | Bulk-decision rules over `needs_review` | `DIR/review.json` + `DIR/auto.kfrag` |
 | `apply DIR` | Merge kfrag into running `.config`, validate load-bearing | `DIR/final.config` |
 | `fetch-source [--method=…]` | Distro-aware kernel source acquisition | a kernel source tree |
-| `build DIR --kernel-source PATH [--compiler=clang] [--lto=thin] [--target=kernel-only] [--localmodconfig] [--execute]` | Drop config + olddefconfig; `--localmodconfig` trims modules to host's lsmod; `--target=kernel-only` skips packaging (just `make bzImage modules`); `--execute` compiles | logs + (`--execute`) bzImage / `.deb`/`.rpm`/`.tar.zst` |
+| `build DIR --kernel-source PATH [--compiler=clang] [--lto=thin] [--patches=SET,...] [--target=kernel-only] [--localmodconfig] [--execute]` | Apply carried patch sets (git am onto a new branch), drop config + olddefconfig; `--lto` sets `CONFIG_LTO_CLANG_*` and needs `--compiler=llvm`; `--localmodconfig` trims modules to host's lsmod; `--target=kernel-only` skips packaging (just `make bzImage modules`); `--execute` compiles | logs + `build.json` provenance + (`--execute`) bzImage / `.deb`/`.rpm`/`.tar.zst` |
+| `patches list` / `patches check SET... --kernel-source PATH` | List carried patch sets (kind, kernel range, upstream status) / dry-run them against a tree. See [docs/PATCHES.md](docs/PATCHES.md) | table; exit 1 on conflict |
 | `iterate DIR --kernel-source PATH [--preset=NAME] [--max-iterations=N] [--target=size]` | Closed-loop optimizer — propose → check → apply → build → boot-test for N rounds; history (with fitness trend) feeds the next round | `DIR/iterations/i<NNN>/` per round |
 | `minitram DIR [--dropbear] [--execute]` | Build a per-host minimal initramfs from snapshot evidence (LUKS / LVM / RAID / DKMS / fs detected). Pure deterministic | `DIR/initramfs.cpio.zst` (~3-5 MB) |
 

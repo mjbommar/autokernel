@@ -1,0 +1,40 @@
+From 557133ad57a28afa27a748965acb3dfbf0eef4f0 Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Tue, 17 Feb 2026 08:54:10 -0700
+Subject: [PATCH 8/8] UBUNTU: SAUCE: apparmor5.0.0 [49/57]: apparmor: change
+ fn_label_build() call to not return NULL
+
+BugLink: http://bugs.launchpad.net/bugs/2142956
+
+Previously fn_label_build() was accepting a NULL which represented
+ENOMEM return and ERR_PTR for errors.
+
+Clean this up by requiring the cb fn to return an ERR_PTR or valid
+value.
+
+Reviewed-by: Georgia Garcia <georgia.garcia@canonical.com>
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+[ported to v7.3-rc6: only the security/apparmor/task.c hunk is carried; the fn_label_build() changes to include/lib.h and domain.c are superseded by upstream v7.3 (fn_label_build already returns ERR_PTR(-ENOMEM) and documents NULL as 'no transition'); Ubuntu commit adcda1e2bd6c]
+---
+ security/apparmor/task.c | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/security/apparmor/task.c b/security/apparmor/task.c
+index ef578c319..2c840c691 100644
+--- a/security/apparmor/task.c
++++ b/security/apparmor/task.c
+@@ -529,6 +529,11 @@ struct aa_label *aa_profile_ns_perm(struct aa_profile *profile,
+ 	if (error) {
+ 		aa_put_label(new);
+ 		return ERR_PTR(error);
++	} else if (!new) {
++		/* would only happen if complain mode changed error,
++		 * which should not happen.
++		 */
++		return ERR_PTR(ad->error);
+ 	}
+ 	return new;
+ }
+-- 
+2.53.0
+

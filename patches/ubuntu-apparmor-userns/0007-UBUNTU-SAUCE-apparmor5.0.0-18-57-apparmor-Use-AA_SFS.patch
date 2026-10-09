@@ -1,0 +1,54 @@
+From c7eea73536679fcd9b693e207f9b0b20a0c209b5 Mon Sep 17 00:00:00 2001
+From: Ryan Lee <ryan.lee@canonical.com>
+Date: Fri, 14 Mar 2025 11:33:38 -0700
+Subject: [PATCH 7/8] UBUNTU: SAUCE: apparmor5.0.0 [18/57]: apparmor: Use
+ AA_SFS_FILE_BOOLEAN_INTPRINT for userns and io_uring sysctls
+
+BugLink: http://bugs.launchpad.net/bugs/2028253
+
+These two sysctls used to be INTPTRs, before being changed to BOOLEANs.
+Now that their values are hardcoded, switch to the new BOOLEAN_INTPRINT
+type to preserve backwards compatibility upon reads of the values.
+
+Before this patchset:
+$ cat /sys/kernel/security/apparmor/features/policy/unconfined_restrictions/userns
+yes
+
+After this patchset (matching the old behavior):
+$ cat /sys/kernel/security/apparmor/features/policy/unconfined_restrictions/userns
+1
+
+This does not have a fixes tag because:
+  This addresses a behavior change introduced by the revert to fix
+  https://bugs.launchpad.net/bugs/2095370. The reverted patch was never
+  landed in Plucky, but the interface behavior that was a result of the
+  revert does exist in plucky.
+
+BugLink: http://bugs.launchpad.net/bugs/2102680
+Signed-off-by: Ryan Lee <ryan.lee@canonical.com>
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+Signed-off-by: Paolo Pisati <paolo.pisati@canonical.com>
+[ported to v7.3-rc6: io_uring entry dropped since Ubuntu io_uring mediation ([16/57]) is not part of this series; only the userns entry is converted; Ubuntu commit dc440e59ca2f]
+---
+ security/apparmor/apparmorfs.c | 5 ++++-
+ 1 file changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/security/apparmor/apparmorfs.c b/security/apparmor/apparmorfs.c
+index adf8f7ddc..099042efe 100644
+--- a/security/apparmor/apparmorfs.c
++++ b/security/apparmor/apparmorfs.c
+@@ -2611,7 +2611,10 @@ static struct aa_sfs_entry aa_sfs_entry_domain[] = {
+ 
+ static struct aa_sfs_entry aa_sfs_entry_unconfined[] = {
+ 	AA_SFS_FILE_BOOLEAN("change_profile", 1),
+-	AA_SFS_FILE_BOOLEAN("userns",		1),
++	/* Retain backwards compatibility with Ubuntu userspace
++	 * code that is expecting integer values for these sysctls
++	 */
++	AA_SFS_FILE_BOOLEAN_INTPRINT("userns",		1),
+ 	{ }
+ };
+ 
+-- 
+2.53.0
+

@@ -1,0 +1,145 @@
+From 7be79ba28dcdaf5c5df3780677cea8f8e097a46d Mon Sep 17 00:00:00 2001
+From: John Johansen <john.johansen@canonical.com>
+Date: Fri, 9 Sep 2022 16:00:09 -0700
+Subject: [PATCH 1/8] UBUNTU: SAUCE: apparmor5.0.0 [9/57]: apparmor: userns:
+ add unprivileged user ns mediation
+
+BugLink: http://bugs.launchpad.net/bugs/2028253
+
+Unprivileged user namespace creation is often used as a first step
+in privilege escalation attacks. Instead of disabling it at the
+sysrq level, which blocks its legitimate use as for setting up a sandbox,
+allow control on a per domain basis.
+
+This allows an admin to quickly lock down a system while also still
+allowing legitimate use.
+
+Signed-off-by: John Johansen <john.johansen@canonical.com>
+(cherry picked from https://gitlab.com/jjohansen/apparmor-kernel)
+Signed-off-by: Andrea Righi <andrea.righi@canonical.com>
+[ported to v7.3-rc6: context fixup in apparmor_userns_create() for begin_current_label_crit_section(&needput); Ubuntu commit 1440f200b035]
+---
+ security/apparmor/Kconfig          | 12 ++++++++++++
+ security/apparmor/include/policy.h |  1 +
+ security/apparmor/lsm.c            | 11 ++++++++++-
+ security/apparmor/policy.c         |  1 +
+ security/apparmor/task.c           | 16 ++++++++++------
+ 5 files changed, 34 insertions(+), 7 deletions(-)
+
+diff --git a/security/apparmor/Kconfig b/security/apparmor/Kconfig
+index a1f3749bd..12f857a27 100644
+--- a/security/apparmor/Kconfig
++++ b/security/apparmor/Kconfig
+@@ -116,6 +116,18 @@ config SECURITY_APPARMOR_PARANOID_LOAD
+ 	  includes policy, and has some form of integrity check.
+ 	  Disabling the check will speed up policy loads.
+ 
++config SECURITY_APPARMOR_RESTRICT_USERNS
++	bool "Restrict user namespace creation to confined domains"
++	depends on SECURITY_APPARMOR && USER_NS
++	default y
++	help
++	  This options allows controlling whether apparmor restricts
++	  the creation of new user namespaces to confined tasks by
++	  default. If set unconfined tasks without CAP_SYS_ADMIN
++	  will not be allowed to create new user namespaces. Confined
++	  tasks ability to create new user namespaces will be controlled
++	  by their profile.
++
+ config SECURITY_APPARMOR_KUNIT_TEST
+ 	tristate "Build KUnit tests for policy_unpack.c" if !KUNIT_ALL_TESTS
+ 	depends on KUNIT && SECURITY_APPARMOR
+diff --git a/security/apparmor/include/policy.h b/security/apparmor/include/policy.h
+index 0dcbf8cf1..71e4d9486 100644
+--- a/security/apparmor/include/policy.h
++++ b/security/apparmor/include/policy.h
+@@ -33,6 +33,7 @@
+ struct aa_ns;
+ 
+ extern int unprivileged_userns_apparmor_policy;
++extern int aa_unprivileged_userns_restricted;
+ extern int aa_unprivileged_unconfined_restricted;
+ 
+ extern const char *const aa_profile_mode_names[];
+diff --git a/security/apparmor/lsm.c b/security/apparmor/lsm.c
+index d502ad0ac..3880c7c04 100644
+--- a/security/apparmor/lsm.c
++++ b/security/apparmor/lsm.c
+@@ -1059,7 +1059,7 @@ static int apparmor_userns_create(const struct cred *cred)
+ 	ad.subj_cred = current_cred();
+ 
+ 	label = begin_current_label_crit_section(&needput);
+-	if (!unconfined(label)) {
++	if (aa_unprivileged_userns_restricted || !unconfined(label)) {
+ 		error = fn_for_each(label, profile,
+ 				    aa_profile_ns_perm(profile, &ad,
+ 						       AA_USERNS_CREATE));
+@@ -2446,6 +2446,15 @@ static const struct ctl_table apparmor_sysctl_table[] = {
+ 		.mode           = 0600,
+ 		.proc_handler   = apparmor_dointvec,
+ 	},
++#ifdef CONFIG_USER_NS
++	{
++		.procname       = "apparmor_restrict_unprivileged_userns",
++		.data           = &aa_unprivileged_userns_restricted,
++		.maxlen         = sizeof(int),
++		.mode           = 0644,
++		.proc_handler   = apparmor_dointvec,
++	},
++#endif /* CONFIG_USER_NS */
+ 	{
+ 		.procname       = "apparmor_restrict_unprivileged_unconfined",
+ 		.data           = &aa_unprivileged_unconfined_restricted,
+diff --git a/security/apparmor/policy.c b/security/apparmor/policy.c
+index 397f9ff78..8eb12aaf4 100644
+--- a/security/apparmor/policy.c
++++ b/security/apparmor/policy.c
+@@ -89,6 +89,7 @@
+ #include "include/resource.h"
+ 
+ int unprivileged_userns_apparmor_policy = 1;
++int aa_unprivileged_userns_restricted = IS_ENABLED(CONFIG_SECURITY_APPARMOR_RESTRICT_USERNS);
+ int aa_unprivileged_unconfined_restricted;
+ 
+ const char *const aa_profile_mode_names[] = {
+diff --git a/security/apparmor/task.c b/security/apparmor/task.c
+index e16ff4130..9d9eedf42 100644
+--- a/security/apparmor/task.c
++++ b/security/apparmor/task.c
+@@ -376,12 +376,18 @@ int aa_profile_ns_perm(struct aa_profile *profile,
+ 		       u32 request)
+ {
+ 	struct aa_perms perms = { };
+-	int error = 0;
+ 
+ 	ad->subj_label = &profile->label;
+ 	ad->request = request;
+ 
+-	if (!profile_unconfined(profile)) {
++	if (profile_unconfined(profile)) {
++		if (!aa_unprivileged_userns_restricted ||
++		    ns_capable_noaudit(current_user_ns(), CAP_SYS_ADMIN))
++			return 0;
++
++		ad->info = "User namespace creation restricted";
++		/* don't just return: allow complain mode to override */
++	} else {
+ 		struct aa_ruleset *rules = profile->label.rules[0];
+ 		aa_state_t state;
+ 
+@@ -390,10 +396,8 @@ int aa_profile_ns_perm(struct aa_profile *profile,
+ 			/* TODO: add flag to complain about unmediated */
+ 			return 0;
+ 		perms = *aa_lookup_perms(rules->policy, state);
+-		aa_apply_modes_to_perms(profile, &perms);
+-		error = aa_check_perms(profile, &perms, request, ad,
+-				       audit_ns_cb);
+ 	}
+ 
+-	return error;
++	aa_apply_modes_to_perms(profile, &perms);
++	return aa_check_perms(profile, &perms, request, ad, audit_ns_cb);
+ }
+-- 
+2.53.0
+
