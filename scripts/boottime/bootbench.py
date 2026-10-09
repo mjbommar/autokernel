@@ -17,10 +17,13 @@ Usage:
   bootbench.py --img IMG [-n 7] [--append "quiet ..."] [--label L] [--chain]
   bootbench.py --ab IMG --base "" --opt "quiet mitigations=off" -n 7
 """
+
 from __future__ import annotations
 import argparse, os, re, select, statistics, subprocess, sys, time
 
-KERNEL_DEFAULT = "/nas4/data/autokernel/world/ring0-clang2/image/vmlinuz-7.0.0-22-generic"
+KERNEL_DEFAULT = (
+    "/nas4/data/autokernel/world/ring0-clang2/image/vmlinuz-7.0.0-22-generic"
+)
 ANSI = re.compile(rb"\x1b\[[0-9;?]*[a-zA-Z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[=>]")
 _FINISH = re.compile(
     r"Startup finished in ([\d.]+)(m?s) \(kernel\)"
@@ -33,23 +36,43 @@ def _sec(num: str, unit: str) -> float:
     return float(num) / 1000.0 if unit == "ms" else float(num)
 
 
-def boot_once(img, kernel, append, timeout=45, chain=False, mem=2048, smp=2,
-              machine=None, qemu_extra=None, minimal=False):
+def boot_once(
+    img,
+    kernel,
+    append,
+    timeout=45,
+    chain=False,
+    mem=2048,
+    smp=2,
+    machine=None,
+    qemu_extra=None,
+    minimal=False,
+):
     import shlex as _shlex
+
     cmdline = f"root=/dev/vda rw console=ttyS0 systemd.unit=multi-user.target {append}".strip()
     args = ["qemu-system-x86_64"]
     args += ["-machine", f"{machine},accel=kvm"] if machine else ["-enable-kvm"]
     args += ["-cpu", "host", "-m", str(mem), "-smp", str(smp)]
     # minimal: drop QEMU's legacy default devices (VGA/floppy/parallel/NIC…) so
     # the kernel probes fewer devices and udev coldplugs faster; re-add serial.
-    args += (["-nodefaults", "-display", "none", "-serial", "mon:stdio"]
-             if minimal else ["-nographic"])
+    args += (
+        ["-nodefaults", "-display", "none", "-serial", "mon:stdio"]
+        if minimal
+        else ["-nographic"]
+    )
     args += ["-no-reboot", "-kernel", kernel, "-append", cmdline]
     if qemu_extra:
         args += _shlex.split(qemu_extra)
     args += ["-drive", f"file={img},if=virtio,format=raw,cache=unsafe"]
-    p = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                         stderr=subprocess.STDOUT, bufsize=0)
+    p = subprocess.Popen(
+        args,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        bufsize=0,
+    )
+    assert p.stdin is not None and p.stdout is not None  # both are PIPE
     buf = b""
     t0 = time.time()
     synced = False
@@ -83,7 +106,8 @@ def boot_once(img, kernel, append, timeout=45, chain=False, mem=2048, smp=2,
                 try:
                     p.stdin.write(
                         b"TERM=dumb; echo AK''BEGIN; systemd-analyze time"
-                        + extra.encode() + b"; echo AK''DONE\n"
+                        + extra.encode()
+                        + b"; echo AK''DONE\n"
                     )
                     p.stdin.flush()
                 except BrokenPipeError:
@@ -112,7 +136,7 @@ def boot_once(img, kernel, append, timeout=45, chain=False, mem=2048, smp=2,
     k = _sec(m.group(1), m.group(2))
     u = _sec(m.group(5), m.group(6))
     tot = _sec(m.group(7), m.group(8))
-    out = {"kernel": k, "userspace": u, "total": tot}
+    out: dict[str, float | str | None] = {"kernel": k, "userspace": u, "total": tot}
     if chain:
         cm = re.search(r"(The time when unit.*?)\nAKDONE", text, re.S)
         out["chain"] = cm.group(1).strip() if cm else None
@@ -132,23 +156,30 @@ def series(img, kernel, append, n, chain_first=False, warmup=1, **kw):
             chain = r.get("chain")
         if i >= warmup:  # drop warmup run(s)
             runs.append(r)
-            print(f"  run {i-warmup+1}/{n}: total={r['total']*1000:.0f}ms "
-                  f"(kernel {r['kernel']*1000:.0f} + userspace {r['userspace']*1000:.0f})")
+            print(
+                f"  run {i - warmup + 1}/{n}: total={r['total'] * 1000:.0f}ms "
+                f"(kernel {r['kernel'] * 1000:.0f} + userspace {r['userspace'] * 1000:.0f})"
+            )
     return runs, chain
 
 
 def stats(runs, key="total"):
     xs = sorted(r[key] for r in runs)
     return {
-        "n": len(xs), "min": xs[0], "max": xs[-1],
-        "median": statistics.median(xs), "mean": statistics.mean(xs),
+        "n": len(xs),
+        "min": xs[0],
+        "max": xs[-1],
+        "median": statistics.median(xs),
+        "mean": statistics.mean(xs),
         "stdev": statistics.pstdev(xs) if len(xs) > 1 else 0.0,
     }
 
 
 def fmt(s):
-    return (f"median={s['median']*1000:.0f}ms  min={s['min']*1000:.0f}ms  "
-            f"mean={s['mean']*1000:.0f}±{s['stdev']*1000:.0f}ms  (n={s['n']})")
+    return (
+        f"median={s['median'] * 1000:.0f}ms  min={s['min'] * 1000:.0f}ms  "
+        f"mean={s['mean'] * 1000:.0f}±{s['stdev'] * 1000:.0f}ms  (n={s['n']})"
+    )
 
 
 def main():
@@ -162,22 +193,33 @@ def main():
     ap.add_argument("--ab", help="second append string to A/B against --append")
     ap.add_argument("--machine", default=None, help="QEMU -machine type (e.g. q35)")
     ap.add_argument("--qemu-extra", default=None, dest="qemu_extra")
-    ap.add_argument("--minimal", action="store_true",
-                    help="-nodefaults: drop legacy emulated devices")
+    ap.add_argument(
+        "--minimal",
+        action="store_true",
+        help="-nodefaults: drop legacy emulated devices",
+    )
     ap.add_argument("--smp", type=int, default=2)
     ap.add_argument("--mem", type=int, default=2048)
     args = ap.parse_args()
-    kw = dict(machine=args.machine, qemu_extra=args.qemu_extra,
-              minimal=args.minimal, smp=args.smp, mem=args.mem)
+    kw = dict(
+        machine=args.machine,
+        qemu_extra=args.qemu_extra,
+        minimal=args.minimal,
+        smp=args.smp,
+        mem=args.mem,
+    )
 
-    print(f"== {args.label}: append='{args.append}'  machine={args.machine} "
-          f"minimal={args.minimal} extra={args.qemu_extra} ==")
-    runs, chain = series(args.img, args.kernel, args.append, args.n,
-                         chain_first=args.chain, **kw)
+    print(
+        f"== {args.label}: append='{args.append}'  machine={args.machine} "
+        f"minimal={args.minimal} extra={args.qemu_extra} =="
+    )
+    runs, chain = series(
+        args.img, args.kernel, args.append, args.n, chain_first=args.chain, **kw
+    )
     s = stats(runs)
     print(f"  TOTAL     {fmt(s)}")
-    print(f"  kernel    {fmt(stats(runs,'kernel'))}")
-    print(f"  userspace {fmt(stats(runs,'userspace'))}")
+    print(f"  kernel    {fmt(stats(runs, 'kernel'))}")
+    print(f"  userspace {fmt(stats(runs, 'userspace'))}")
     if chain:
         print("  -- critical-chain --")
         for line in chain.splitlines()[:14]:
@@ -189,8 +231,10 @@ def main():
         s2 = stats(runs2)
         print(f"  TOTAL     {fmt(s2)}")
         base, opt = s["median"], s2["median"]
-        print(f"\n  Δ median: {base*1000:.0f}ms -> {opt*1000:.0f}ms  "
-              f"= {(base-opt)/base*100:+.1f}%  ({'PASS' if opt<=0.9*base else 'short of -10%'})")
+        print(
+            f"\n  Δ median: {base * 1000:.0f}ms -> {opt * 1000:.0f}ms  "
+            f"= {(base - opt) / base * 100:+.1f}%  ({'PASS' if opt <= 0.9 * base else 'short of -10%'})"
+        )
 
 
 if __name__ == "__main__":

@@ -412,9 +412,7 @@ def test_connection(config: LLMConfig, *, prompt: str = "ok") -> ConnectionResul
     try:
         from pydantic_ai import Agent
 
-        settings = build_model_settings(
-            config.model, service_tier=config.service_tier
-        )
+        settings = build_model_settings(config.model, service_tier=config.service_tier)
 
         agent = Agent(
             config.model,

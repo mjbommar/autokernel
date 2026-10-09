@@ -46,7 +46,7 @@ def _make_conditional_dep_source(tmp_path: Path) -> Path:
     (drv / "Kconfig").write_text(
         'config USB\n\tbool "USB host"\n'
         'config USB_GADGET\n\tbool "USB gadget"\n'
-        'config USB_CDNS_SUPPORT\n'
+        "config USB_CDNS_SUPPORT\n"
         '\tbool "Cadence USB"\n'
         "\tdepends on USB if !USB_GADGET\n"
         "\tdepends on (USB && USB_GADGET) if (USB || USB_GADGET)\n"

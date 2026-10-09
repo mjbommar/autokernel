@@ -451,7 +451,9 @@ def test_apply_patches_native_applies_to_tree(tmp_path):
     (tree / "debian" / "source" / "format").write_text("3.0 (native)\n")
     (tree / "foo.c").write_text("int x = 1;\n")
     patch = tmp_path / "fix.patch"
-    patch.write_text("--- a/foo.c\n+++ b/foo.c\n@@ -1 +1 @@\n-int x = 1;\n+int x = 2;\n")
+    patch.write_text(
+        "--- a/foo.c\n+++ b/foo.c\n@@ -1 +1 @@\n-int x = 1;\n+int x = 2;\n"
+    )
     ok, detail = builder_mod.apply_patches(tree, [str(patch)])
     assert ok and "native" in detail
     assert (tree / "foo.c").read_text() == "int x = 2;\n"  # applied to tree

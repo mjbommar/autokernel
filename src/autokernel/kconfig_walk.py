@@ -233,7 +233,7 @@ _COND_DEP_PATCH_FLAG = "_autokernel_conditional_depends"
 _cond_dep_patch_state: bool | None = None
 
 
-def _patched_expect_expr_and_eol(self):  # type: ignore[no-untyped-def]
+def _patched_expect_expr_and_eol(self):
     # Drop-in for ``Kconfig._expect_expr_and_eol``. ``_parse_cond`` consumes an
     # optional trailing ``if <cond>`` (returning ``self.y`` when absent) and
     # performs the end-of-line check — the same contract the original helper
@@ -294,7 +294,7 @@ def _ensure_conditional_depends_support() -> bool:
     if _installed_kconfiglib_handles_conditional_deps():
         _cond_dep_patch_state = True
         return True
-    kconfiglib.Kconfig._expect_expr_and_eol = _patched_expect_expr_and_eol
+    setattr(kconfiglib.Kconfig, "_expect_expr_and_eol", _patched_expect_expr_and_eol)
     setattr(kconfiglib.Kconfig, _COND_DEP_PATCH_FLAG, True)
     _cond_dep_patch_state = True
     return True
