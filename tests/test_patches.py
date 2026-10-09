@@ -159,9 +159,8 @@ def test_apply_creates_branch_and_provenance(tmp_path):
     assert res.ok and res.base_commit == base and res.head_commit != base
     assert _git(repo, "rev-parse", "--abbrev-ref", "HEAD").strip() == "autokernel/test"
     assert "long usage" in (repo / "domain.h").read_text()
-    prov = res.provenance()
-    assert prov["kernel_version"] == "7.3-rc6"
-    (o,) = prov["patches"]
+    assert res.provenance()["kernel_version"] == "7.3-rc6"
+    (o,) = [x.as_dict() for x in res.outcomes]
     assert o["result"] == "applied" and o["subject"] == "widen usage"
     assert o["status"] == "posted" and len(o["sha256"]) == 64
 

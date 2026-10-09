@@ -53,7 +53,15 @@ _GIT_IDENT = ["-c", "user.name=autokernel", "-c", "user.email=autokernel@localho
 
 
 class PatchError(Exception):
-    """A patch set is malformed or could not be applied."""
+    """A patch set is malformed or could not be applied.
+
+    ``outcomes`` is set when application stopped on a conflict, so callers
+    can show which patches applied before it.
+    """
+
+    def __init__(self, message: str, outcomes: list[PatchOutcome] | None = None):
+        super().__init__(message)
+        self.outcomes: list[PatchOutcome] = outcomes or []
 
 
 # ── kernel versions ─────────────────────────────────────────────────────────
@@ -457,11 +465,10 @@ def apply(
         _git(source_dir, "checkout", "-q", orig_ref, check=False)
         _git(source_dir, "branch", "-q", "-D", branch, check=False)
         bad = next(o for o in outcomes if o.result == "conflict")
-        err = PatchError(
-            f"{bad.set_name}/{bad.file} does not apply to {kv} ({base[:12]}): {bad.detail}"
+        raise PatchError(
+            f"{bad.set_name}/{bad.file} does not apply to {kv} ({base[:12]}): {bad.detail}",
+            outcomes,
         )
-        err.outcomes = outcomes  # type: ignore[attr-defined]
-        raise err
     return result
 
 

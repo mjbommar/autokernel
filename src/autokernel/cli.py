@@ -1293,9 +1293,8 @@ def build(
             )
             applied = patches_mod.apply(sets, kernel_source)
         except patches_mod.PatchError as e:
-            outcomes = getattr(e, "outcomes", None)
-            if outcomes:
-                _render_patch_outcomes(outcomes)
+            if e.outcomes:
+                _render_patch_outcomes(e.outcomes)
             raise err.fail(
                 str(e),
                 why="the source tree must be a clean git work tree and every patch must apply (or already be present)",
