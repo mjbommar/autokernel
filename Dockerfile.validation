@@ -11,6 +11,7 @@ RUN apt-get update \
         curl \
         git \
         lld \
+        patch \
         qemu-system-x86 \
         shellcheck \
     && rm -rf /var/lib/apt/lists/*
