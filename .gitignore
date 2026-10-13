@@ -45,3 +45,9 @@ kernel-patches-workspace/
 /install-7.3-rc5-candidate.sh
 /setup-scx-lavd.sh
 /tune-runtime.sh
+
+# host-local debugging output (not for the public repo)
+/dmesg-*.txt
+/powertop.csv
+/kernel-*/
+scripts/host/system-trim.UNDO.txt

@@ -1,5 +1,9 @@
 # Roadmap
 
+> **2026-10-13:** the v0.17+ arc below is superseded by
+> [DISTRO_PLAN.md](DISTRO_PLAN.md) (v1 OCI image → v2 bootable hosts → v3
+> configure engine). Kept for history.
+
 The honest framing: **autokernel is becoming "Linux from your
 hardware"** — an LLM-driven generator that takes a host's hardware +
 intent and produces a minimal, fast, secure system tuned to it.
