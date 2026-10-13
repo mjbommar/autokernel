@@ -1,9 +1,12 @@
 description = "Landlock: avoid clang __counted_by miscompile in landlock_domain (FORTIFY panic on nested landlock_restrict_self, e.g. xz 5.8)"
-kind = "upstream-pending"
+kind = "backport"
 # bd3a19800dd1 ("landlock: Add counted_by in landlock_domain") landed in the 7.3 merge window.
 min_version = "7.3-rc1"
+# Upstream fixed it differently (dropped the annotation) in v7.3-rc7:
+# 3d8cc52db2f8 ("landlock: Drop __counted_by from landlock_domain.handled_masks")
+max_version = "7.3-rc7"
 
 [patches."0001-landlock-Move-the-domain-layer-counter-out-of-the-anonymous-union.patch"]
-status = "posted"
+status = "merged"
 link = "https://lore.kernel.org/all/20261007-b4-landlock-fix-domain-fortify-panic-v1-1-042e9108f5f8@oss.qualcomm.com/"
 upstream_subject = "landlock: Move the domain layer counter out of the anonymous union"

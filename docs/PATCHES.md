@@ -68,7 +68,7 @@ status and link. `kernel_release` and the built packages are added after
 
 | set | kind | why |
 |---|---|---|
-| `landlock-counted-by` | upstream-pending | clang miscomputes `__counted_by` for a FAM inside a union in `landlock_domain`; FORTIFY panics on every nested `landlock_restrict_self()` (xz 5.8 triggers it). Fix posted to LKML by Abel Vesa; LLVM fix is llvm-project#228309. |
+| `landlock-counted-by` | backport (merged) | clang miscomputes `__counted_by` for a FAM inside a union in `landlock_domain`; FORTIFY panics on every nested `landlock_restrict_self()` (xz 5.8 triggers it). Only for 7.3-rc1..rc6: v7.3-rc7 fixed it upstream by dropping the annotation ("landlock: Drop __counted_by from landlock_domain.handled_masks"). LLVM fix is llvm-project#228309. |
 | `ubuntu-apparmor-userns` | out-of-tree | Ubuntu SAUCE (apparmor5.0.0 [9-13,17,18,49/57], John Johansen / Ryan Lee) adding `kernel.apparmor_restrict_unprivileged_userns`. Vanilla AppArmor only mediates userns for *confined* tasks, so on an autokernel build any unprivileged process gets full capabilities in a new user namespace (nf_tables etc. reachable). With the set + Ubuntu's `/usr/lib/sysctl.d/10-apparmor.conf`, unconfined tasks are moved to the `unprivileged_userns` profile (no capabilities) while profiled apps (`chrome`, `code`, `slack`, ...) keep `userns`. Requires `SECURITY_APPARMOR_RESTRICT_USERNS=n` like Ubuntu (default-on denies userns before apparmor.service loads the profile, LP#1990064). Verify with `scripts/verify-userns-restrict.sh`. |
 
 Do **not** use `user.max_user_namespaces=0` as a substitute: it breaks
