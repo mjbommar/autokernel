@@ -211,6 +211,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--skip-llm", action="store_true")
     parser.add_argument("--no-deps", action="store_true")
+    parser.add_argument(
+        "--force-dkms",
+        action="store_true",
+        help="Pass --force-dkms to autokernel build (DKMS modules detected)",
+    )
     parser.add_argument("--install", action="store_true")
     parser.add_argument("--reboot", action="store_true")
     parser.add_argument("--yes", "-y", action="store_true")
@@ -284,7 +289,7 @@ def run_command(
     try:
         assert proc.stdout is not None
         for line in proc.stdout:
-            console.print(line.rstrip())
+            console.print(line.rstrip(), markup=False, highlight=False)
         rc = proc.wait()
     except KeyboardInterrupt:
         _terminate_process_tree(proc)
@@ -467,7 +472,11 @@ def _du_sh(path: Path) -> str:
     return result.stdout.split()[0] if result.stdout.split() else "-"
 
 
-def _find_packages(parent: Path) -> list[Path]:
+def _find_packages(parent: Path, release: str | None = None) -> list[Path]:
+    """Built packages under *parent*; with *release*, only that kernel's.
+
+    The kernel cache keeps packages from earlier builds, so without the
+    filter an install would pick up every kernel built there."""
     patterns = (
         "linux-image-*.deb",
         "linux-headers-*.deb",
@@ -478,7 +487,10 @@ def _find_packages(parent: Path) -> list[Path]:
     out: list[Path] = []
     for pattern in patterns:
         out.extend(parent.glob(pattern))
-    return sorted((p for p in out if "-dbg_" not in p.name), key=lambda p: p.name)
+    out = [p for p in out if "-dbg_" not in p.name]
+    if release is not None:
+        out = [p for p in out if f"-{release}_" in p.name or f"-{release}." in p.name]
+    return sorted(out, key=lambda p: p.name)
 
 
 def _install_command(
@@ -839,6 +851,8 @@ def main(argv: list[str] | None = None) -> int:
             "--compiler",
             args.compiler,
         )
+        if args.force_dkms:
+            build_cmd.append("--force-dkms")
         run_monitored_build(
             "build kernel package",
             build_cmd,
@@ -847,7 +861,8 @@ def main(argv: list[str] | None = None) -> int:
             source_dir=kernel_source,
             snapshot_dir=snapshot_dir,
         )
-        packages = _find_packages(kernel_source.parent)
+        kernel_release = _kernel_release(kernel_source, args.kernel_version)
+        packages = _find_packages(kernel_source.parent, kernel_release)
 
         run_command(
             "boot-test built kernel",
@@ -873,7 +888,6 @@ def main(argv: list[str] | None = None) -> int:
         else:
             console.print(f"\nno installable packages found for target={args.target}")
 
-        kernel_release = _kernel_release(kernel_source, args.kernel_version)
         entry = args.kernel_entry or derive_grub_entry(kernel_release)
         if entry:
             (snapshot_dir / "grub-one-shot-entry").write_text(entry + "\n")
