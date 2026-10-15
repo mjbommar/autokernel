@@ -145,6 +145,131 @@ _UNSUPPORTED_KCONFIG_LINE = re.compile(
     re.MULTILINE,
 )
 
+# 7.3+: conditional dependencies, ``depends on X if Y``. Upstream
+# (scripts/kconfig/menu.c:menu_add_dep) lowers this to
+# ``X || expr_trans_compare(Y, =, n)``; we rewrite each such line into
+# that same expression, which kconfiglib parses. expr_trans_compare is
+# structural, not a value comparison: ``!S`` becomes ``S != n``, so with
+# tristates the result differs from evaluating ``(Y) = n``. The
+# dependency and condition must not contain ``#``, so a trailing
+# comment that merely mentions "if" is left alone.
+_CONDITIONAL_DEPENDS_LINE = re.compile(
+    r"^(?P<indent>[ \t]*)depends[ \t]+on[ \t]+(?P<dep>[^#\n]+?)[ \t]+if[ \t]+"
+    r"(?P<cond>[^#\n]+?)[ \t]*(?P<comment>#[^\n]*)?$",
+    re.MULTILINE,
+)
+_KCONFIG_EXPR_TOKEN = re.compile(
+    r"\s*(&&|\|\||!=|<=|>=|[()!=<>]|\"(?:[^\"\\]|\\.)*\"|[A-Za-z0-9_$.-]+)"
+)
+_KCONFIG_COMPARISONS = ("=", "!=", "<", "<=", ">", ">=")
+
+
+def _parse_kconfig_expr(text: str) -> tuple:
+    """Parse a Kconfig expression into a small tuple AST.
+
+    Precedence (scripts/kconfig/parser.y): ``||`` < ``&&`` < ``!`` <
+    comparison. Raises ValueError on anything unrecognized.
+    """
+    tokens: list[str] = []
+    pos = 0
+    while pos < len(text):
+        if text[pos:].strip() == "":
+            break
+        m = _KCONFIG_EXPR_TOKEN.match(text, pos)
+        if m is None:
+            raise ValueError(f"bad Kconfig expression: {text!r}")
+        tokens.append(m.group(1))
+        pos = m.end()
+    i = 0
+
+    def peek() -> str | None:
+        return tokens[i] if i < len(tokens) else None
+
+    def take() -> str:
+        nonlocal i
+        if i >= len(tokens):
+            raise ValueError(f"truncated Kconfig expression: {text!r}")
+        i += 1
+        return tokens[i - 1]
+
+    def parse_or() -> tuple:
+        node = parse_and()
+        while peek() == "||":
+            take()
+            node = ("or", node, parse_and())
+        return node
+
+    def parse_and() -> tuple:
+        node = parse_unary()
+        while peek() == "&&":
+            take()
+            node = ("and", node, parse_unary())
+        return node
+
+    def parse_unary() -> tuple:
+        tok = take()
+        if tok == "!":
+            return ("not", parse_unary())
+        if tok == "(":
+            node = parse_or()
+            if take() != ")":
+                raise ValueError(f"unbalanced Kconfig expression: {text!r}")
+            return node
+        if tok in ("&&", "||", ")") or tok in _KCONFIG_COMPARISONS:
+            raise ValueError(f"bad Kconfig expression: {text!r}")
+        if peek() in _KCONFIG_COMPARISONS:
+            op = take()
+            return ("cmp", op, tok, take())
+        return ("sym", tok)
+
+    node = parse_or()
+    if i != len(tokens):
+        raise ValueError(f"trailing tokens in Kconfig expression: {text!r}")
+    return node
+
+
+def _emit_kconfig_expr(node: tuple) -> str:
+    kind = node[0]
+    if kind == "sym":
+        return node[1]
+    if kind == "cmp":
+        return f"{node[2]} {node[1]} {node[3]}"
+    if kind == "not":
+        return f"!({_emit_kconfig_expr(node[1])})"
+    op = "&&" if kind == "and" else "||"
+    return f"({_emit_kconfig_expr(node[1])}) {op} ({_emit_kconfig_expr(node[2])})"
+
+
+def _trans_compare_n(node: tuple, equal: bool = True) -> str:
+    """Port of expr_trans_compare(e, E_EQUAL/E_UNEQUAL, &symbol_no)."""
+    kind = node[0]
+    if kind == "sym":
+        return f"{node[1]} {'=' if equal else '!='} n"
+    if kind == "not":
+        return _trans_compare_n(node[1], not equal)
+    if kind == "cmp":
+        expr = _emit_kconfig_expr(node)
+        return f"!({expr})" if equal else expr
+    # (a && b) = n  ->  (a = n) || (b = n); (a || b) = n -> ... && ...
+    op = "||" if kind == "and" else "&&"
+    inner = f"({_trans_compare_n(node[1])}) {op} ({_trans_compare_n(node[2])})"
+    return inner if equal else f"!({inner})"
+
+
+def _rewrite_conditional_depends(match: re.Match[str]) -> str:
+    try:
+        cond = _trans_compare_n(_parse_kconfig_expr(match.group("cond")))
+    except ValueError:
+        return match.group(0)  # leave it; kconfiglib will report the line
+    comment = match.group("comment")
+    line = f"{match.group('indent')}depends on ({match.group('dep')}) || ({cond})"
+    return f"{line} {comment}" if comment else line
+
+
+def _strip_unsupported_kconfig_syntax(text: str) -> str:
+    text = _UNSUPPORTED_KCONFIG_LINE.sub("", text)
+    return _CONDITIONAL_DEPENDS_LINE.sub(_rewrite_conditional_depends, text)
+
 
 def _find_kconfig_files_with_unsupported(source_dir: Path) -> list[Path]:
     """Find every ``Kconfig*`` file inside *source_dir* that contains a
@@ -162,7 +287,9 @@ def _find_kconfig_files_with_unsupported(source_dir: Path) -> list[Path]:
             text = path.read_text(errors="replace")
         except (PermissionError, OSError):
             continue
-        if _UNSUPPORTED_KCONFIG_LINE.search(text):
+        if _UNSUPPORTED_KCONFIG_LINE.search(text) or _CONDITIONAL_DEPENDS_LINE.search(
+            text
+        ):
             hits.append(path)
     return hits
 
@@ -186,7 +313,7 @@ def _patch_unsupported_kconfig_syntax(source_dir: Path) -> Iterator[None]:
         try:
             shutil.copy2(path, backup)
             text = path.read_text(errors="replace")
-            cleaned = _UNSUPPORTED_KCONFIG_LINE.sub("", text)
+            cleaned = _strip_unsupported_kconfig_syntax(text)
             path.write_text(cleaned)
             edited.append(path)
         except (PermissionError, OSError):

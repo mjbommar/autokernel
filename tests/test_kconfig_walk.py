@@ -327,3 +327,86 @@ def test_walk_with_config_path_reflects_actual_assignments(tmp_path):
     hz = next(c for c in surface.choices if c.prompt and "Timer" in c.prompt)
     current = [o.name for o in hz.options if o.is_current]
     assert current == ["HZ_1000"]
+
+
+# ── conditional dependencies (7.3+) ─────────────────────────────────────
+
+
+def test_rewrite_conditional_depends_forms():
+    from autokernel.kconfig_walk import _strip_unsupported_kconfig_syntax as rw
+
+    assert rw("\tdepends on USB if !USB_GADGET\n") == (
+        "\tdepends on (USB) || (USB_GADGET != n)\n"
+    )
+    assert rw("\tdepends on HV if HV\n") == "\tdepends on (HV) || (HV = n)\n"
+    assert rw("\tdepends on (A && B) if (A || B)\n") == (
+        "\tdepends on ((A && B)) || ((A = n) && (B = n))\n"
+    )
+    assert rw("\tdepends on X if Y = m # note\n") == (
+        "\tdepends on (X) || (!(Y = m)) # note\n"
+    )
+    # A comment that merely mentions "if" is not a conditional dependency.
+    plain = "\tdepends on G || !G # if G=m, this can't be 'y'\n"
+    assert rw(plain) == plain
+    # An `if` block on a following line is not part of the dependency.
+    block = "\tdepends on CFG80211=n\n\nif MAC80211 != n\n"
+    assert rw(block) == block
+
+
+def test_walk_parses_conditional_depends_with_upstream_semantics(tmp_path):
+    """Expected values come from 7.3-rc7's own `conf --olddefconfig` with
+    CONFIG_DUAL=y requested, i.e. the highest value DUAL may take."""
+    import kconfiglib
+
+    src = _make_synthetic_source(tmp_path)
+    kconfig = src / "Kconfig"
+    kconfig.write_text(kconfig.read_text() + 'source "drivers/Kconfig"\n')
+    (src / "drivers").mkdir()
+    drv = src / "drivers" / "Kconfig"
+    drv.write_text(
+        'config HOST\n\ttristate "host"\n'
+        '\nconfig GADGET\n\ttristate "gadget"\n'
+        '\nconfig DUAL\n\ttristate "dual-role"\n'
+        "\tdepends on HOST if !GADGET\n"
+        "\tdepends on GADGET if !HOST\n"
+    )
+    before = drv.read_text()
+    walk(src, arch="x86_64")  # must not raise
+    assert drv.read_text() == before
+
+    upstream = {
+        ("n", "n"): 0, ("n", "m"): 1, ("n", "y"): 2,
+        ("m", "n"): 1, ("m", "m"): 2, ("m", "y"): 2,
+        ("y", "n"): 2, ("y", "m"): 2, ("y", "y"): 2,
+    }  # fmt: skip
+    for (host, gadget), want in upstream.items():
+        cfg = tmp_path / f".config-{host}{gadget}"
+        cfg.write_text(
+            f"CONFIG_MODULES=y\nCONFIG_HOST={host}\nCONFIG_GADGET={gadget}\n"
+        )
+        dual = _load(src, cfg, kconfiglib).syms["DUAL"]
+        got = max(dual.assignable) if dual.assignable else 0
+        assert got == want, (host, gadget, dual.assignable)
+
+
+def _load(src: Path, cfg: Path, kconfiglib):
+    import os
+
+    from autokernel.kconfig_walk import _patch_unsupported_kconfig_syntax
+
+    saved = {k: os.environ.get(k) for k in ("ARCH", "SRCARCH", "srctree")}
+    cwd = Path.cwd()
+    os.environ.update(ARCH="x86_64", SRCARCH="x86", srctree=str(src))
+    try:
+        os.chdir(src)
+        with _patch_unsupported_kconfig_syntax(src):
+            kconf = kconfiglib.Kconfig("Kconfig", warn=False, warn_to_stderr=False)
+            kconf.load_config(str(cfg), replace=True)
+        return kconf
+    finally:
+        os.chdir(cwd)
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
