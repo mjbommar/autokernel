@@ -137,7 +137,7 @@ have dkms && run dkms_status dkms status
     for bin in docker dockerd containerd podman nerdctl kubelet kubeadm kubectl crictl \
         virsh libvirtd virtqemud qemu-system-x86_64 qemu-img iptables ip6tables nft \
         firewalld ufw nvidia-smi nvidia-settings prime-select pipewire wireplumber \
-        pulseaudio pactl wpctl pw-cli jackd bluetoothctl; do
+        pulseaudio pactl wpctl pw-cli jackd bluetoothctl bpftrace bpftool; do
         if have "$bin"; then
             case "$bin" in
                 docker|dockerd|containerd|podman|nerdctl) feature="containers" ;;
@@ -147,6 +147,7 @@ have dkms && run dkms_status dkms status
                 nvidia-smi|nvidia-settings|prime-select) feature="nvidia" ;;
                 pipewire|wireplumber|pulseaudio|pactl|wpctl|pw-cli|jackd) feature="audio" ;;
                 bluetoothctl) feature="bluetooth" ;;
+                bpftrace|bpftool) feature="bpf" ;;
                 *) feature="software" ;;
             esac
             software_feature "$feature" binary "$bin" "$(command -v "$bin" 2>/dev/null || true)"
@@ -182,7 +183,8 @@ have dkms && run dkms_status dkms status
             libvirt-daemon libvirt-daemon-system libvirt-clients qemu-system-x86 \
             kubelet kubeadm kubectl microk8s nftables iptables firewalld ufw \
             pipewire wireplumber pulseaudio pipewire-pulse pipewire-alsa \
-            pipewire-jack alsa-utils alsa-ucm-conf bluez libspa-0.2-bluetooth; do
+            pipewire-jack alsa-utils alsa-ucm-conf bluez libspa-0.2-bluetooth \
+            bpftrace bpfcc-tools; do
             dpkg-query -W -f='${db:Status-Abbrev}\t${binary:Package}\t${Version}\n' "$pkg" 2>/dev/null \
                 | awk '$1 ~ /^ii/ { print $2 "\t" $3 }' \
                 | while read -r found version; do
@@ -193,6 +195,7 @@ have dkms && run dkms_status dkms status
                         nftables|iptables|firewalld|ufw) feature="firewall" ;;
                         pipewire*|wireplumber|pulseaudio|alsa-*|libspa-0.2-bluetooth) feature="audio" ;;
                         bluez) feature="bluetooth" ;;
+                        bpftrace|bpfcc-tools) feature="bpf" ;;
                         *) feature="software" ;;
                     esac
                     software_feature "$feature" dpkg "$found" "$version"

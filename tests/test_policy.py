@@ -222,3 +222,45 @@ def test_advise_keeps_low_confidence_deterministic_in_review(intel_laptop: Snaps
     r = apply_policy([p], AutonomyLevel.ADVISE, lb)
     assert not r.auto_applied
     assert len(r.needs_review) == 1
+
+
+def _with_bpf_tools(snap: Snapshot, tmp_path, *, btf: bool) -> Snapshot:
+    from autokernel.models import SoftwareFeature
+
+    cfg = tmp_path / "running_config"
+    base = snap.running_config_path.read_text()
+    cfg.write_text(base + ("CONFIG_DEBUG_INFO_BTF=y\n" if btf else ""))
+    return snap.model_copy(
+        update={
+            "running_config_path": cfg,
+            "software_features": [
+                *snap.software_features,
+                SoftwareFeature(feature="bpf", source="binary", name="bpftrace"),
+            ],
+        }
+    )
+
+
+def test_bpf_tools_protect_btf_and_block_debug_info_none(amd_desktop, tmp_path):
+    snap = _with_bpf_tools(amd_desktop, tmp_path, btf=True)
+    lb = compute_load_bearing(snap, resolve(snap))
+    for sym in ("CONFIG_DEBUG_INFO_BTF", "CONFIG_DEBUG_INFO_NONE"):
+        assert lb.contains(sym)[0], sym
+
+    choice = RemovalProposal(
+        config="CONFIG_DEBUG_INFO_NONE",
+        current_value="n",
+        proposed_value="y",
+        reason="smaller build",
+        confidence=0.78,
+        risk=RiskLevel.LOW,
+        source=ProposalSource.LLM,
+    )
+    pr = apply_policy([choice], AutonomyLevel.AUTO_BOLD, lb)
+    assert [p.config for p, _ in pr.blocked] == ["CONFIG_DEBUG_INFO_NONE"]
+
+
+def test_bpf_tools_without_running_btf_do_not_lock_debug_info(amd_desktop, tmp_path):
+    snap = _with_bpf_tools(amd_desktop, tmp_path, btf=False)
+    lb = compute_load_bearing(snap, resolve(snap))
+    assert not lb.contains("CONFIG_DEBUG_INFO_NONE")[0]

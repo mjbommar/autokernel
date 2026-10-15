@@ -33,7 +33,7 @@ from autokernel.models import (
     RiskLevel,
     Snapshot,
 )
-from autokernel.resolve import ResolutionResult
+from autokernel.resolve import ResolutionResult, _running_config_symbols
 
 
 class AutonomyLevel(str, Enum):
@@ -133,6 +133,14 @@ class LoadBearingSet:
         return (sym in self.symbols, self.reasons.get(sym))
 
 
+_BTF_LOAD_BEARING: tuple[str, ...] = (
+    "CONFIG_DEBUG_INFO_BTF",
+    "CONFIG_DEBUG_INFO_NONE",
+    "CONFIG_DEBUG_INFO_REDUCED",
+    "CONFIG_DEBUG_INFO_SPLIT",
+)
+
+
 def compute_load_bearing(
     snap: Snapshot, resolution: ResolutionResult
 ) -> LoadBearingSet:
@@ -188,6 +196,17 @@ def compute_load_bearing(
         lb.add("CONFIG_MICROCODE_INTEL", "Intel CPU microcode")
     elif snap.cpu.vendor_id == "AuthenticAMD":
         lb.add("CONFIG_MICROCODE_AMD", "AMD CPU microcode")
+
+    # BPF tooling (bpftrace, bpftool, bcc) reads kernel types from
+    # /sys/kernel/btf/vmlinux. When the running kernel provides BTF and
+    # such tools are installed, keep BTF and block the debug-info choices
+    # that would silently drop it (BTF needs full, unsplit DWARF).
+    if any(s.feature == "bpf" for s in snap.software_features) and (
+        _running_config_symbols(snap.running_config_path).get("CONFIG_DEBUG_INFO_BTF")
+        == "y"
+    ):
+        for sym in _BTF_LOAD_BEARING:
+            lb.add(sym, "BPF tooling installed; needs BTF")
 
     # Anything resolved as required is by definition load-bearing
     for cfg in resolution.required_configs:
