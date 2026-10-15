@@ -433,6 +433,21 @@ def deterministic_proposals(
                 source=ProposalSource.DETERMINISTIC,
                 evidence=["pci has no AMD vendor 1002"],
             )
+        elif s == "CONFIG_LIVEPATCH" and snap.dkms:
+            # On 7.x+ LIVEPATCH forces the promptless KLP_BUILD, which makes
+            # objtool check whole linked modules; DKMS modules that link
+            # prebuilt blobs (NVIDIA) then fail with "naked return" errors.
+            # Distro livepatches never target a custom kernel anyway.
+            proposal = RemovalProposal(
+                config=sym,
+                current_value=val,
+                proposed_value="n",
+                reason="DKMS modules present; LIVEPATCH (KLP_BUILD) breaks their build",
+                risk=RiskLevel.LOW,
+                confidence=0.97,
+                source=ProposalSource.DETERMINISTIC,
+                evidence=[f"dkms: {', '.join(sorted({d.name for d in snap.dkms}))}"],
+            )
         elif not has_intel_gpu and "DRM_I915" in s:
             proposal = RemovalProposal(
                 config=sym,

@@ -144,3 +144,22 @@ def test_microarch_proposal_skipped_for_unrecognized_cpu():
     props = deterministic_proposals(snap, [("CONFIG_GENERIC_CPU", "y")])
     micro = [p for p in props if p.source == ProposalSource.MICROARCH]
     assert micro == []
+
+
+def test_dkms_host_disables_livepatch(amd_desktop: Snapshot):
+    """LIVEPATCH forces KLP_BUILD on 7.x, which breaks blob-linking DKMS modules."""
+    assert amd_desktop.dkms
+    cands = [*_candidates(amd_desktop), ("CONFIG_LIVEPATCH", "y")]
+    props = {p.config: p for p in deterministic_proposals(amd_desktop, cands)}
+    p = props["CONFIG_LIVEPATCH"]
+    assert p.proposed_value == "n"
+    assert p.source == ProposalSource.DETERMINISTIC
+    assert p.confidence >= 0.95
+
+
+def test_host_without_dkms_keeps_livepatch(amd_desktop: Snapshot):
+    snap = amd_desktop.model_copy(update={"dkms": []})
+    cands = [*_candidates(snap), ("CONFIG_LIVEPATCH", "y")]
+    assert "CONFIG_LIVEPATCH" not in {
+        p.config for p in deterministic_proposals(snap, cands)
+    }
