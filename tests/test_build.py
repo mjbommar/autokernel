@@ -158,6 +158,33 @@ def test_localmodconfig_lsmod_adds_late_audio_modules(tmp_path: Path):
     assert "snd_usb_audio 0 0" in text
 
 
+def test_localmodconfig_lsmod_keeps_removable_media_filesystems(tmp_path: Path):
+    snap = tmp_path / "snap"
+    snap.mkdir()
+    lsmod = snap / "lsmod"
+    lsmod.write_text("Module Size Used by\nusb_storage 86016 1 uas\nuas 32768 0\n")
+
+    text = build_mod._write_localmodconfig_lsmod(  # noqa: SLF001
+        snapshot_dir=snap, lsmod_path=lsmod
+    ).read_text()
+
+    for module in ("exfat", "isofs", "udf"):
+        assert f"{module} 0 0" in text
+
+
+def test_localmodconfig_lsmod_skips_media_filesystems_without_storage(tmp_path: Path):
+    snap = tmp_path / "snap"
+    snap.mkdir()
+    lsmod = snap / "lsmod"
+    lsmod.write_text("Module Size Used by\nfoo 1024 0\n")
+
+    text = build_mod._write_localmodconfig_lsmod(  # noqa: SLF001
+        snapshot_dir=snap, lsmod_path=lsmod
+    ).read_text()
+
+    assert "exfat" not in text
+
+
 # ── build ───────────────────────────────────────────────────────────────────
 
 

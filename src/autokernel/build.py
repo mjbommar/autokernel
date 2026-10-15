@@ -533,6 +533,21 @@ _LOCALMODCONFIG_FIREWALL_RUNTIME_MODULES: frozenset[str] = frozenset(
 )
 
 
+# Filesystems found on removable media (USB sticks, SD cards, ISO images,
+# optical discs). They are loaded only when such media is mounted, so a
+# scan-time lsmod rarely shows them and localmodconfig would trim them.
+_LOCALMODCONFIG_REMOVABLE_MEDIA_FS_MODULES: tuple[str, ...] = (
+    "exfat",
+    "isofs",
+    "udf",
+)
+
+# Evidence that the host can attach removable storage at all.
+_REMOVABLE_STORAGE_MODULES: frozenset[str] = frozenset(
+    {"mmc_block", "sdhci_pci", "sr_mod", "uas", "usb_storage"}
+)
+
+
 def _write_localmodconfig_lsmod(
     *,
     snapshot_dir: Path,
@@ -554,6 +569,8 @@ def _write_localmodconfig_lsmod(
         extra_modules.update(_LOCALMODCONFIG_LATE_LOAD_MODULES)
     if _needs_late_audio_modules(snapshot_dir=snapshot_dir, loaded_modules=seen):
         extra_modules.update(AUDIO_KEEP_MODULES)
+    if (seen | extra_modules) & _REMOVABLE_STORAGE_MODULES:
+        extra_modules.update(_LOCALMODCONFIG_REMOVABLE_MEDIA_FS_MODULES)
     with out.open("w") as fh:
         if lines:
             fh.write("\n".join(lines) + "\n")
