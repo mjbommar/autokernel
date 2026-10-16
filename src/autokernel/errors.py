@@ -181,7 +181,11 @@ def hint_unsupported_bootloader(bl_kind: str) -> "typer.Exit":
 def hint_not_root(operation: str) -> "typer.Exit":
     return fail(
         f"{operation} requires root",
-        fix="rerun with `sudo`, or omit `--execute` to dry-run instead",
+        fix=(
+            "rerun as root via the project venv (`sudo .venv/bin/autokernel ...`; "
+            "`sudo uv run` usually fails because uv isn't on root's PATH), "
+            "or omit `--execute` to dry-run instead"
+        ),
         exit_code=5,
     )
 

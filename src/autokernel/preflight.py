@@ -771,6 +771,82 @@ def check_fallback_kernel_present(ctx: CheckContext) -> CheckResult:
     )
 
 
+GRUB_DEFAULT_FILE = Path("/etc/default/grub")
+GRUB_DEFAULT_DROPINS = Path("/etc/default/grub.d")
+
+
+def _grub_default_settings(main: Path, dropins: Path) -> dict[str, str]:
+    """Best-effort read of ``GRUB_*`` assignments the way grub-mkconfig sees
+    them: ``/etc/default/grub`` first, then ``grub.d/*.cfg`` in order, last
+    assignment wins. Values are unquoted; shell expansion is not evaluated."""
+    files = [main] + (sorted(dropins.glob("*.cfg")) if dropins.is_dir() else [])
+    out: dict[str, str] = {}
+    for f in files:
+        try:
+            text = f.read_text(errors="replace")
+        except OSError:
+            continue
+        for line in text.splitlines():
+            line = line.strip()
+            if line.startswith("export "):
+                line = line[len("export ") :].strip()
+            if not line.startswith("GRUB_") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            out[key.strip()] = val.strip().strip("\"'")
+    return out
+
+
+def check_grub_default_saved(ctx: CheckContext) -> CheckResult:
+    """Probation (``grub-reboot``) only falls back if GRUB boots the *saved*
+    entry by default. With Ubuntu's stock ``GRUB_DEFAULT=0``, ``update-grub``
+    puts the newest kernel (ours) first, so it becomes the permanent default
+    immediately and a bad boot never falls back. ``GRUB_SAVEDEFAULT=true``
+    has the same effect: the one-shot entry gets saved as the new default."""
+    if not GRUB_DEFAULT_FILE.exists():
+        return CheckResult(
+            name="grub_default_saved",
+            severity=Severity.SKIP,
+            message=f"{GRUB_DEFAULT_FILE} not present",
+        )
+    s = _grub_default_settings(GRUB_DEFAULT_FILE, GRUB_DEFAULT_DROPINS)
+    default = s.get("GRUB_DEFAULT", "0")
+    savedefault = s.get("GRUB_SAVEDEFAULT", "false").lower() == "true"
+    fix = (
+        "set `GRUB_DEFAULT=saved` (and drop `GRUB_SAVEDEFAULT=true`) in "
+        "/etc/default/grub, pin the current kernel with `sudo grub-set-default "
+        "'Advanced options for Ubuntu>Ubuntu, with Linux $(uname -r)'`, then "
+        "`sudo update-grub`"
+    )
+    if default != "saved":
+        return CheckResult(
+            name="grub_default_saved",
+            severity=Severity.FAIL,
+            message=(
+                f"GRUB_DEFAULT={default}: one-shot probation can't fall back "
+                "(the new kernel becomes the default as soon as update-grub runs)"
+            ),
+            fix_hint=fix,
+            details={"GRUB_DEFAULT": default},
+        )
+    if savedefault:
+        return CheckResult(
+            name="grub_default_saved",
+            severity=Severity.FAIL,
+            message=(
+                "GRUB_SAVEDEFAULT=true: booting the probation entry would save it "
+                "as the permanent default"
+            ),
+            fix_hint=fix,
+            details={"GRUB_SAVEDEFAULT": "true"},
+        )
+    return CheckResult(
+        name="grub_default_saved",
+        severity=Severity.PASS,
+        message="GRUB_DEFAULT=saved (probation can fall back)",
+    )
+
+
 def check_grub_tools(ctx: CheckContext) -> CheckResult:
     """`grub-reboot` (Debian) or `grub2-reboot` (Fedora) must be on PATH."""
     deb = _which("grub-reboot")
@@ -1047,6 +1123,10 @@ _REGISTRY: list[tuple[str, _Registered]] = [
         _Registered(check_fallback_kernel_present, frozenset({"install"})),
     ),
     ("grub_tools", _Registered(check_grub_tools, frozenset({"install"}))),
+    (
+        "grub_default_saved",
+        _Registered(check_grub_default_saved, frozenset({"install"})),
+    ),
     # boot-test
     (
         "boot_test_runtime",

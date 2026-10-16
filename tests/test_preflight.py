@@ -484,3 +484,57 @@ def test_run_checks_has_failures_property(monkeypatch):
     info = parse_os_release("ID=ubuntu\nID_LIKE=debian\n")
     run = pf.run_checks(tags={"build"}, distro=info)
     assert run.has_failures
+
+
+# ── grub_default_saved ─────────────────────────────────────────────────────
+
+
+def _grub_files(
+    monkeypatch, tmp_path: Path, main: str, dropins: dict[str, str] | None = None
+):
+    f = tmp_path / "grub"
+    f.write_text(main)
+    d = tmp_path / "grub.d"
+    d.mkdir()
+    for name, text in (dropins or {}).items():
+        (d / name).write_text(text)
+    monkeypatch.setattr(pf, "GRUB_DEFAULT_FILE", f)
+    monkeypatch.setattr(pf, "GRUB_DEFAULT_DROPINS", d)
+
+
+def test_grub_default_saved_fails_on_ubuntu_stock_default(monkeypatch, tmp_path: Path):
+    _grub_files(monkeypatch, tmp_path, "GRUB_DEFAULT=0\nGRUB_TIMEOUT_STYLE=hidden\n")
+    r = pf.check_grub_default_saved(_ctx_for_family(Family.DEBIAN))
+    assert r.severity == pf.Severity.FAIL
+    assert "GRUB_DEFAULT=0" in r.message
+    assert r.fix_hint and "GRUB_DEFAULT=saved" in r.fix_hint
+
+
+def test_grub_default_saved_passes_when_saved(monkeypatch, tmp_path: Path):
+    _grub_files(monkeypatch, tmp_path, 'GRUB_DEFAULT="saved"\n')
+    r = pf.check_grub_default_saved(_ctx_for_family(Family.DEBIAN))
+    assert r.severity == pf.Severity.PASS
+
+
+def test_grub_default_saved_dropin_overrides_main(monkeypatch, tmp_path: Path):
+    _grub_files(
+        monkeypatch,
+        tmp_path,
+        "GRUB_DEFAULT=saved\n",
+        {"50-oem.cfg": "GRUB_DEFAULT=0\n"},
+    )
+    r = pf.check_grub_default_saved(_ctx_for_family(Family.DEBIAN))
+    assert r.severity == pf.Severity.FAIL
+
+
+def test_grub_default_saved_fails_with_savedefault(monkeypatch, tmp_path: Path):
+    _grub_files(monkeypatch, tmp_path, "GRUB_DEFAULT=saved\nGRUB_SAVEDEFAULT=true\n")
+    r = pf.check_grub_default_saved(_ctx_for_family(Family.DEBIAN))
+    assert r.severity == pf.Severity.FAIL
+    assert "SAVEDEFAULT" in r.message
+
+
+def test_grub_default_saved_skips_without_grub(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(pf, "GRUB_DEFAULT_FILE", tmp_path / "missing")
+    r = pf.check_grub_default_saved(_ctx_for_family(Family.DEBIAN))
+    assert r.severity == pf.Severity.SKIP
