@@ -228,6 +228,7 @@ def _with_bpf_tools(snap: Snapshot, tmp_path, *, btf: bool) -> Snapshot:
     from autokernel.models import SoftwareFeature
 
     cfg = tmp_path / "running_config"
+    assert snap.running_config_path is not None
     base = snap.running_config_path.read_text()
     cfg.write_text(base + ("CONFIG_DEBUG_INFO_BTF=y\n" if btf else ""))
     return snap.model_copy(
