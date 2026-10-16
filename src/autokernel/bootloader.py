@@ -196,3 +196,54 @@ def detect_with_root(root: Path) -> Bootloader:
         for probe in _default_probes()
     ]
     return detect(probes=rerooted)
+
+
+# ── GRUB menu-entry resolution ─────────────────────────────────────────────
+
+
+def _grub_title(line: str) -> str | None:
+    """The quoted title of a ``menuentry``/``submenu`` line, else ``None``."""
+    rest = line.split(None, 1)[1] if len(line.split(None, 1)) == 2 else ""
+    if rest[:1] not in ("'", '"'):
+        return None
+    q = rest[0]
+    end = rest.find(q, 1)
+    return rest[1:end] if end > 0 else None
+
+
+def grub_entries(grub_cfg_text: str) -> list[str]:
+    """Every bootable entry as a ``grub-set-default``/``grub-reboot`` path:
+    ``"Submenu title>Entry title"`` for nested entries, the bare title for
+    top-level ones. Parses grub-mkconfig output by brace depth."""
+    stack: list[str | None] = []  # submenu title, or None for a menuentry block
+    out: list[str] = []
+    for raw in grub_cfg_text.splitlines():
+        line = raw.strip()
+        if line.startswith(("submenu ", "menuentry ")) and line.endswith("{"):
+            title = _grub_title(line)
+            if line.startswith("submenu "):
+                stack.append(title)
+            else:
+                parents = [s for s in stack if s is not None]
+                if title is not None:
+                    out.append(">".join([*parents, title]))
+                stack.append(None)
+        elif line == "}" and stack:
+            stack.pop()
+    return out
+
+
+def grub_entry_for_release(release: str, grub_cfg_text: str) -> str | None:
+    """The normal (non-recovery) GRUB entry path that boots ``release``.
+
+    ``grub-set-default`` needs a menu title/id path; a bare ``uname -r``
+    string matches nothing, and GRUB then silently boots entry 0.
+    """
+    suffix = f"with Linux {release}"
+    hits = [
+        e
+        for e in grub_entries(grub_cfg_text)
+        if e.endswith(suffix) and "recovery mode" not in e
+    ]
+    nested = [e for e in hits if ">" in e]
+    return (nested or hits or [None])[0]

@@ -135,3 +135,59 @@ def test_grub2_is_supported():
 def test_unknown_bootloader_is_not_supported():
     bl = Bootloader(BootloaderKind.UNKNOWN, "x")
     assert not bl.is_supported
+
+
+# ── GRUB entry resolution (install --commit) ────────────────────────────────
+
+_UBUNTU_GRUB_CFG = """\
+### BEGIN /etc/grub.d/10_linux ###
+function gfxmode {
+	set gfxpayload="${1}"
+}
+menuentry 'Ubuntu' --class ubuntu --class gnu-linux $menuentry_id_option 'gnulinux-simple-44c1' {
+	linux	/boot/vmlinuz-7.3.0-rc7-autokernel-w1-lto-202610152358+ root=UUID=44c1 ro
+}
+submenu 'Advanced options for Ubuntu' $menuentry_id_option 'gnulinux-advanced-44c1' {
+	menuentry 'Ubuntu, with Linux 7.3.0-rc7-autokernel-w1-lto-202610152358+' --class ubuntu $menuentry_id_option 'gnulinux-7.3-lto' {
+		if [ x$grub_platform = xxen ]; then insmod xzio; fi
+		linux	/boot/vmlinuz-7.3.0-rc7-autokernel-w1-lto-202610152358+ root=UUID=44c1 ro
+	}
+	menuentry 'Ubuntu, with Linux 7.3.0-rc7-autokernel-w1-lto-202610152358+ (recovery mode)' --class ubuntu $menuentry_id_option 'gnulinux-7.3-lto-recovery' {
+		linux	/boot/vmlinuz-7.3.0-rc7-autokernel-w1-lto-202610152358+ root=UUID=44c1 ro single
+	}
+	menuentry 'Ubuntu, with Linux 7.0.0-38-generic' --class ubuntu $menuentry_id_option 'gnulinux-7.0' {
+		linux	/boot/vmlinuz-7.0.0-38-generic root=UUID=44c1 ro
+	}
+}
+menuentry 'UEFI Firmware Settings' $menuentry_id_option 'uefi-firmware' {
+	fwsetup
+}
+"""
+
+
+def test_grub_entries_builds_submenu_paths():
+    from autokernel.bootloader import grub_entries
+
+    entries = grub_entries(_UBUNTU_GRUB_CFG)
+    assert entries[0] == "Ubuntu"
+    assert "Advanced options for Ubuntu>Ubuntu, with Linux 7.0.0-38-generic" in entries
+    assert entries[-1] == "UEFI Firmware Settings"
+
+
+def test_grub_entry_for_release_prefers_nested_non_recovery():
+    from autokernel.bootloader import grub_entry_for_release
+
+    assert (
+        grub_entry_for_release(
+            "7.3.0-rc7-autokernel-w1-lto-202610152358+", _UBUNTU_GRUB_CFG
+        )
+        == "Advanced options for Ubuntu>Ubuntu, with Linux "
+        "7.3.0-rc7-autokernel-w1-lto-202610152358+"
+    )
+
+
+def test_grub_entry_for_release_unknown_is_none():
+    from autokernel.bootloader import grub_entry_for_release
+
+    assert grub_entry_for_release("6.1.0-foo", _UBUNTU_GRUB_CFG) is None
+    assert grub_entry_for_release("7.0.0-38-generic", "") is None

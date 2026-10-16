@@ -1833,9 +1833,33 @@ def install(
     # ── commit path ─────────────────────────────────────────────────────
     if commit:
         if kernel_entry is None:
-            kernel_entry = os.uname().release
+            release = os.uname().release
+            cfg = (bootloader.config_dir or Path("/boot/grub")) / "grub.cfg"
+            try:
+                cfg_text: str | None = cfg.read_text(errors="replace")
+            except OSError:
+                cfg_text = None  # e.g. mode 0600 and not root
+            if cfg_text is None and not execute:
+                kernel_entry = (
+                    f"<GRUB entry for {release}, resolved from {cfg} as root>"
+                )
+            else:
+                kernel_entry = bootloader_mod.grub_entry_for_release(
+                    release, cfg_text or ""
+                )
+            if kernel_entry is None:
+                raise err.fail(
+                    f"no GRUB menu entry boots the running kernel {release!r}",
+                    why=(
+                        f"grub-set-default needs a menu entry path from {cfg}; "
+                        "a bare kernel release matches nothing and GRUB would "
+                        "silently fall back to entry 0"
+                    ),
+                    fix="pass --kernel-entry 'Submenu>Entry title' explicitly",
+                    exit_code=4,
+                )
             console.print(
-                f"[dim]commit: defaulting to running kernel '{kernel_entry}'[/dim]"
+                f"[dim]commit: defaulting to running kernel's entry '{kernel_entry}'[/dim]"
             )
         plan = install_mod.build_commit_plan(
             distro=distro,
