@@ -658,6 +658,19 @@ def test_set_lto_choice_selects_thin(tmp_path):
     assert lines.count("CONFIG_LTO_CLANG_THIN=y") == 1
 
 
+def test_set_lto_choice_disables_objtool_werror(tmp_path):
+    """LTO runs objtool on whole modules incl. NVIDIA's prebuilt blobs, whose
+    warnings must not fail the DKMS build (Ubuntu stock leaves it off)."""
+    from autokernel.build import _set_lto_choice
+
+    cfg = tmp_path / ".config"
+    cfg.write_text("CONFIG_LTO_NONE=y\nCONFIG_OBJTOOL_WERROR=y\n")
+    _set_lto_choice(cfg, "thin")
+    lines = cfg.read_text().splitlines()
+    assert "CONFIG_OBJTOOL_WERROR=y" not in lines
+    assert lines.count("# CONFIG_OBJTOOL_WERROR is not set") == 1
+
+
 def test_set_lto_choice_none_leaves_config_alone(tmp_path):
     from autokernel.build import _set_lto_choice
 

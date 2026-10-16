@@ -122,13 +122,26 @@ def _set_lto_choice(config_path: Path, lto: str) -> None:
     if lto == "none":
         return
     want = _LTO_SYMBOLS[lto]
-    drop = set(_LTO_SYMBOLS.values()) | {"CONFIG_LTO_CLANG", "CONFIG_LTO"}
+    # Under LTO, objtool runs on each whole linked module rather than per
+    # object, so it also sees out-of-tree prebuilt objects (NVIDIA's
+    # nv-kernel.o_binary / nv-modeset-kernel.o_binary). Those trip
+    # MITIGATION_RETHUNK / stack-validation checks, and OBJTOOL_WERROR turns
+    # the warnings into a failed DKMS build. Distro configs leave it off.
+    drop = set(_LTO_SYMBOLS.values()) | {
+        "CONFIG_LTO_CLANG",
+        "CONFIG_LTO",
+        "CONFIG_OBJTOOL_WERROR",
+    }
     kept = [
         ln
         for ln in config_path.read_text().splitlines()
         if not any(ln.startswith(f"{s}=") or ln == f"# {s} is not set" for s in drop)
     ]
-    kept += [f"{want}=y", "# CONFIG_LTO_NONE is not set"]
+    kept += [
+        f"{want}=y",
+        "# CONFIG_LTO_NONE is not set",
+        "# CONFIG_OBJTOOL_WERROR is not set",
+    ]
     config_path.write_text("\n".join(kept) + "\n")
 
 
