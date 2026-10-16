@@ -267,13 +267,17 @@ def resolve(names: list[str], root: Path | None = None) -> list[PatchSet]:
 
 
 def _git(
-    source_dir: Path, *args: str, check: bool = True
+    source_dir: Path,
+    *args: str,
+    check: bool = True,
+    env: dict[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     proc = subprocess.run(
         ["git", *_GIT_IDENT, "-C", str(source_dir), *args],
         capture_output=True,
         text=True,
         check=False,
+        env={**os.environ, **env} if env else None,
     )
     if check and proc.returncode != 0:
         raise PatchError(
@@ -334,6 +338,28 @@ class PatchOutcome:
         return {k: v for k, v in self.__dict__.items() if v}
 
 
+def _series_present(tree: Path, series: list[Path]) -> bool:
+    """True if the whole stacked series is already in HEAD.
+
+    Per-patch ``apply --reverse --check`` misses a series whose later patches
+    touch the same hunks (e.g. a tree left on a previous ``autokernel/*``
+    branch): patch 1's reverse no longer applies on top of patch 2. Reverse-
+    apply the series last-to-first against a throwaway index instead; the
+    real index and work tree are never touched.
+    """
+    with tempfile.TemporaryDirectory(prefix="autokernel-series-") as td:
+        env = {"GIT_INDEX_FILE": str(Path(td) / "index")}
+        if _git(tree, "read-tree", "HEAD", check=False, env=env).returncode != 0:
+            return False
+        return all(
+            _git(
+                tree, "apply", "--cached", "--reverse", str(p), check=False, env=env
+            ).returncode
+            == 0
+            for p in reversed(series)
+        )
+
+
 def _process(sets: list[PatchSet], tree: Path, *, dry_run: bool) -> list[PatchOutcome]:
     """Apply each patch in ``tree`` (already on the branch to modify).
 
@@ -342,6 +368,9 @@ def _process(sets: list[PatchSet], tree: Path, *, dry_run: bool) -> list[PatchOu
     """
     outcomes: list[PatchOutcome] = []
     for ps in sets:
+        whole_set_present = len(ps.patches) > 1 and _series_present(
+            tree, list(ps.patches)
+        )
         for p in ps.patches:
             m = ps.meta.get(p.name, PatchMeta())
             o = PatchOutcome(
@@ -354,7 +383,7 @@ def _process(sets: list[PatchSet], tree: Path, *, dry_run: bool) -> list[PatchOu
                 link=m.link,
             )
             outcomes.append(o)
-            if (
+            if whole_set_present or (
                 _git(
                     tree, "apply", "--check", "--reverse", str(p), check=False
                 ).returncode

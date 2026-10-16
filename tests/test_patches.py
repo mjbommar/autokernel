@@ -179,6 +179,43 @@ def test_apply_skips_patch_already_present(tmp_path):
     assert res.ok
 
 
+def test_reapply_stacked_series_on_patched_branch(tmp_path):
+    """A tree left on a previous autokernel/* branch already carries a stacked
+    series whose later patch rewrites the earlier patch's hunk; re-applying
+    must report every patch present instead of conflicting."""
+    repo = _kernel_repo(tmp_path)
+    out = tmp_path / "out"
+    f = repo / "domain.h"
+    f.write_text(f.read_text().replace("int usage;", "long usage;"))
+    _git(repo, "commit", "-q", "-am", "widen usage")
+    f.write_text(f.read_text().replace("long usage;", "long long usage;"))
+    _git(repo, "commit", "-q", "-am", "widen usage more")
+    names = _git(repo, "format-patch", "-2", "-o", str(out)).split()
+    _git(repo, "reset", "-q", "--hard", "HEAD~2")
+    _make_set(tmp_path / "patches", "s", [Path(n) for n in names])
+    sets = pm.resolve(["s"], tmp_path / "patches")
+
+    first = pm.apply(sets, repo, branch="autokernel/first")
+    assert [o.result for o in first.outcomes] == ["applied", "applied"]
+    # Per-patch reverse check alone cannot see patch 1 under patch 2.
+    assert (
+        subprocess.run(
+            [
+                *GIT,
+                *("-C", str(repo), "apply", "--check", "--reverse"),
+                str(tmp_path / "patches" / "s" / Path(names[0]).name),
+            ],
+            capture_output=True,
+        ).returncode
+        != 0
+    )
+    assert pm._series_present(repo, list(sets[0].patches))
+    again = pm.apply(sets, repo, branch="autokernel/second")
+    assert [o.result for o in again.outcomes] == ["present", "present"]
+    assert again.head_commit == first.head_commit
+    assert not pm.tracked_changes(repo)
+
+
 def test_apply_conflict_restores_tree(tmp_path):
     repo = _kernel_repo(tmp_path)
     p = _make_patch(repo, tmp_path / "out", "int usage;", "long usage;", "widen usage")
